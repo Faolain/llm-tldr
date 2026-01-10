@@ -18,6 +18,17 @@ import os
 import sys
 from pathlib import Path
 
+# Fix for Windows: Explicitly import tree-sitter bindings early to prevent
+# silent DLL loading failures when running as a console script entry point.
+if os.name == 'nt':
+    try:
+        import tree_sitter
+        import tree_sitter_python
+        import tree_sitter_javascript
+        import tree_sitter_typescript
+    except ImportError:
+        pass
+
 from . import __version__
 
 
@@ -337,7 +348,12 @@ Semantic Search:
     warm_p.add_argument(
         "--background", action="store_true", help="Build in background process"
     )
-    warm_p.add_argument("--lang", default="python", help="Language")
+    warm_p.add_argument(
+        "--lang",
+        default="python",
+        choices=["python", "typescript", "javascript", "go", "rust", "java", "c", "cpp", "all"],
+        help="Language (use 'all' for multi-language)",
+    )
 
     # tldr semantic index <path> / tldr semantic search <query>
     semantic_p = subparsers.add_parser(
@@ -348,7 +364,12 @@ Semantic Search:
     # tldr semantic index [path]
     index_p = semantic_sub.add_parser("index", help="Build semantic index for project")
     index_p.add_argument("path", nargs="?", default=".", help="Project root")
-    index_p.add_argument("--lang", default="python", help="Language")
+    index_p.add_argument(
+        "--lang",
+        default="python",
+        choices=["python", "typescript", "javascript", "go", "rust", "java", "c", "cpp", "all"],
+        help="Language (use 'all' for multi-language)",
+    )
     index_p.add_argument(
         "--model",
         default=None,
@@ -449,6 +470,13 @@ Semantic Search:
         if cache_file.exists():
             try:
                 cache_data = json.loads(cache_file.read_text())
+                
+                # Validate cache language compatibility
+                cache_langs = cache_data.get("languages", [])
+                if cache_langs and lang not in cache_langs and lang != "all":
+                    # Cache was built with different languages; rebuild
+                    raise ValueError("Cache language mismatch")
+                
                 # Reconstruct graph from cache
                 graph = ProjectCallGraph()
                 for e in cache_data.get("edges", []):
@@ -469,6 +497,7 @@ Semantic Search:
                             {"from_file": e[0], "from_func": e[1], "to_file": e[2], "to_func": e[3]}
                             for e in graph.edges
                         ],
+                        "languages": cache_langs if cache_langs else [lang],
                         "timestamp": time.time(),
                     }
                     cache_file.write_text(json.dumps(cache_data, indent=2))
@@ -477,8 +506,8 @@ Semantic Search:
                     clear_dirty(project)
 
                 return graph
-            except (json.JSONDecodeError, KeyError):
-                # Invalid cache, fall through to fresh build
+            except (json.JSONDecodeError, KeyError, ValueError):
+                # Invalid cache or language mismatch, fall through to fresh build
                 pass
 
         # No cache or invalid cache - do fresh build
@@ -491,6 +520,7 @@ Semantic Search:
                 {"from_file": e[0], "from_func": e[1], "to_file": e[2], "to_func": e[3]}
                 for e in graph.edges
             ],
+            "languages": [lang],
             "timestamp": time.time(),
         }
         cache_file.write_text(json.dumps(cache_data, indent=2))
@@ -756,11 +786,49 @@ Semantic Search:
                 print(f"Background indexing spawned for {project_path}")
             else:
                 # Build call graph
-                from .cross_file_calls import scan_project
+                from .cross_file_calls import scan_project, ProjectCallGraph
 
                 respect_ignore = not getattr(args, 'no_ignore', False)
-                files = scan_project(project_path, language=args.lang, respect_ignore=respect_ignore)
-                graph = build_project_call_graph(project_path, language=args.lang)
+                
+                # Determine languages to process
+                if args.lang == "all":
+                    try:
+                        from .semantic import _detect_project_languages
+                        target_languages = _detect_project_languages(project_path, respect_ignore=respect_ignore)
+                        print(f"Detected languages: {', '.join(target_languages)}")
+                    except ImportError:
+                        # Fallback if semantic module issue
+                        target_languages = ["python", "typescript", "javascript", "go", "rust"]
+                else:
+                    target_languages = [args.lang]
+
+                all_files = set()
+                combined_edges = []
+                processed_languages = []
+                
+                for lang in target_languages:
+                    try:
+                        # Scan files
+                        files = scan_project(project_path, language=lang, respect_ignore=respect_ignore)
+                        all_files.update(files)
+                        
+                        # Build graph
+                        graph = build_project_call_graph(project_path, language=lang)
+                        combined_edges.extend([
+                            {"from_file": e[0], "from_func": e[1], "to_file": e[2], "to_func": e[3]}
+                            for e in graph.edges
+                        ])
+                        print(f"Processed {lang}: {len(files)} files, {len(graph.edges)} edges")
+                        processed_languages.append(lang)
+                    except ValueError as e:
+                        # Expected for unsupported languages
+                        print(f"Warning: {lang}: {e}", file=sys.stderr)
+                    except Exception as e:
+                        # Unexpected error - show traceback if debug enabled
+                        print(f"Warning: Failed to process {lang}: {e}", file=sys.stderr)
+                        if os.environ.get("TLDR_DEBUG"):
+                            import traceback
+                            traceback.print_exc()
 
                 # Create cache directory
                 cache_dir = project_path / ".tldr" / "cache"
@@ -768,17 +836,18 @@ Semantic Search:
 
                 # Save cache file
                 cache_file = cache_dir / "call_graph.json"
+                # Deduplicate edges
+                unique_edges = list({(e["from_file"], e["from_func"], e["to_file"], e["to_func"]): e for e in combined_edges}.values())
+                
                 cache_data = {
-                    "edges": [
-                        {"from_file": e[0], "from_func": e[1], "to_file": e[2], "to_func": e[3]}
-                        for e in graph.edges
-                    ],
+                    "edges": unique_edges,
+                    "languages": processed_languages if processed_languages else target_languages,
                     "timestamp": time.time(),
                 }
                 cache_file.write_text(json.dumps(cache_data, indent=2))
 
                 # Print stats
-                print(f"Indexed {len(files)} files, found {len(graph.edges)} edges")
+                print(f"Total: Indexed {len(all_files)} files, found {len(unique_edges)} edges")
 
         elif args.command == "semantic":
             from .semantic import build_semantic_index, semantic_search

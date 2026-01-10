@@ -19,6 +19,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
 
+ALL_LANGUAGES = ["python", "typescript", "javascript", "go", "rust", "java", "c", "cpp", "ruby", "php", "kotlin", "swift", "csharp", "scala", "lua", "elixir"]
+
 # Lazy imports for heavy dependencies
 _model = None
 _model_name = None  # Track which model is loaded
@@ -568,6 +570,7 @@ def _get_function_signature(file_path: Path, func_name: str, lang: str) -> Optio
 
                     return f"def {func_name}({', '.join(args)}){returns}"
 
+
         # For other languages, return simple signature
         return f"function {func_name}(...)"
 
@@ -607,6 +610,62 @@ def _get_progress_console():
         return Console()
     except ImportError:
         return None
+
+
+def _detect_project_languages(project_path: Path, respect_ignore: bool = True) -> List[str]:
+    """Scan project files to detect present languages."""
+    from tldr.tldrignore import load_ignore_patterns, should_ignore
+    
+    # Extension map (copied from cli.py to avoid circular import)
+    EXTENSION_TO_LANGUAGE = {
+        '.java': 'java',
+        '.py': 'python',
+        '.ts': 'typescript',
+        '.tsx': 'typescript',
+        '.js': 'javascript',
+        '.jsx': 'javascript',
+        '.go': 'go',
+        '.rs': 'rust',
+        '.c': 'c',
+        '.h': 'c',
+        '.cpp': 'cpp',
+        '.hpp': 'cpp',
+        '.cc': 'cpp',
+        '.cxx': 'cpp',
+        '.hh': 'cpp',
+        '.rb': 'ruby',
+        '.php': 'php',
+        '.swift': 'swift',
+        '.cs': 'csharp',
+        '.kt': 'kotlin',
+        '.kts': 'kotlin',
+        '.scala': 'scala',
+        '.sc': 'scala',
+        '.lua': 'lua',
+        '.ex': 'elixir',
+        '.exs': 'elixir',
+    }
+    
+    found_languages = set()
+    spec = load_ignore_patterns(project_path) if respect_ignore else None
+    
+    for root, dirs, files in os.walk(project_path):
+        # Prune common heavy dirs immediately for speed
+        dirs[:] = [d for d in dirs if d not in {'.git', 'node_modules', '.tldr', 'venv', '__pycache__', '.idea', '.vscode'}]
+        
+        for file in files:
+             file_path = Path(root) / file
+             
+             # Check ignore patterns
+             if respect_ignore and should_ignore(file_path, project_path, spec):
+                 continue
+                 
+             ext = file_path.suffix.lower()
+             if ext in EXTENSION_TO_LANGUAGE:
+                 found_languages.add(EXTENSION_TO_LANGUAGE[ext])
+
+    # Return sorted list intersect with ALL_LANGUAGES to ensure validity
+    return sorted(list(found_languages & set(ALL_LANGUAGES)))
 
 
 def build_semantic_index(
@@ -657,10 +716,33 @@ def build_semantic_index(
     # Extract all units (respecting .tldrignore)
     if console:
         with console.status("[bold green]Extracting code units...") as status:
-            units = extract_units_from_project(str(project), lang=lang, respect_ignore=respect_ignore)
+            if lang == "all":
+                # Optimization: detect which languages are actually present
+                status.update("[bold green]Scanning project languages...")
+                target_languages = _detect_project_languages(project, respect_ignore=respect_ignore)
+                if not target_languages:
+                    console.print("[yellow]No supported languages detected in project[/yellow]")
+                    return 0
+                if console:
+                    console.print(f"[dim]Detected languages: {', '.join(target_languages)}[/dim]")
+                
+                units = []
+                for lang_name in target_languages:
+                    status.update(f"[bold green]Extracting {lang_name} code units...")
+                    units.extend(extract_units_from_project(str(project), lang=lang_name, respect_ignore=respect_ignore))
+            else:
+                units = extract_units_from_project(str(project), lang=lang, respect_ignore=respect_ignore)
             status.update(f"[bold green]Extracted {len(units)} code units")
     else:
-        units = extract_units_from_project(str(project), lang=lang, respect_ignore=respect_ignore)
+        if lang == "all":
+            target_languages = _detect_project_languages(project, respect_ignore=respect_ignore)
+            if not target_languages:
+                return 0
+            units = []
+            for lang_name in target_languages:
+                units.extend(extract_units_from_project(str(project), lang=lang_name, respect_ignore=respect_ignore))
+        else:
+            units = extract_units_from_project(str(project), lang=lang, respect_ignore=respect_ignore)
 
     if not units:
         return 0
