@@ -1,6 +1,15 @@
 # TLDR: Code Analysis for AI Agents
 
+[![PyPI](https://img.shields.io/pypi/v/llm-tldr)](https://pypi.org/project/llm-tldr/)
+[![Python](https://img.shields.io/pypi/pyversions/llm-tldr)](https://pypi.org/project/llm-tldr/)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
+
 **Give LLMs exactly the code they need. Nothing more.**
+
+```bash
+# One-liner: Install, index, search
+pip install llm-tldr && tldr warm . && tldr semantic "what you're looking for" .
+```
 
 Your codebase is 100K lines. Claude's context window is 200K tokens. Raw code won't fit—and even if it did, the LLM would drown in irrelevant details.
 
@@ -34,6 +43,36 @@ TLDR builds 5 analysis layers, each answering different questions:
 - Debugging null? Layer 5 (slice) shows only relevant lines
 
 The daemon keeps indexes in memory for **100ms queries** instead of 30-second CLI spawns.
+
+### Architecture
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                         YOUR CODE                                 │
+│  src/*.py, lib/*.ts, pkg/*.go                                    │
+└───────────────────────────┬──────────────────────────────────────┘
+                            │ tree-sitter
+                            ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                     5-LAYER ANALYSIS                              │
+│  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐    │
+│  │   AST   │→│  Calls  │→│   CFG   │→│   DFG   │→│   PDG   │    │
+│  │   L1    │ │   L2    │ │   L3    │ │   L4    │ │   L5    │    │
+│  └─────────┘ └─────────┘ └─────────┘ └─────────┘ └─────────┘    │
+└───────────────────────────┬──────────────────────────────────────┘
+                            │ bge-large-en-v1.5
+                            ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                    SEMANTIC INDEX                                 │
+│  1024-dim embeddings in FAISS  →  "find JWT validation"          │
+└───────────────────────────┬──────────────────────────────────────┘
+                            │
+                            ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                       DAEMON                                      │
+│  In-memory indexes  •  100ms queries  •  Auto-lifecycle          │
+└──────────────────────────────────────────────────────────────────┘
+```
 
 ### The Semantic Layer: Search by Behavior
 
@@ -268,6 +307,62 @@ For AI tools (Claude Desktop, Claude Code):
       "args": ["--project", "."]
     }
   }
+}
+```
+
+---
+
+## Configuration
+
+### `.tldrignore` - Exclude Files
+
+TLDR respects `.tldrignore` (gitignore syntax) to skip files during indexing:
+
+```bash
+# Auto-create with sensible defaults
+tldr warm .  # Creates .tldrignore if missing
+```
+
+**Default exclusions:**
+- `node_modules/`, `.venv/`, `__pycache__/`
+- `dist/`, `build/`, `*.egg-info/`
+- Binary files (`*.so`, `*.dll`, `*.whl`)
+- Security files (`.env`, `*.pem`, `*.key`)
+
+**Customize** by editing `.tldrignore`:
+```gitignore
+# Add your patterns
+large_test_fixtures/
+vendor/
+data/*.csv
+```
+
+### Settings - Daemon Behavior
+
+Create `.tldr/config.json` for daemon settings:
+
+```json
+{
+  "semantic": {
+    "enabled": true,
+    "auto_reindex_threshold": 20
+  }
+}
+```
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `enabled` | `true` | Enable semantic search |
+| `auto_reindex_threshold` | `20` | Files changed before auto-rebuild |
+
+### Monorepo Support
+
+For monorepos, create `.claude/workspace.json` to scope indexing:
+
+```json
+{
+  "active_packages": ["packages/core", "packages/api"],
+  "exclude_patterns": ["**/fixtures/**"]
 }
 ```
 
