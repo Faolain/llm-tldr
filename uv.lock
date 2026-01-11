@@ -893,7 +893,7 @@ wheels = [
 
 [[package]]
 name = "llm-tldr"
-version = "1.0.2"
+version = "1.0.7"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },

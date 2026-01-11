@@ -1,20 +1,10 @@
 """
-Socket-based daemon that holds indexes in memory.
+TLDR Daemon package.
 
-This module is a backwards-compatibility wrapper. The actual implementation
-has been modularized into the tldr.daemon package:
-  - tldr.daemon.core: TLDRDaemon class
-  - tldr.daemon.startup: start_daemon, stop_daemon, query_daemon
-  - tldr.daemon.cached_queries: @salsa_query cached functions
-
-For new code, import directly from tldr.daemon:
-    from tldr.daemon import TLDRDaemon, start_daemon, query_daemon
+Provides the TLDRDaemon server and lifecycle management functions.
 """
 
-# Re-export everything for backwards compatibility
-from tldr.daemon import (
-    IDLE_TIMEOUT,
-    TLDRDaemon,
+from .cached_queries import (
     cached_architecture,
     cached_cfg,
     cached_context,
@@ -27,6 +17,9 @@ from tldr.daemon import (
     cached_slice,
     cached_structure,
     cached_tree,
+)
+from .core import IDLE_TIMEOUT, TLDRDaemon
+from .startup import (
     main,
     query_daemon,
     start_daemon,
@@ -34,12 +27,15 @@ from tldr.daemon import (
 )
 
 __all__ = [
+    # Core
     "TLDRDaemon",
     "IDLE_TIMEOUT",
+    # Lifecycle
     "start_daemon",
     "stop_daemon",
     "query_daemon",
     "main",
+    # Cached queries
     "cached_search",
     "cached_extract",
     "cached_dead_code",
@@ -53,6 +49,3 @@ __all__ = [
     "cached_imports",
     "cached_importers",
 ]
-
-if __name__ == "__main__":
-    main()
