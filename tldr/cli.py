@@ -188,7 +188,7 @@ Semantic Search:
         "--lang",
         default="python",
         choices=["python", "typescript", "javascript", "go", "rust", "java", "c",
-                 "cpp", "ruby", "php", "kotlin", "swift", "csharp", "scala", "lua", "elixir"],
+                 "cpp", "ruby", "php", "kotlin", "swift", "csharp", "scala", "lua", "luau", "elixir"],
         help="Language to analyze",
     )
     struct_p.add_argument(
@@ -226,7 +226,7 @@ Semantic Search:
         "--lang",
         default="python",
         choices=["python", "typescript", "javascript", "go", "rust", "java", "c",
-                 "cpp", "ruby", "php", "kotlin", "swift", "csharp", "scala", "lua", "elixir"],
+                 "cpp", "ruby", "php", "kotlin", "swift", "csharp", "scala", "lua", "luau", "elixir"],
         help="Language",
     )
 
@@ -352,7 +352,7 @@ Semantic Search:
     warm_p.add_argument(
         "--lang",
         default="python",
-        choices=["python", "typescript", "javascript", "go", "rust", "java", "c", "cpp", "ruby", "php", "kotlin", "swift", "csharp", "scala", "lua", "elixir", "all"],
+        choices=["python", "typescript", "javascript", "go", "rust", "java", "c", "cpp", "ruby", "php", "kotlin", "swift", "csharp", "scala", "lua", "luau", "elixir", "all"],
         help="Language (use 'all' for multi-language)",
     )
 
@@ -368,7 +368,7 @@ Semantic Search:
     index_p.add_argument(
         "--lang",
         default="python",
-        choices=["python", "typescript", "javascript", "go", "rust", "java", "c", "cpp", "ruby", "php", "kotlin", "swift", "csharp", "scala", "lua", "elixir", "all"],
+        choices=["python", "typescript", "javascript", "go", "rust", "java", "c", "cpp", "ruby", "php", "kotlin", "swift", "csharp", "scala", "lua", "luau", "elixir", "all"],
         help="Language (use 'all' for multi-language)",
     )
     index_p.add_argument(
