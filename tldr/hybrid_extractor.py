@@ -142,6 +142,14 @@ try:
 except ImportError:
     pass
 
+TREE_SITTER_LUAU_AVAILABLE = False
+try:
+    from tree_sitter import Language, Parser
+    import tree_sitter_luau
+    TREE_SITTER_LUAU_AVAILABLE = True
+except ImportError:
+    pass
+
 TREE_SITTER_ELIXIR_AVAILABLE = False
 try:
     from tree_sitter import Language, Parser
@@ -175,6 +183,7 @@ class HybridExtractor:
     CSHARP_EXTENSIONS = {".cs"}
     SCALA_EXTENSIONS = {".scala", ".sc"}
     LUA_EXTENSIONS = {".lua"}
+    LUAU_EXTENSIONS = {".luau"}
     ELIXIR_EXTENSIONS = {".ex", ".exs"}
 
     def __init__(self):
@@ -317,6 +326,14 @@ class HybridExtractor:
                 if result:
                     return result
             logger.debug(f"Tree-sitter-lua not available or failed, using Pygments for {suffix}")
+
+        # Luau - use tree-sitter-luau if available
+        if suffix in self.LUAU_EXTENSIONS:
+            if TREE_SITTER_LUAU_AVAILABLE:
+                result = self._try_tree_sitter(self._extract_luau, file_path, "luau")
+                if result:
+                    return result
+            logger.debug(f"Tree-sitter-luau not available or failed, using Pygments for {suffix}")
 
         # Elixir - use tree-sitter-elixir if available
         if suffix in self.ELIXIR_EXTENSIONS:
@@ -2794,6 +2811,200 @@ class HybridExtractor:
             self._extract_lua_calls(child, caller_name, source, call_graph, defined_names)
 
     def _get_lua_call_name(self, node, source: bytes) -> str | None:
+        """Get the name of a called function from a function_call node."""
+        for child in node.children:
+            if child.type == "identifier":
+                return self._safe_decode(source[child.start_byte:child.end_byte])
+            elif child.type in ("dot_index_expression", "method_index_expression"):
+                # Table.method() or Table:method()
+                field = child.child_by_field_name("field")
+                if field:
+                    return self._safe_decode(source[field.start_byte:field.end_byte])
+        return None
+
+    # === Luau Extraction ===
+
+    def _extract_luau(self, file_path: Path) -> ModuleInfo:
+        """Extract using tree-sitter-luau (Luau is a typed superset of Lua)."""
+        with open(file_path, "rb") as f:
+            source = f.read()
+
+        parser = self._get_luau_parser()
+        tree = self._safe_parse(parser, source, file_path, "luau")
+
+        module_info = ModuleInfo(
+            file_path=str(file_path),
+            language="luau",
+            docstring=None,
+        )
+
+        # First pass: collect defined function names
+        defined_names = self._collect_luau_definitions(tree.root_node, source)
+
+        self._extract_luau_nodes(tree.root_node, source, module_info, defined_names)
+        return module_info
+
+    def _get_luau_parser(self) -> Any:
+        """Get or create tree-sitter Luau parser."""
+        if "luau" not in self._ts_parsers:
+            luau_lang = Language(tree_sitter_luau.language())
+            parser = Parser(luau_lang)
+            self._ts_parsers["luau"] = parser
+        return self._ts_parsers["luau"]
+
+    def _collect_luau_definitions(self, node, source: bytes) -> set[str]:
+        """Collect all defined function names in Luau."""
+        names: set[str] = set()
+
+        for child in node.children:
+            # function name() ... end or local function name() ... end
+            if child.type == "function_declaration":
+                # Find the identifier child (the function name)
+                for grandchild in child.children:
+                    if grandchild.type == "identifier":
+                        names.add(self._safe_decode(source[grandchild.start_byte:grandchild.end_byte]))
+                        break
+                    elif grandchild.type in ("dot_index_expression", "method_index_expression"):
+                        # Table.method or Table:method - last identifier is the method name
+                        for subchild in grandchild.children:
+                            if subchild.type == "identifier":
+                                # Keep updating - last one is the method name
+                                name = self._safe_decode(source[subchild.start_byte:subchild.end_byte])
+                        if name:
+                            names.add(name)
+                        break
+
+            # Recurse
+            names.update(self._collect_luau_definitions(child, source))
+
+        return names
+
+    def _extract_luau_nodes(self, node, source: bytes, module_info: ModuleInfo, defined_names: set[str] | None = None):
+        """Extract Luau nodes into module info."""
+        call_graph = module_info.call_graph or CallGraphInfo()
+        module_info.call_graph = call_graph
+
+        for child in node.children:
+            # function name() ... end or local function name() ... end
+            if child.type == "function_declaration":
+                func_info = self._extract_luau_function(child, source)
+                if func_info:
+                    module_info.functions.append(func_info)
+                    # Extract calls from function body
+                    if defined_names:
+                        self._extract_luau_calls(child, func_info.name, source, call_graph, defined_names)
+
+            # require statements
+            elif child.type == "function_call":
+                import_info = self._extract_luau_require(child, source)
+                if import_info:
+                    module_info.imports.append(import_info)
+
+            # Recurse for other nodes
+            else:
+                self._extract_luau_nodes(child, source, module_info, defined_names)
+
+    def _extract_luau_function(self, node, source: bytes) -> FunctionInfo | None:
+        """Extract function info from function_declaration or local_function."""
+        # Find the identifier child (the function name)
+        name = None
+        for child in node.children:
+            if child.type == "identifier":
+                name = self._safe_decode(source[child.start_byte:child.end_byte])
+                break
+            elif child.type in ("dot_index_expression", "method_index_expression"):
+                # Table.method or Table:method - last identifier is the method name
+                for subchild in child.children:
+                    if subchild.type == "identifier":
+                        # Keep updating - last one is the method name
+                        name = self._safe_decode(source[subchild.start_byte:subchild.end_byte])
+                break
+
+        if not name:
+            return None
+
+        params = self._extract_luau_params(node, source)
+
+        return FunctionInfo(
+            name=name,
+            params=params,
+            return_type=None,  # Could extract from type annotations but keeping minimal
+            docstring=None,
+            line_number=node.start_point[0] + 1,
+        )
+
+    def _extract_luau_params(self, node, source: bytes) -> list[str]:
+        """Extract parameters from a Luau function node."""
+        params = []
+        for child in node.children:
+            if child.type == "parameters":
+                for param in child.children:
+                    if param.type == "parameter":
+                        # Luau wraps params in 'parameter' node containing identifier
+                        for subchild in param.children:
+                            if subchild.type == "identifier":
+                                params.append(self._safe_decode(source[subchild.start_byte:subchild.end_byte]))
+                                break
+                    elif param.type == "identifier":
+                        params.append(self._safe_decode(source[param.start_byte:param.end_byte]))
+                    elif param.type == "spread":
+                        params.append("...")
+                break
+        return params
+
+    def _extract_luau_require(self, node, source: bytes) -> ImportInfo | None:
+        """Extract require statement from a function_call node."""
+        func_name = None
+        module = None
+
+        for child in node.children:
+            if child.type == "identifier":
+                func_name = self._safe_decode(source[child.start_byte:child.end_byte])
+            elif child.type == "arguments":
+                # Get the argument - could be string or expression like script.Utils
+                for arg in child.children:
+                    if arg.type == "string":
+                        text = self._safe_decode(source[arg.start_byte:arg.end_byte])
+                        # Strip quotes
+                        if text.startswith('"') and text.endswith('"'):
+                            module = text[1:-1]
+                        elif text.startswith("'") and text.endswith("'"):
+                            module = text[1:-1]
+                        break
+                    elif arg.type in ("dot_index_expression", "field_expression"):
+                        # script.Utils or game.ReplicatedStorage.Config
+                        module = self._safe_decode(source[arg.start_byte:arg.end_byte])
+                        break
+                    elif arg.type == "identifier":
+                        # Simple identifier
+                        module = self._safe_decode(source[arg.start_byte:arg.end_byte])
+                        break
+            elif child.type == "string":
+                # require "module" syntax
+                text = self._safe_decode(source[child.start_byte:child.end_byte])
+                if text.startswith('"') and text.endswith('"'):
+                    module = text[1:-1]
+                elif text.startswith("'") and text.endswith("'"):
+                    module = text[1:-1]
+
+        if func_name == "require" and module:
+            return ImportInfo(
+                module=module,
+                names=[],
+            )
+        return None
+
+    def _extract_luau_calls(self, node, caller_name: str, source: bytes, call_graph: CallGraphInfo, defined_names: set[str]):
+        """Extract function calls from a Luau function body."""
+        for child in node.children:
+            if child.type == "function_call":
+                callee = self._get_luau_call_name(child, source)
+                if callee and callee in defined_names:
+                    call_graph.add_call(caller_name, callee)
+            # Recurse into all children
+            self._extract_luau_calls(child, caller_name, source, call_graph, defined_names)
+
+    def _get_luau_call_name(self, node, source: bytes) -> str | None:
         """Get the name of a called function from a function_call node."""
         for child in node.children:
             if child.type == "identifier":

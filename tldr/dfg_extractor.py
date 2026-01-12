@@ -709,6 +709,13 @@ try:
 except ImportError:
     pass
 
+TREE_SITTER_LUAU_AVAILABLE = False
+try:
+    import tree_sitter_luau
+    TREE_SITTER_LUAU_AVAILABLE = True
+except ImportError:
+    pass
+
 
 class TreeSitterDefUseVisitor:
     """
@@ -2908,6 +2915,143 @@ class LuaDefUseVisitor:
 
 
 # =============================================================================
+# Luau DFG Extraction
+# =============================================================================
+
+
+def extract_luau_dfg(code: str, function_name: str) -> DFGInfo:
+    """
+    Extract DFG for a Luau function.
+
+    Luau is syntactically similar to Lua with type annotations,
+    continue statement, and compound assignments (+=, -=, etc.)
+
+    Args:
+        code: Luau source code
+        function_name: Name of function to analyze
+
+    Returns:
+        DFGInfo with variable references and def-use chains
+    """
+    if not TREE_SITTER_LUAU_AVAILABLE:
+        return DFGInfo(
+            function_name=function_name,
+            var_refs=[],
+            dataflow_edges=[],
+        )
+
+    # Parse with tree-sitter
+    luau_lang = Language(tree_sitter_luau.language())
+    parser = Parser(luau_lang)
+    source_bytes = code.encode('utf-8')
+    tree = parser.parse(source_bytes)
+
+    # Find the function
+    func_node = _find_luau_function_by_name(tree.root_node, function_name, source_bytes)
+    if func_node is None:
+        return DFGInfo(
+            function_name=function_name,
+            var_refs=[],
+            dataflow_edges=[],
+        )
+
+    # Extract definitions and uses - reuse LuaDefUseVisitor with Luau extensions
+    visitor = LuauDefUseVisitor(source_bytes)
+    visitor.visit(func_node)
+
+    # Compute def-use chains
+    analyzer = PythonReachingDefsAnalyzer(visitor.refs)
+    edges = analyzer.compute_def_use_chains()
+
+    return DFGInfo(
+        function_name=function_name,
+        var_refs=visitor.refs,
+        dataflow_edges=edges,
+    )
+
+
+def _find_luau_function_by_name(root, name: str, source: bytes):
+    """Find a Luau function node by name in tree-sitter tree.
+
+    Handles both:
+    - function name() ... end (function_declaration)
+    - local function name() ... end (function_declaration with local)
+    """
+    def search(node):
+        # Check function_declaration: function name() end or local function name() end
+        if node.type == "function_declaration":
+            # Find the identifier child (the function name)
+            for child in node.children:
+                if child.type == "identifier":
+                    func_name = source[child.start_byte:child.end_byte].decode('utf-8')
+                    if func_name == name:
+                        return node
+                    break
+                elif child.type in ("dot_index_expression", "method_index_expression"):
+                    # Table.method - get the last identifier
+                    for subchild in child.children:
+                        if subchild.type == "identifier":
+                            last_id = source[subchild.start_byte:subchild.end_byte].decode('utf-8')
+                    if last_id == name:
+                        return node
+                    break
+
+        for child in node.children:
+            result = search(child)
+            if result:
+                return result
+        return None
+
+    return search(root)
+
+
+class LuauDefUseVisitor(LuaDefUseVisitor):
+    """
+    Extract variable definitions and uses from Luau tree-sitter parse tree.
+
+    Extends LuaDefUseVisitor to handle Luau-specific features:
+    - Type annotations (ignored for DFG purposes)
+    - Compound assignment operators (+=, -=, etc.) - both USE and DEF
+    - Continue statement (control flow, not DFG relevant)
+    """
+
+    def _handle_assignment(self, node):
+        """Handle assignment statement, including compound assignment."""
+        # Check for compound assignment: x += 1 (node type is compound_assignment_statement in Luau)
+        if node.type == "compound_assignment_statement":
+            # Find the target (left side) - this is both USE and DEF
+            for child in node.children:
+                if child.type == "identifier":
+                    name = self.get_node_text(child)
+                    self._add_ref(name, "use", child)  # First use the current value
+                    self._add_ref(name, "definition", child)  # Then define new value
+                    break
+                elif child.type in ("dot_index_expression", "bracket_index_expression"):
+                    # Table field compound assignment
+                    self._visit_table_access(child)
+                    break
+
+            # Visit the right side (expression)
+            for child in node.children:
+                if child.type not in ("identifier", "+=", "-=", "*=", "/=", "%=", "..=", "^="):
+                    if child.type != "dot_index_expression" and child.type != "bracket_index_expression":
+                        self._visit_node(child)
+            return
+
+        # Standard assignment - delegate to parent
+        super()._handle_assignment(node)
+
+    def _visit_node(self, node):
+        """Visit a node and extract variable references."""
+        if node.type == "compound_assignment_statement":
+            self._handle_assignment(node)
+            return
+
+        # Call parent implementation for standard nodes
+        super()._visit_node(node)
+
+
+# =============================================================================
 # Elixir DFG Extraction
 # =============================================================================
 
@@ -3225,6 +3369,369 @@ def extract_elixir_dfg(code: str, function_name: str) -> DFGInfo:
                             recent_def = def_ref
                 if recent_def:
                     edges.append(DataflowEdge(def_ref=recent_def, use_ref=use_ref))
+
+    return DFGInfo(
+        function_name=function_name,
+        var_refs=visitor.refs,
+        dataflow_edges=edges,
+    )
+
+
+# =============================================================================
+# Luau DFG Extraction
+# =============================================================================
+
+class LuauDefUseVisitor:
+    """
+    Extract variable definitions and uses from Luau tree-sitter parse tree.
+
+    Luau extends Lua with:
+    - Type annotations (ignored for DFG)
+    - Compound assignment operators (+=, -=, *=) - must track as USE + DEF
+    - continue statement
+    """
+
+    def __init__(self, source: bytes):
+        self.source = source
+        self.refs: list[VarRef] = []
+
+    def get_node_text(self, node) -> str:
+        """Get source text for a node."""
+        return self.source[node.start_byte:node.end_byte].decode('utf-8')
+
+    def visit(self, node):
+        """Visit a node and its children."""
+        self._visit_node(node)
+
+    def _add_ref(self, name: str, ref_type: str, node):
+        """Add a variable reference."""
+        ref = VarRef(
+            name=name,
+            ref_type=ref_type,
+            line=node.start_point[0] + 1,  # tree-sitter is 0-indexed
+            column=node.start_point[1],
+        )
+        self.refs.append(ref)
+
+    def _visit_node(self, node):
+        """Process a node based on its type."""
+        node_type = node.type
+
+        # Handle local variable declarations: local x = ...
+        if node_type == "variable_declaration":
+            self._handle_local_declaration(node)
+            return
+
+        # Handle assignments: x = y
+        if node_type == "assignment_statement":
+            self._handle_assignment(node)
+            return
+
+        # Handle compound assignment (Luau-specific): x += y
+        if node_type == "update_statement":
+            self._handle_update_statement(node)
+            return
+
+        # Handle function parameters (Luau has typed params)
+        if node_type == "parameters":
+            self._handle_parameters(node)
+            return
+
+        # Handle for loops (numeric and generic)
+        if node_type == "for_statement":
+            self._handle_for_loop(node)
+            return
+
+        # Handle identifiers (uses) - but not when they're being defined
+        if node_type == "identifier":
+            parent = node.parent
+            if parent and not self._is_definition_context(parent, node):
+                name = self.get_node_text(node)
+                if self._is_valid_var_name(name):
+                    self._add_ref(name, "use", node)
+            return
+
+        # Recurse into children
+        for child in node.children:
+            self._visit_node(child)
+
+    def _is_definition_context(self, parent, node) -> bool:
+        """Check if node is being defined (not used)."""
+        parent_type = parent.type
+
+        # Left side of assignment_statement
+        if parent_type == "assignment_statement":
+            for i, child in enumerate(parent.children):
+                if child.type == "identifier" and child == node:
+                    for j in range(i + 1, len(parent.children)):
+                        if parent.children[j].type == "=":
+                            return True
+                    return i == 0
+
+        # Left side of update_statement (compound assignment)
+        if parent_type == "update_statement":
+            for i, child in enumerate(parent.children):
+                if child.type == "identifier" and child == node:
+                    # Check if this is before the operator
+                    for j in range(i + 1, len(parent.children)):
+                        if parent.children[j].type in ("+=", "-=", "*=", "/=", "%=", "^=", "..="):
+                            return True
+            return False
+
+        # Variable declaration: local x = ...
+        if parent_type == "variable_declaration":
+            return True
+
+        # Variable_list in assignment (left side)
+        if parent_type == "variable_list":
+            return True
+
+        # For loop variables
+        if parent_type == "for_generic_clause" or parent_type == "for_numeric_clause":
+            return True
+
+        # Parameters (including typed Luau parameters)
+        if parent_type == "parameters":
+            return True
+
+        # Luau typed parameter: identifier in `parameter` node
+        if parent_type == "parameter":
+            return True
+
+        return False
+
+    def _is_valid_var_name(self, name: str) -> bool:
+        """Check if name is a valid variable name (not keyword, etc.)."""
+        keywords = {
+            "if", "then", "else", "elseif", "end", "for", "while", "do",
+            "repeat", "until", "break", "return", "local", "function",
+            "true", "false", "nil", "and", "or", "not", "in",
+            "self", "continue",  # Luau adds continue
+        }
+        return name not in keywords and not name.startswith("_")
+
+    def _handle_local_declaration(self, node):
+        """Handle Luau local variable declaration."""
+        for child in node.children:
+            if child.type == "assignment_statement":
+                self._handle_assignment(child)
+                return
+
+        # Fallback: look for variable_list directly
+        names = []
+        for child in node.children:
+            if child.type == "variable_list":
+                for var_child in child.children:
+                    if var_child.type == "identifier":
+                        names.append(var_child)
+
+        for name_node in names:
+            name = self.get_node_text(name_node)
+            self._add_ref(name, "definition", name_node)
+
+    def _handle_assignment(self, node):
+        """Handle Luau assignment: x = y or x, y = a, b"""
+        targets = []
+        values_node = None
+
+        found_equals = False
+        for child in node.children:
+            if child.type == "=":
+                found_equals = True
+            elif not found_equals:
+                if child.type == "variable_list":
+                    for var_child in child.children:
+                        if var_child.type == "identifier":
+                            targets.append(var_child)
+                elif child.type == "identifier":
+                    targets.append(child)
+            else:
+                if child.type == "expression_list":
+                    values_node = child
+
+        # Visit values first (uses)
+        if values_node:
+            self._visit_node(values_node)
+
+        # Add definitions for targets
+        for target_node in targets:
+            name = self.get_node_text(target_node)
+            self._add_ref(name, "definition", target_node)
+
+    def _handle_update_statement(self, node):
+        """Handle Luau compound assignment: x += y, x -= y, etc.
+
+        Compound assignment is x = x op y, so:
+        1. First USE the variable (read current value)
+        2. Then DEF the variable (write new value)
+        """
+        targets = []
+        values_node = None
+
+        for child in node.children:
+            if child.type == "variable_list":
+                for var_child in child.children:
+                    if var_child.type == "identifier":
+                        targets.append(var_child)
+            elif child.type == "expression_list":
+                values_node = child
+
+        # First, visit values (uses on right side)
+        if values_node:
+            self._visit_node(values_node)
+
+        # For compound assignment: USE then DEF each target
+        for target_node in targets:
+            name = self.get_node_text(target_node)
+            # First USE (read current value)
+            self._add_ref(name, "use", target_node)
+            # Then DEF (write new value)
+            self._add_ref(name, "definition", target_node)
+
+    def _handle_parameters(self, node):
+        """Handle Luau function parameters (may have type annotations)."""
+        for child in node.children:
+            if child.type == "identifier":
+                # Plain parameter
+                name = self.get_node_text(child)
+                self._add_ref(name, "definition", child)
+            elif child.type == "parameter":
+                # Typed parameter: name: type
+                for param_child in child.children:
+                    if param_child.type == "identifier":
+                        name = self.get_node_text(param_child)
+                        self._add_ref(name, "definition", param_child)
+                        break
+
+    def _handle_for_loop(self, node):
+        """Handle Luau for loops (numeric and generic)."""
+        clause = None
+        body = None
+
+        for child in node.children:
+            if child.type in ("for_numeric_clause", "for_generic_clause"):
+                clause = child
+            elif child.type == "block":
+                body = child
+
+        if clause:
+            # For numeric: for i = start, end[, step]
+            # For generic: for k, v in expr
+            is_numeric = clause.type == "for_numeric_clause"
+            found_equals = False
+            loop_var_defined = False
+
+            for var_child in clause.children:
+                if var_child.type == "=":
+                    found_equals = True
+                    continue
+                if var_child.type in (",", "in"):
+                    continue
+
+                if var_child.type == "identifier":
+                    if is_numeric:
+                        if not found_equals:
+                            # Loop variable definition (before =)
+                            if not loop_var_defined:
+                                name = self.get_node_text(var_child)
+                                self._add_ref(name, "definition", var_child)
+                                loop_var_defined = True
+                        else:
+                            # Range expressions (after =) are uses
+                            name = self.get_node_text(var_child)
+                            if self._is_valid_var_name(name):
+                                self._add_ref(name, "use", var_child)
+                    else:
+                        # Generic for: variables before 'in' are definitions
+                        name = self.get_node_text(var_child)
+                        self._add_ref(name, "definition", var_child)
+                elif var_child.type == "variable_list":
+                    # Generic for: for k, v in ...
+                    for id_child in var_child.children:
+                        if id_child.type == "identifier":
+                            name = self.get_node_text(id_child)
+                            self._add_ref(name, "definition", id_child)
+                elif var_child.type == "expression_list":
+                    self._visit_node(var_child)
+                elif var_child.type == "number":
+                    # Numbers are literals, no variable reference
+                    pass
+                else:
+                    # Visit other expressions (e.g., function calls in for-in)
+                    self._visit_node(var_child)
+
+        # Visit loop body
+        if body:
+            self._visit_node(body)
+
+
+def _find_luau_function_by_name(root, name: str, source: bytes):
+    """Find a Luau function node by name in tree-sitter tree."""
+    def search(node):
+        if node.type == "function_declaration":
+            for child in node.children:
+                if child.type == "identifier":
+                    func_name = source[child.start_byte:child.end_byte].decode('utf-8')
+                    if func_name == name:
+                        return node
+                    break
+                elif child.type in ("dot_index_expression", "method_index_expression"):
+                    field = child.child_by_field_name("field")
+                    if field:
+                        func_name = source[field.start_byte:field.end_byte].decode('utf-8')
+                        if func_name == name:
+                            return node
+                    break
+
+        for child in node.children:
+            result = search(child)
+            if result:
+                return result
+        return None
+
+    return search(root)
+
+
+def extract_luau_dfg(code: str, function_name: str) -> DFGInfo:
+    """
+    Extract DFG for a Luau function.
+
+    Args:
+        code: Luau source code
+        function_name: Name of function to analyze
+
+    Returns:
+        DFGInfo with variable references and def-use chains
+    """
+    if not TREE_SITTER_LUAU_AVAILABLE:
+        return DFGInfo(
+            function_name=function_name,
+            var_refs=[],
+            dataflow_edges=[],
+        )
+
+    # Parse with tree-sitter
+    luau_lang = Language(tree_sitter_luau.language())
+    parser = Parser(luau_lang)
+    source_bytes = code.encode('utf-8')
+    tree = parser.parse(source_bytes)
+
+    # Find the function
+    func_node = _find_luau_function_by_name(tree.root_node, function_name, source_bytes)
+    if func_node is None:
+        return DFGInfo(
+            function_name=function_name,
+            var_refs=[],
+            dataflow_edges=[],
+        )
+
+    # Extract definitions and uses
+    visitor = LuauDefUseVisitor(source_bytes)
+    visitor.visit(func_node)
+
+    # Compute def-use chains
+    analyzer = PythonReachingDefsAnalyzer(visitor.refs)
+    edges = analyzer.compute_def_use_chains()
 
     return DFGInfo(
         function_name=function_name,

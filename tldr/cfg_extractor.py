@@ -115,6 +115,13 @@ try:
 except ImportError:
     pass
 
+TREE_SITTER_LUAU_AVAILABLE = False
+try:
+    import tree_sitter_luau
+    TREE_SITTER_LUAU_AVAILABLE = True
+except ImportError:
+    pass
+
 
 @dataclass
 class CFGBlock:
@@ -1297,6 +1304,11 @@ def _get_ts_parser(language: str):
             raise ImportError("tree-sitter-lua not available")
         import tree_sitter_lua
         parser.language = Language(tree_sitter_lua.language())
+    elif language == "luau":
+        if not TREE_SITTER_LUAU_AVAILABLE:
+            raise ImportError("tree-sitter-luau not available")
+        import tree_sitter_luau
+        parser.language = Language(tree_sitter_luau.language())
     else:
         raise ValueError(f"Unsupported language: {language}")
 
@@ -1679,6 +1691,83 @@ def _find_lua_function_by_name(root, name: str, source: bytes):
                         func_name = source[field.start_byte:field.end_byte].decode('utf-8')
                         if func_name == name:
                             return node
+                    break
+
+        for child in node.children:
+            result = search(child)
+            if result:
+                return result
+        return None
+
+    return search(root)
+
+
+# =============================================================================
+# Luau CFG Extraction
+# =============================================================================
+
+
+def extract_luau_cfg(source: str, function_name: str) -> CFGInfo:
+    """Extract CFG for a Luau function.
+
+    Luau is syntactically similar to Lua but with type annotations
+    and some additional features like continue, compound assignment.
+
+    Args:
+        source: Luau source code
+        function_name: Name of function to extract CFG for
+
+    Returns:
+        CFGInfo with blocks, edges, and complexity
+
+    Raises:
+        ImportError: If tree-sitter-luau is not available
+        ValueError: If function not found in source
+    """
+    if not TREE_SITTER_LUAU_AVAILABLE:
+        raise ImportError("tree-sitter-luau not available")
+
+    source_bytes = source.encode('utf-8')
+    parser = _get_ts_parser("luau")
+    tree = parser.parse(source_bytes)
+
+    func_node = _find_luau_function_by_name(tree.root_node, function_name, source_bytes)
+    if not func_node:
+        raise ValueError(f"Function '{function_name}' not found in source")
+
+    # Reuse TreeSitterCFGBuilder with luau language setting
+    builder = TreeSitterCFGBuilder(source_bytes, "luau")
+    return builder.build(func_node, function_name)
+
+
+def _find_luau_function_by_name(root, name: str, source: bytes):
+    """Find a Luau function node by name in tree-sitter tree.
+
+    Handles both:
+    - function name() ... end (function_declaration)
+    - local function name() ... end (function_declaration with local)
+    - function Table.name() ... end (table method)
+    - function Table:name() ... end (table method with self)
+
+    Luau uses similar AST structure to Lua.
+    """
+    def search(node):
+        # Check function_declaration: function name() end or local function name() end
+        if node.type == "function_declaration":
+            # Find the identifier child (the function name)
+            for child in node.children:
+                if child.type == "identifier":
+                    func_name = source[child.start_byte:child.end_byte].decode('utf-8')
+                    if func_name == name:
+                        return node
+                    break  # Only check first identifier
+                elif child.type in ("dot_index_expression", "method_index_expression"):
+                    # Table.method or Table:method - get the last identifier
+                    for subchild in child.children:
+                        if subchild.type == "identifier":
+                            last_id = source[subchild.start_byte:subchild.end_byte].decode('utf-8')
+                    if last_id == name:
+                        return node
                     break
 
         for child in node.children:

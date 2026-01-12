@@ -12,6 +12,7 @@ import logging
 import os
 import socket
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional, IO
@@ -30,20 +31,23 @@ logger = logging.getLogger(__name__)
 
 def _get_lock_path(project: Path) -> Path:
     """Get lock file path for daemon startup synchronization."""
-    hash_val = hashlib.md5(str(project).encode()).hexdigest()[:8]
-    return Path(f"/tmp/tldr-{hash_val}.lock")
+    hash_val = hashlib.md5(str(Path(project).resolve()).encode()).hexdigest()[:8]
+    tmp_dir = tempfile.gettempdir()
+    return Path(tmp_dir) / f"tldr-{hash_val}.lock"
 
 
 def _get_pid_path(project: Path) -> Path:
     """Get PID file path for daemon process tracking."""
-    hash_val = hashlib.md5(str(project).encode()).hexdigest()[:8]
-    return Path(f"/tmp/tldr-{hash_val}.pid")
+    hash_val = hashlib.md5(str(Path(project).resolve()).encode()).hexdigest()[:8]
+    tmp_dir = tempfile.gettempdir()
+    return Path(tmp_dir) / f"tldr-{hash_val}.pid"
 
 
 def _get_socket_path(project: Path) -> Path:
     """Get socket path for daemon communication."""
-    hash_val = hashlib.md5(str(project).encode()).hexdigest()[:8]
-    return Path(f"/tmp/tldr-{hash_val}.sock")
+    hash_val = hashlib.md5(str(Path(project).resolve()).encode()).hexdigest()[:8]
+    tmp_dir = tempfile.gettempdir()
+    return Path(tmp_dir) / f"tldr-{hash_val}.sock"
 
 
 def _is_process_running(pid: int) -> bool:

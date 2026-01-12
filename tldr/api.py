@@ -67,6 +67,7 @@ from .cfg_extractor import (
     extract_java_cfg,
     extract_kotlin_cfg,
     extract_lua_cfg,
+    extract_luau_cfg,
     extract_php_cfg,
     extract_python_cfg,
     extract_ruby_cfg,
@@ -125,6 +126,9 @@ from .cross_file_calls import (
     parse_lua_imports as _parse_lua_imports,
 )
 from .cross_file_calls import (
+    parse_luau_imports as _parse_luau_imports,
+)
+from .cross_file_calls import (
     parse_elixir_imports as _parse_elixir_imports,
 )
 from .cross_file_calls import (
@@ -140,6 +144,7 @@ from .dfg_extractor import (
     extract_java_dfg,
     extract_kotlin_dfg,
     extract_lua_dfg,
+    extract_luau_dfg,
     extract_php_dfg,
     extract_python_dfg,
     extract_ruby_dfg,
@@ -648,6 +653,7 @@ def get_relevant_context(
         "csharp": extract_csharp_cfg,
         "scala": extract_scala_cfg,
         "lua": extract_lua_cfg,
+        "luau": extract_luau_cfg,
         "elixir": extract_elixir_cfg,
     }
     cfg_extractor_fn = cfg_extractors.get(language, extract_python_cfg)
@@ -797,6 +803,7 @@ def get_dfg_context(
         "csharp": extract_csharp_dfg,
         "scala": extract_scala_dfg,
         "lua": extract_lua_dfg,
+        "luau": extract_luau_dfg,
         "elixir": extract_elixir_dfg,
     }
 
@@ -863,6 +870,7 @@ def get_cfg_context(
         "swift": extract_swift_cfg,
         "csharp": extract_csharp_cfg,
         "lua": extract_lua_cfg,
+        "luau": extract_luau_cfg,
         "elixir": extract_elixir_cfg,
     }
 
@@ -1158,6 +1166,8 @@ def get_imports(file_path: str, language: str = "python") -> list[dict]:
         return _parse_scala_imports(file_path)
     elif language == "lua":
         return _parse_lua_imports(file_path)
+    elif language == "luau":
+        return _parse_luau_imports(file_path)
     elif language == "elixir":
         return _parse_elixir_imports(file_path)
     else:

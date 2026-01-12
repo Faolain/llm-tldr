@@ -14,6 +14,7 @@ import json
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -25,13 +26,15 @@ mcp = FastMCP("tldr-code")
 def _get_socket_path(project: str) -> Path:
     """Compute socket path matching daemon.py logic."""
     hash_val = hashlib.md5(str(Path(project).resolve()).encode()).hexdigest()[:8]
-    return Path(f"/tmp/tldr-{hash_val}.sock")
+    tmp_dir = tempfile.gettempdir()
+    return Path(tmp_dir) / f"tldr-{hash_val}.sock"
 
 
 def _get_lock_path(project: str) -> Path:
     """Get lock file path for daemon startup synchronization."""
     hash_val = hashlib.md5(str(Path(project).resolve()).encode()).hexdigest()[:8]
-    return Path(f"/tmp/tldr-{hash_val}.lock")
+    tmp_dir = tempfile.gettempdir()
+    return Path(tmp_dir) / f"tldr-{hash_val}.lock"
 
 
 def _ping_daemon(project: str) -> bool:

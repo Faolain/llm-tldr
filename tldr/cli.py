@@ -67,6 +67,7 @@ EXTENSION_TO_LANGUAGE = {
     '.scala': 'scala',
     '.sc': 'scala',
     '.lua': 'lua',
+    '.luau': 'luau',
     '.ex': 'elixir',
     '.exs': 'elixir',
 }

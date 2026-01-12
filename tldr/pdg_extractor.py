@@ -860,6 +860,43 @@ def extract_lua_pdg(source_code: str, function_name: str) -> PDGInfo | None:
 
 
 # =============================================================================
+# Luau PDG Extraction
+# =============================================================================
+
+
+def extract_luau_pdg(source_code: str, function_name: str) -> PDGInfo | None:
+    """
+    Extract PDG for a Luau function.
+
+    Luau is syntactically similar to Lua with type annotations,
+    continue statement, and compound assignments.
+
+    Args:
+        source_code: Luau source code
+        function_name: Name of function to analyze
+
+    Returns:
+        PDGInfo with combined control/data flow, or None if function not found
+    """
+    try:
+        from .cfg_extractor import extract_luau_cfg
+        from .dfg_extractor import extract_luau_dfg
+
+        cfg = extract_luau_cfg(source_code, function_name)
+        if cfg is None:
+            return None
+
+        dfg = extract_luau_dfg(source_code, function_name)
+        if dfg is None:
+            return None
+
+        builder = PDGBuilder(cfg, dfg)
+        return builder.build()
+    except ValueError:
+        return None
+
+
+# =============================================================================
 # Elixir PDG Extraction
 # =============================================================================
 
@@ -926,6 +963,7 @@ def extract_pdg(source_code: str, function_name: str, language: str) -> PDGInfo 
         "csharp": extract_csharp_pdg,
         "scala": extract_scala_pdg,
         "lua": extract_lua_pdg,
+        "luau": extract_luau_pdg,
         "elixir": extract_elixir_pdg,
     }
 

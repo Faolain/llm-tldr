@@ -12,6 +12,7 @@ import os
 import signal
 import socket
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -104,8 +105,9 @@ class TLDRDaemon:
 
     def _compute_socket_path(self) -> Path:
         """Compute deterministic socket path from project path."""
-        hash_val = hashlib.md5(str(self.project).encode()).hexdigest()[:8]
-        return Path(f"/tmp/tldr-{hash_val}.sock")
+        hash_val = hashlib.md5(str(Path(self.project).resolve()).encode()).hexdigest()[:8]
+        tmp_dir = tempfile.gettempdir()
+        return Path(tmp_dir) / f"tldr-{hash_val}.sock"
 
     def _load_semantic_config(self) -> dict:
         """Load semantic search configuration.
@@ -1109,9 +1111,10 @@ class TLDRDaemon:
                 logger.debug(f"Could not re-index {file_path}: {e}")
 
     def _get_tmp_pid_path(self) -> Path:
-        """Get PID file path in /tmp (matches socket path pattern)."""
-        hash_val = hashlib.md5(str(self.project).encode()).hexdigest()[:8]
-        return Path(f"/tmp/tldr-{hash_val}.pid")
+        """Get PID file path in temp dir (matches socket path pattern)."""
+        hash_val = hashlib.md5(str(Path(self.project).resolve()).encode()).hexdigest()[:8]
+        tmp_dir = tempfile.gettempdir()
+        return Path(tmp_dir) / f"tldr-{hash_val}.pid"
 
     def write_pid_file(self):
         """Write daemon PID to .tldr/daemon.pid (and /tmp if not already done).

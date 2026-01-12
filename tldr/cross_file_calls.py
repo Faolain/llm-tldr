@@ -1282,6 +1282,158 @@ def _extract_lua_string(node, source: bytes) -> str | None:
     return text
 
 
+# Tree-sitter support for Luau
+TREE_SITTER_LUAU_AVAILABLE = False
+try:
+    import tree_sitter_luau
+    TREE_SITTER_LUAU_AVAILABLE = True
+except ImportError:
+    pass
+
+
+def _get_luau_parser():
+    """Get or create a tree-sitter Luau parser."""
+    if not TREE_SITTER_LUAU_AVAILABLE:
+        raise RuntimeError("tree-sitter-luau not available")
+
+    luau_lang = tree_sitter.Language(tree_sitter_luau.language())
+    parser = tree_sitter.Parser(luau_lang)
+    return parser
+
+
+def parse_luau_imports(file_path: str | Path) -> list[dict]:
+    """
+    Extract require/GetService statements from a Luau file.
+
+    Args:
+        file_path: Path to Luau file
+
+    Returns:
+        List of import info dicts with keys: module, type
+        Types: "require" (for require calls), "service" (for GetService)
+    """
+    if not TREE_SITTER_LUAU_AVAILABLE:
+        return []
+
+    file_path = Path(file_path)
+    try:
+        source = file_path.read_bytes()
+        parser = _get_luau_parser()
+        tree = parser.parse(source)
+    except (FileNotFoundError, Exception):
+        return []
+
+    imports = []
+
+    def walk_tree(node):
+        # Luau imports are function calls
+        if node.type == "function_call":
+            import_info = _parse_luau_import_node(node, source)
+            if import_info:
+                imports.append(import_info)
+
+        for child in node.children:
+            walk_tree(child)
+
+    walk_tree(tree.root_node)
+    return imports
+
+
+def _parse_luau_import_node(node, source: bytes) -> dict | None:
+    """Parse a single Luau require or GetService call.
+
+    Handles:
+    - require(script.Utils)
+    - require(script.Parent.Module)
+    - require("@pkg/json")
+    - game:GetService("Players")
+    """
+    # Check for method call (GetService pattern)
+    method_expr = None
+    func_name = None
+    arguments = None
+
+    for child in node.children:
+        if child.type == "method_index_expression":
+            method_expr = child
+        elif child.type == "identifier":
+            func_name = source[child.start_byte:child.end_byte].decode("utf-8")
+        elif child.type == "arguments":
+            arguments = child
+
+    # Handle GetService pattern: game:GetService("ServiceName")
+    if method_expr is not None:
+        method_name = None
+        for child in method_expr.children:
+            if child.type == "identifier":
+                method_name = source[child.start_byte:child.end_byte].decode("utf-8")
+
+        if method_name == "GetService" and arguments is not None:
+            # Extract the service name from arguments
+            for arg_child in arguments.children:
+                if arg_child.type == "string":
+                    service_name = _extract_luau_string(arg_child, source)
+                    if service_name:
+                        return {
+                            'module': service_name,
+                            'type': 'service',
+                        }
+        return None
+
+    # Handle require pattern
+    if func_name != "require":
+        return None
+
+    if arguments is None:
+        return None
+
+    # Get the module argument - can be dot_index_expression or string
+    for arg_child in arguments.children:
+        if arg_child.type == "dot_index_expression":
+            # require(script.Utils) or require(script.Parent.Module)
+            module_path = source[arg_child.start_byte:arg_child.end_byte].decode("utf-8")
+            return {
+                'module': module_path,
+                'type': 'require',
+            }
+        elif arg_child.type == "string":
+            # require("@pkg/json")
+            module_name = _extract_luau_string(arg_child, source)
+            if module_name:
+                return {
+                    'module': module_name,
+                    'type': 'require',
+                }
+        elif arg_child.type == "identifier":
+            # require(ReplicatedStorage.Utils) - first part is identifier
+            # Actually this case is for variable reference like require(someVar)
+            # We need to handle ReplicatedStorage.Utils which would be dot_index_expression
+            module_name = source[arg_child.start_byte:arg_child.end_byte].decode("utf-8")
+            return {
+                'module': module_name,
+                'type': 'require',
+            }
+
+    return None
+
+
+def _extract_luau_string(node, source: bytes) -> str | None:
+    """Extract string content from a Luau string node."""
+    # Luau strings can have string_content child
+    for child in node.children:
+        if child.type == "string_content":
+            return source[child.start_byte:child.end_byte].decode("utf-8")
+
+    # Fallback: strip quotes manually
+    text = source[node.start_byte:node.end_byte].decode("utf-8")
+    if text.startswith('"') and text.endswith('"'):
+        return text[1:-1]
+    elif text.startswith("'") and text.endswith("'"):
+        return text[1:-1]
+
+    return text
+
+
 def parse_elixir_imports(file_path: str | Path) -> list[dict]:
     """
     Extract alias/import/use/require statements from an Elixir file.
