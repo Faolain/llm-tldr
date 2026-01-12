@@ -15,7 +15,6 @@ import sys
 import tempfile
 import time
 import platform
-import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional, IO
 
@@ -131,11 +130,7 @@ def _is_socket_connectable(project: Path, timeout: float = 1.0) -> bool:
         return True
     except (socket.error, OSError):
         return False
-=======
-    hash_val = hashlib.md5(str(project).encode()).hexdigest()[:8]
-    temp_dir = Path(tempfile.gettempdir())
-    return temp_dir / f"tldr-{hash_val}.lock"
->>>>>>> 28a52b2 (feat: add windows compatibility (msvcrt locking, temp paths))
+
 
 
 def _is_daemon_alive(project: Path, retries: int = 3, delay: float = 0.1) -> bool:

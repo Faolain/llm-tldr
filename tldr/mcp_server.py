@@ -17,7 +17,6 @@ import tempfile
 import time
 import os
 import platform
-import tempfile
 from pathlib import Path
 
 # Conditional imports for file locking
@@ -75,18 +74,19 @@ def _ensure_daemon(project: str, timeout: float = 10.0) -> None:
     with open(lock_path, "w") as lock_file:
         try:
             if os.name == "nt":
-                # Windows locking logic
-                # Lock first 10 bytes (arbitrary small region)
-                # LK_RLCK blocks for 10s if locked, raising OSError if it fails
-                # We loop to simulate cleaner blocking behavior if needed, 
-                # but standard msvcrt.locking with LK_RLCK is the closest to LOCK_EX
-                # However, Python's msvcrt.locking doesn't wait indefinitely nicely.
-                # A simple busy wait loop with LK_NBLCK is often more robust.
+                # Windows locking logic with timeout
+                # LK_NBLCK is non-blocking; we loop with a 10s timeout
+                lock_start = time.time()
+                lock_timeout = 10.0  # Same as startup.py
                 while True:
                     try:
                         msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 10)
                         break
                     except OSError:
+                        if time.time() - lock_start > lock_timeout:
+                            raise RuntimeError(
+                                f"Timeout acquiring lock on {lock_path} after {lock_timeout}s"
+                            )
                         time.sleep(0.1)
             else:
                 # Unix locking
@@ -96,7 +96,6 @@ def _ensure_daemon(project: str, timeout: float = 10.0) -> None:
             if _ping_daemon(project):
                 return
 
-            # Clean up stale socket if daemon is dead
             # Clean up stale socket if daemon is dead
             if socket_path.exists():
                 is_win = os.name == "nt"
@@ -129,9 +128,9 @@ def _ensure_daemon(project: str, timeout: float = 10.0) -> None:
             raise RuntimeError(f"Failed to start TLDR daemon for {project}")
         finally:
             if os.name == "nt":
-                 try:
+                try:
                     msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 10)
-                 except OSError:
+                except OSError:
                     pass
             else:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
