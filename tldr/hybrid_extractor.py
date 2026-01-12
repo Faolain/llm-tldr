@@ -486,6 +486,28 @@ class HybridExtractor:
                     # Extract calls
                     if defined_names:
                         self._extract_ts_calls(child, func.name, source, module_info.call_graph, defined_names)
+                else:
+                    # Anonymous arrow function - try to get name from parent pair context
+                    # Use the arrow_function node (child) to find its pair ancestor
+                    parent_name = self._get_pair_property_name(child, source)
+                    if parent_name:
+                        # Create function info with parent property name
+                        text = self._safe_decode(source[child.start_byte:child.end_byte])
+                        is_async = text.strip().startswith("async")
+                        params = []
+                        for p_child in child.children:
+                            if p_child.type == "formal_parameters":
+                                for p in p_child.children:
+                                    if p.type not in ("(", ")", ","):
+                                        params.append(self._safe_decode(source[p.start_byte:p.end_byte]))
+                        module_info.functions.append(FunctionInfo(
+                            name=parent_name,
+                            params=params,
+                            return_type=None,
+                            docstring=prev_comment,
+                            is_async=is_async,
+                            line_number=child.start_point[0] + 1,
+                        ))
                 prev_comment = None
 
             # Classes
@@ -496,9 +518,13 @@ class HybridExtractor:
                 prev_comment = None
 
             # Recurse into containers
+            # Added: "object", "pair", "call_expression", "arguments" to support object literal patterns like:
+            # export const router = { method: procedure.handler(() => {...}) }
+            # Full path: object → pair → call_expression → arguments → arrow_function
+            # This enables extraction of arrow functions inside object literals (e.g., oRPC routers)
             elif node_type in ("export_statement", "lexical_declaration", "program",
                             "variable_declaration", "variable_declarator", "statement_block",
-                            "export_clause"):
+                            "export_clause", "object", "pair", "call_expression", "arguments"):
                 self._extract_ts_nodes(child, source, module_info, defined_names)
                 prev_comment = None
             else:
@@ -513,6 +539,20 @@ class HybridExtractor:
                     call_graph.add_call(caller_name, callee)
             # Recurse into all children
             self._extract_ts_calls(child, caller_name, source, call_graph, defined_names)
+
+    def _get_pair_property_name(self, node, source: bytes) -> str | None:
+        """Get property name from a pair node (for object literal method extraction).
+        Traverses up the tree to find the nearest pair ancestor and extracts its property_identifier.
+        Used to name anonymous arrow functions in object literals like oRPC routers.
+        """
+        current = node
+        while current is not None:
+            if current.type == "pair":
+                for child in current.children:
+                    if child.type == "property_identifier":
+                        return self._safe_decode(source[child.start_byte:child.end_byte])
+            current = current.parent
+        return None
 
     def _get_ts_call_name(self, node, source: bytes) -> str | None:
         """Get the name of a called function from a call_expression."""
