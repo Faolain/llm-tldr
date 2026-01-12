@@ -1248,7 +1248,7 @@ class TLDRDaemon:
             self._socket.close()
             self._socket = None
 
-        if os.name == "nt":
+        if sys.platform == "win32":
             # Windows uses TCP sockets, no file to cleanup
             logger.info("Socket cleaned up (TCP)")
             return
