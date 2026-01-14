@@ -14,7 +14,9 @@ from tldr.salsa import SalsaDB, salsa_query
 def cached_search(db: SalsaDB, project: str, pattern: str, max_results: int) -> dict:
     """Cached search query - memoized by SalsaDB."""
     from tldr import api
-    results = api.search(pattern=pattern, root=Path(project), max_results=max_results)
+    from tldr.tldrignore import IgnoreSpec
+    ignore_spec = IgnoreSpec(project, use_gitignore=True)
+    results = api.search(pattern=pattern, root=Path(project), max_results=max_results, ignore_spec=ignore_spec)
     return {"status": "ok", "results": results}
 
 
@@ -73,8 +75,10 @@ def cached_slice(db: SalsaDB, file_path: str, function: str, line: int, directio
 def cached_tree(db: SalsaDB, project: str, extensions: tuple, exclude_hidden: bool) -> dict:
     """Cached file tree - memoized by SalsaDB."""
     from tldr.api import get_file_tree
+    from tldr.tldrignore import IgnoreSpec
     ext_set = set(extensions) if extensions else None
-    result = get_file_tree(project, extensions=ext_set, exclude_hidden=exclude_hidden)
+    ignore_spec = IgnoreSpec(project, use_gitignore=True)
+    result = get_file_tree(project, extensions=ext_set, exclude_hidden=exclude_hidden, ignore_spec=ignore_spec)
     return {"status": "ok", "result": result}
 
 
@@ -82,7 +86,9 @@ def cached_tree(db: SalsaDB, project: str, extensions: tuple, exclude_hidden: bo
 def cached_structure(db: SalsaDB, project: str, language: str, max_results: int) -> dict:
     """Cached code structure - memoized by SalsaDB."""
     from tldr.api import get_code_structure
-    result = get_code_structure(project, language=language, max_results=max_results)
+    from tldr.tldrignore import IgnoreSpec
+    ignore_spec = IgnoreSpec(project, use_gitignore=True)
+    result = get_code_structure(project, language=language, max_results=max_results, ignore_spec=ignore_spec)
     return {"status": "ok", "result": result}
 
 

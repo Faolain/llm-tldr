@@ -193,10 +193,10 @@ Semantic Search:
     struct_p.add_argument("path", nargs="?", default=".", help="Directory to analyze")
     struct_p.add_argument(
         "--lang",
-        default="python",
-        choices=["python", "typescript", "javascript", "go", "rust", "java", "c",
+        default="auto",
+        choices=["auto", "all", "python", "typescript", "javascript", "go", "rust", "java", "c",
                  "cpp", "ruby", "php", "kotlin", "swift", "csharp", "scala", "lua", "luau", "elixir"],
-        help="Language to analyze",
+        help="Language to analyze (auto=use cached, all=detect all)",
     )
     struct_p.add_argument(
         "--max", type=int, default=50, help="Max files to analyze (default: 50)"
@@ -540,30 +540,31 @@ Semantic Search:
 
         return graph
 
-    # Helper to load ignore patterns from .tldrignore + CLI --ignore flags
+    # Helper to load ignore patterns from .tldrignore + CLI --ignore flags + .gitignore
     def get_ignore_spec(project_path: str | Path):
-        """Load ignore patterns, combining .tldrignore with CLI --ignore flags."""
+        """Load ignore patterns, combining .tldrignore, .gitignore, and CLI --ignore flags."""
         if getattr(args, 'no_ignore', False):
             return None
 
-        from .tldrignore import load_ignore_patterns
-        import pathspec
+        from .tldrignore import IgnoreSpec
 
-        project_path = Path(project_path).resolve()
-
-        # Load base patterns from .tldrignore
-        base_spec = load_ignore_patterns(project_path)
-
-        # Add CLI --ignore patterns if any
         cli_patterns = getattr(args, 'ignore', None) or []
-        if cli_patterns:
-            # Combine base patterns with CLI patterns
-            all_patterns = list(base_spec.patterns) + [
-                pathspec.patterns.GitWildMatchPattern(p) for p in cli_patterns
-            ]
-            return pathspec.PathSpec(all_patterns)
+        return IgnoreSpec(
+            project_dir=project_path,
+            use_gitignore=True,
+            cli_patterns=cli_patterns if cli_patterns else None,
+        )
 
-        return base_spec
+    def get_cached_languages(project_path: str | Path) -> list[str] | None:
+        """Read cached languages from .tldr/languages.json if available."""
+        lang_cache = Path(project_path) / ".tldr" / "languages.json"
+        if lang_cache.exists():
+            try:
+                data = json.loads(lang_cache.read_text())
+                return data.get("languages")
+            except (json.JSONDecodeError, OSError):
+                pass
+        return None
 
     try:
         if args.command == "tree":
@@ -577,11 +578,38 @@ Semantic Search:
 
         elif args.command == "structure":
             ignore_spec = get_ignore_spec(args.path)
-            result = get_code_structure(
-                args.path, language=args.lang, max_results=args.max,
-                ignore_spec=ignore_spec
-            )
-            print(json.dumps(result, indent=2))
+            project_path = Path(args.path).resolve()
+
+            # Determine language(s) to analyze
+            if args.lang == "auto":
+                # Use cached languages from tldr warm, or fall back to python
+                cached = get_cached_languages(project_path)
+                languages = cached if cached else ["python"]
+            elif args.lang == "all":
+                # Detect all languages in project
+                from .semantic import _detect_project_languages
+                respect_ignore = not getattr(args, 'no_ignore', False)
+                languages = _detect_project_languages(project_path, respect_ignore=respect_ignore)
+                if not languages:
+                    languages = ["python"]
+            else:
+                languages = [args.lang]
+
+            # Collect results for all languages
+            all_files = []
+            for lang in languages:
+                result = get_code_structure(
+                    args.path, language=lang, max_results=args.max,
+                    ignore_spec=ignore_spec
+                )
+                all_files.extend(result.get("files", []))
+
+            combined_result = {
+                "root": str(project_path),
+                "languages": languages,
+                "files": all_files[:args.max],  # Respect max across all languages
+            }
+            print(json.dumps(combined_result, indent=2))
 
         elif args.command == "search":
             ext = set(args.ext) if args.ext else None
@@ -894,6 +922,13 @@ Semantic Search:
                     "timestamp": time.time(),
                 }
                 cache_file.write_text(json.dumps(cache_data, indent=2))
+
+                # Also save quick-access language cache for structure/search auto-detect
+                lang_cache_file = project_path / ".tldr" / "languages.json"
+                lang_cache_file.write_text(json.dumps({
+                    "languages": processed_languages if processed_languages else target_languages,
+                    "timestamp": time.time(),
+                }, indent=2))
 
                 # Print stats
                 print(f"Total: Indexed {len(all_files)} files, found {len(unique_edges)} edges")

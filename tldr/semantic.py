@@ -913,7 +913,7 @@ def _detect_project_languages(project_path: Path, respect_ignore: bool = True) -
 
     for root, dirs, files in os.walk(project_path):
         # Prune common heavy dirs immediately for speed
-        dirs[:] = [d for d in dirs if d not in {'.git', 'node_modules', '.tldr', 'venv', '__pycache__', '.idea', '.vscode'}]
+        dirs[:] = [d for d in dirs if d not in {'.git', 'node_modules', '.tldr', 'venv', '.venv', '__pycache__', '.idea', '.vscode', 'env', '.env', 'vendor', 'deps', '_build', 'cover'}]
 
         for file in files:
              file_path = Path(root) / file
