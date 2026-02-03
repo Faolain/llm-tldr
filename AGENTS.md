@@ -8,7 +8,7 @@
 
 ## Build, Test, and Development Commands
 - `uv venv && uv pip install -e ".[dev]"`: create a virtualenv and install dev dependencies.
-- `uv run pytest`: run the full test suite (preferred; ensures all deps are available).
+- `uv run pytest`: run the full test suite (preferred; ensures all deps are available). DO NOT USE pip or "python -m pytest"
 - `uv run pytest tests/test_some_area.py`: run a focused test file.
 - `uv run ruff check tldr/`: lint the codebase.
 
