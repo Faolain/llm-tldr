@@ -120,7 +120,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     index_parent.add_argument(
         "--cache-root",
-        help="Directory where .tldr caches live (enables index mode)",
+        help="Directory where .tldr caches live (enables index mode). Use 'git' to resolve the repo root.",
     )
     index_parent.add_argument(
         "--index",

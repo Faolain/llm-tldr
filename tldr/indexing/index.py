@@ -389,7 +389,8 @@ def get_index_context(
         cli_patterns_arg = _UNSET
     if no_ignore_arg is None:
         no_ignore_arg = _UNSET
-    if cache_root_arg is None or str(cache_root_arg).strip() == "":
+    cache_root_value = None if cache_root_arg is None else str(cache_root_arg).strip()
+    if cache_root_value is None or cache_root_value == "":
         return IndexContext(
             mode="legacy",
             scan_root=scan_root,
@@ -400,7 +401,17 @@ def get_index_context(
             config=None,
         )
 
-    cache_root = Path(cache_root_arg).resolve()
+    if cache_root_value.lower() == "git":
+        from tldr.tldrignore import resolve_git_root
+
+        git_root = resolve_git_root(scan_root)
+        if git_root is None:
+            git_root = resolve_git_root(Path.cwd())
+        if git_root is None:
+            raise ValueError("cache_root 'git' requested but no git repository found")
+        cache_root = git_root
+    else:
+        cache_root = Path(cache_root_arg).resolve()
     if index_id_arg is None or index_id_arg == "":
         index_id = derive_index_id(scan_root, cache_root)
     else:
