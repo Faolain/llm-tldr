@@ -1,0 +1,12 @@
+[
+  {
+    "dep": "requests",
+    "query": "Session.request implementation",
+    "expect_path_contains": "requests/sessions.py"
+  },
+  {
+    "dep": "requests",
+    "query": "HTTPAdapter.send implementation",
+    "expect_path_contains": "requests/adapters.py"
+  }
+]
