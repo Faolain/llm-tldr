@@ -12,6 +12,20 @@ Add a first-class **Index** concept so TLDR can:
 - Support multi-index operation in the **daemon** and **MCP server**
 - Provide **index management** commands (`list/info/rm/gc`)
 
+## Immediate Next Steps (rolling)
+
+- [x] Add daemon identity helpers (index-aware socket/lock/pid/port) + extend `IndexPaths` for daemon-related files.
+- [x] Refactor daemon core/startup to accept `IndexContext`, use index paths/config roots, and propagate index flags in background reindex + Windows spawn.
+- [x] Update CLI daemon commands to pass index context and preserve index identity.
+- [x] Update MCP server to accept index flags, enforce fixed index routing, and pass flags to daemon auto-start.
+- [x] Add daemon identity isolation tests.
+- [x] Run targeted tests: `pytest tests/test_daemon_identity.py`
+
+## Gotchas / Learnings (rolling)
+
+- MCP tool defaults pass `project="."`; when MCP is started with a fixed index, treat `"."` as “unset” to avoid false mismatches.
+- Windows daemon port collisions are now mitigated by persisting the selected port in a temp file keyed by the daemon identity.
+
 ## Phases (suggested delivery)
 
 - Phase 1 (MVP: isolated index + semantic): CLI flag plumbing + per-index cache layout + semantic isolation + “no writes outside cache_root” guard + baseline tests.

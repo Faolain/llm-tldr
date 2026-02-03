@@ -1643,24 +1643,42 @@ def main():
         elif args.command == "daemon":
             from .daemon import start_daemon, stop_daemon, query_daemon
 
-            project_path = Path(args.project).resolve()
+            scan_root = _resolve_scan_root(
+                args.scan_root,
+                _explicit_path(args.project, "."),
+                default=".",
+            )
+            project_path = Path(scan_root).resolve()
+            allow_create = args.action == "start"
+            try:
+                index_ctx = _get_index_ctx(project_path, allow_create=allow_create)
+            except FileNotFoundError:
+                index_ctx = None
 
             if args.action == "start":
-                # Ensure .tldr directory exists
-                tldr_dir = project_path / ".tldr"
-                tldr_dir.mkdir(parents=True, exist_ok=True)
                 # Start daemon (will fork to background on Unix)
-                start_daemon(project_path, foreground=False)
+                start_daemon(project_path, foreground=False, index_ctx=index_ctx)
 
             elif args.action == "stop":
-                if stop_daemon(project_path):
+                if stop_daemon(
+                    project_path,
+                    index_ctx=index_ctx,
+                    cache_root=Path(args.cache_root).resolve() if args.cache_root else None,
+                    index_id=args.index_id,
+                ):
                     print("Daemon stopped")
                 else:
                     print("Daemon not running")
 
             elif args.action == "status":
                 try:
-                    result = query_daemon(project_path, {"cmd": "status"})
+                    result = query_daemon(
+                        project_path,
+                        {"cmd": "status"},
+                        index_ctx=index_ctx,
+                        cache_root=Path(args.cache_root).resolve() if args.cache_root else None,
+                        index_id=args.index_id,
+                    )
                     print(f"Status: {result.get('status', 'unknown')}")
                     if 'uptime' in result:
                         uptime = int(result['uptime'])
@@ -1672,7 +1690,13 @@ def main():
 
             elif args.action == "query":
                 try:
-                    result = query_daemon(project_path, {"cmd": args.cmd})
+                    result = query_daemon(
+                        project_path,
+                        {"cmd": args.cmd},
+                        index_ctx=index_ctx,
+                        cache_root=Path(args.cache_root).resolve() if args.cache_root else None,
+                        index_id=args.index_id,
+                    )
                     print(json.dumps(result, indent=2))
                 except (ConnectionRefusedError, FileNotFoundError):
                     print("Error: Daemon not running", file=sys.stderr)
@@ -1681,10 +1705,16 @@ def main():
             elif args.action == "notify":
                 try:
                     file_path = Path(args.file).resolve()
-                    result = query_daemon(project_path, {
-                        "cmd": "notify",
-                        "file": str(file_path)
-                    })
+                    result = query_daemon(
+                        project_path,
+                        {
+                            "cmd": "notify",
+                            "file": str(file_path)
+                        },
+                        index_ctx=index_ctx,
+                        cache_root=Path(args.cache_root).resolve() if args.cache_root else None,
+                        index_id=args.index_id,
+                    )
                     if result.get("status") == "ok":
                         dirty = result.get("dirty_count", 0)
                         threshold = result.get("threshold", 20)

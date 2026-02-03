@@ -8,15 +8,14 @@ Usage:
     tldr-mcp --project /path/to/project
 """
 
-import hashlib
 import json
 import socket
 import subprocess
 import sys
-import tempfile
 import time
 import os
 
+from dataclasses import dataclass
 from pathlib import Path
 
 # Conditional imports for file locking
@@ -26,66 +25,75 @@ else:
     import fcntl
 
 from mcp.server.fastmcp import FastMCP
+from tldr.daemon.identity import (
+    DaemonIdentity,
+    get_connection_info,
+    get_lock_path,
+    get_socket_path,
+    resolve_daemon_identity,
+)
 
 mcp = FastMCP("tldr-code")
 
 
-def _get_socket_path(project: str) -> Path:
-    """Compute socket path matching daemon.py logic."""
-    hash_val = hashlib.md5(str(Path(project).resolve()).encode()).hexdigest()[:8]
-    tmp_dir = tempfile.gettempdir()
-    return Path(tmp_dir) / f"tldr-{hash_val}.sock"
+@dataclass
+class MCPConfig:
+    scan_root: Path
+    cache_root: Path | None
+    index_id: str | None
+    identity: DaemonIdentity
+    fixed: bool
 
 
-def _get_lock_path(project: str) -> Path:
-    """Get lock file path for daemon startup synchronization."""
-    hash_val = hashlib.md5(str(Path(project).resolve()).encode()).hexdigest()[:8]
-    tmp_dir = tempfile.gettempdir()
-    return Path(tmp_dir) / f"tldr-{hash_val}.lock"
+_MCP_CONFIG: MCPConfig | None = None
 
 
-def _get_connection_info(project: str) -> tuple[str, int | None]:
-    """Return (address, port) - port is None for Unix sockets.
-
-    On Windows, uses TCP on localhost with a deterministic port.
-    On Unix, uses Unix domain sockets.
-    """
-    if sys.platform == "win32":
-        hash_val = hashlib.md5(str(Path(project).resolve()).encode()).hexdigest()[:8]
-        port = 49152 + (int(hash_val, 16) % 10000)
-        return ("127.0.0.1", port)
-    else:
-        socket_path = _get_socket_path(project)
-        return (str(socket_path), None)
+def _resolve_project(project: str | None) -> str:
+    if _MCP_CONFIG is not None and _MCP_CONFIG.fixed:
+        if project not in (None, "", ".") and Path(project).resolve() != _MCP_CONFIG.scan_root:
+            raise ValueError(
+                f"MCP server is fixed to scan_root={_MCP_CONFIG.scan_root}; got {project}"
+            )
+        return str(_MCP_CONFIG.scan_root)
+    if project:
+        return project
+    env_project = os.environ.get("TLDR_PROJECT")
+    return env_project or "."
 
 
-def _ping_daemon(project: str) -> bool:
+def _resolve_identity(project: str) -> DaemonIdentity:
+    if _MCP_CONFIG is not None and _MCP_CONFIG.fixed:
+        return _MCP_CONFIG.identity
+    return resolve_daemon_identity(Path(project).resolve())
+
+
+def _ping_daemon(identity: DaemonIdentity) -> bool:
     """Check if daemon is alive and responding."""
-    addr, port = _get_connection_info(project)
-    
+    addr, port = get_connection_info(identity)
+
     # On Unix, check if socket file exists first
     if port is None and not Path(addr).exists():
         return False
-    
+
     try:
-        result = _send_raw(project, {"cmd": "ping"})
+        result = _send_raw(identity, {"cmd": "ping"})
         return result.get("status") == "ok"
     except Exception:
         return False
 
 
-def _ensure_daemon(project: str, timeout: float = 10.0) -> None:
+def _ensure_daemon(project: str, identity: DaemonIdentity, timeout: float = 10.0) -> None:
     """Ensure daemon is running, starting it if needed.
 
     Uses file locking to prevent race conditions when multiple agents
     try to start the daemon simultaneously.
     """
     # Fast path: daemon already running (no lock needed)
-    if _ping_daemon(project):
+    if _ping_daemon(identity):
         return
 
-    socket_path = _get_socket_path(project)
-    lock_path = _get_lock_path(project)
+    socket_path = get_socket_path(identity)
+    lock_path = get_lock_path(identity)
 
     # Acquire exclusive lock for startup coordination
     lock_path.touch(exist_ok=True)
@@ -111,7 +119,7 @@ def _ensure_daemon(project: str, timeout: float = 10.0) -> None:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
 
             # Re-check after acquiring lock (another process may have started daemon)
-            if _ping_daemon(project):
+            if _ping_daemon(identity):
                 return
 
             # Clean up stale socket if daemon is dead
@@ -125,12 +133,17 @@ def _ensure_daemon(project: str, timeout: float = 10.0) -> None:
                             socket_path.unlink(missing_ok=True)
                     except OSError:
                         pass
-                # Windows: do nothing (TCP no socket file), or if it was a file,
-                # we don't accidentally delete random files unless we are sure.
+                # Windows: do nothing (TCP no socket file)
 
             # Start daemon
+            cmd = [sys.executable, "-m", "tldr.cli", "daemon", "start", "--project", project]
+            if _MCP_CONFIG is not None and _MCP_CONFIG.cache_root is not None:
+                cmd.extend(["--cache-root", str(_MCP_CONFIG.cache_root)])
+                if _MCP_CONFIG.index_id:
+                    cmd.extend(["--index", str(_MCP_CONFIG.index_id)])
+
             subprocess.Popen(
-                [sys.executable, "-m", "tldr.cli", "daemon", "start", "--project", project],
+                cmd,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 start_new_session=True,
@@ -139,7 +152,7 @@ def _ensure_daemon(project: str, timeout: float = 10.0) -> None:
             # Wait for daemon to be ready
             start = time.time()
             while time.time() - start < timeout:
-                if _ping_daemon(project):
+                if _ping_daemon(identity):
                     return
                 time.sleep(0.1)
 
@@ -154,10 +167,10 @@ def _ensure_daemon(project: str, timeout: float = 10.0) -> None:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
-def _send_raw(project: str, command: dict) -> dict:
+def _send_raw(identity: DaemonIdentity, command: dict) -> dict:
     """Send command to daemon socket."""
-    addr, port = _get_connection_info(project)
-    
+    addr, port = get_connection_info(identity)
+
     sock = None
     try:
         if port is not None:
@@ -168,7 +181,7 @@ def _send_raw(project: str, command: dict) -> dict:
             # Unix socket for Linux/macOS
             sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             sock.connect(addr)
-    
+
         sock.sendall(json.dumps(command).encode() + b"\n")
 
         # Read response
@@ -190,10 +203,12 @@ def _send_raw(project: str, command: dict) -> dict:
             sock.close()
 
 
-def _send_command(project: str, command: dict) -> dict:
+def _send_command(project: str | None, command: dict) -> dict:
     """Send command to daemon, auto-starting if needed."""
-    _ensure_daemon(project)
-    return _send_raw(project, command)
+    resolved_project = _resolve_project(project)
+    identity = _resolve_identity(resolved_project)
+    _ensure_daemon(resolved_project, identity)
+    return _send_raw(identity, command)
 
 
 # === NAVIGATION TOOLS ===
@@ -534,10 +549,51 @@ def main():
 
     parser = argparse.ArgumentParser(description="TLDR MCP Server")
     parser.add_argument("--project", default=".", help="Project root directory")
+    parser.add_argument("--scan-root", help="Scan root (overrides --project)")
+    parser.add_argument("--cache-root", help="Directory where .tldr caches live (enables index mode)")
+    parser.add_argument("--index", dest="index_id", help="Logical index id (namespaces caches under cache-root)")
     args = parser.parse_args()
 
+    if args.scan_root is None:
+        args.scan_root = os.environ.get("TLDR_SCAN_ROOT")
+    if args.cache_root is None:
+        args.cache_root = os.environ.get("TLDR_CACHE_ROOT")
+    if args.index_id is None:
+        args.index_id = os.environ.get("TLDR_INDEX")
+
+    scan_root = args.scan_root or args.project
+    if args.scan_root and Path(args.project).resolve() != Path(args.scan_root).resolve():
+        print("Error: --scan-root conflicts with --project", file=sys.stderr)
+        sys.exit(1)
+
+    if args.index_id and not args.cache_root:
+        print("Error: --index requires --cache-root", file=sys.stderr)
+        sys.exit(1)
+
+    fixed = bool(args.scan_root or args.cache_root or args.index_id)
+    resolved_scan_root = Path(scan_root).resolve()
+    resolved_cache_root = Path(args.cache_root).resolve() if args.cache_root else None
+
+    if resolved_cache_root is not None:
+        identity = resolve_daemon_identity(
+            resolved_scan_root,
+            cache_root=resolved_cache_root,
+            index_id=args.index_id,
+        )
+    else:
+        identity = resolve_daemon_identity(resolved_scan_root)
+
+    global _MCP_CONFIG
+    _MCP_CONFIG = MCPConfig(
+        scan_root=resolved_scan_root,
+        cache_root=resolved_cache_root,
+        index_id=args.index_id,
+        identity=identity,
+        fixed=fixed,
+    )
+
     # Set default project for tools that need it
-    os.environ["TLDR_PROJECT"] = str(Path(args.project).resolve())
+    os.environ["TLDR_PROJECT"] = str(resolved_scan_root)
 
     mcp.run(transport="stdio")
 

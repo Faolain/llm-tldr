@@ -31,6 +31,8 @@ class IndexConfig:
 @dataclass(frozen=True)
 class IndexPaths:
     tldr_dir: Path
+    tldr_config: Path
+    claude_settings: Path
     indexes_dir: Path
     index_dir: Path
     meta: Path
@@ -39,21 +41,31 @@ class IndexPaths:
     call_graph: Path
     languages: Path
     dirty: Path
+    file_hashes: Path
+    content_index: Path
+    stats_dir: Path
+    hook_activity: Path
     semantic_dir: Path
     semantic_faiss: Path
     semantic_metadata: Path
+    daemon_status: Path
 
     @classmethod
     def from_config(cls, config: IndexConfig) -> "IndexPaths":
         tldr_dir = config.cache_root / ".tldr"
+        tldr_config = tldr_dir / "config.json"
+        claude_settings = config.cache_root / ".claude" / "settings.json"
         indexes_dir = tldr_dir / "indexes"
         index_dir = indexes_dir / config.index_key
         meta = index_dir / "meta.json"
         ignore_file = config.ignore_file
         cache_dir = index_dir / "cache"
+        stats_dir = index_dir / "stats"
         semantic_dir = cache_dir / "semantic"
         return cls(
             tldr_dir=tldr_dir,
+            tldr_config=tldr_config,
+            claude_settings=claude_settings,
             indexes_dir=indexes_dir,
             index_dir=index_dir,
             meta=meta,
@@ -62,9 +74,14 @@ class IndexPaths:
             call_graph=cache_dir / "call_graph.json",
             languages=index_dir / "languages.json",
             dirty=cache_dir / "dirty.json",
+            file_hashes=cache_dir / "file_hashes.json",
+            content_index=cache_dir / "content_index.json",
+            stats_dir=stats_dir,
+            hook_activity=stats_dir / "hook_activity.jsonl",
             semantic_dir=semantic_dir,
             semantic_faiss=semantic_dir / "index.faiss",
             semantic_metadata=semantic_dir / "metadata.json",
+            daemon_status=index_dir / "status",
         )
 
     @classmethod
@@ -76,15 +93,20 @@ class IndexPaths:
         ignore_file: Path | None = None,
     ) -> "IndexPaths":
         tldr_dir = cache_root / ".tldr"
+        tldr_config = tldr_dir / "config.json"
+        claude_settings = cache_root / ".claude" / "settings.json"
         indexes_dir = tldr_dir / "indexes"
         index_dir = indexes_dir / index_key
         meta = index_dir / "meta.json"
         if ignore_file is None:
             ignore_file = index_dir / ".tldrignore"
         cache_dir = index_dir / "cache"
+        stats_dir = index_dir / "stats"
         semantic_dir = cache_dir / "semantic"
         return cls(
             tldr_dir=tldr_dir,
+            tldr_config=tldr_config,
+            claude_settings=claude_settings,
             indexes_dir=indexes_dir,
             index_dir=index_dir,
             meta=meta,
@@ -93,9 +115,14 @@ class IndexPaths:
             call_graph=cache_dir / "call_graph.json",
             languages=index_dir / "languages.json",
             dirty=cache_dir / "dirty.json",
+            file_hashes=cache_dir / "file_hashes.json",
+            content_index=cache_dir / "content_index.json",
+            stats_dir=stats_dir,
+            hook_activity=stats_dir / "hook_activity.jsonl",
             semantic_dir=semantic_dir,
             semantic_faiss=semantic_dir / "index.faiss",
             semantic_metadata=semantic_dir / "metadata.json",
+            daemon_status=index_dir / "status",
         )
 
 
