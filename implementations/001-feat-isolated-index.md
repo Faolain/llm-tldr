@@ -12,6 +12,13 @@ Add a first-class **Index** concept so TLDR can:
 - Support multi-index operation in the **daemon** and **MCP server**
 - Provide **index management** commands (`list/info/rm/gc`)
 
+## Phases (suggested delivery)
+
+- Phase 1 (MVP: isolated index + semantic): CLI flag plumbing + per-index cache layout + semantic isolation + “no writes outside cache_root” guard + baseline tests.
+- Phase 2 (Ignore + completeness): index-scoped ignore file + gitignore toggles + ensure every subcommand uses `IndexContext` consistently.
+- Phase 3 (Daemon + MCP): per-index daemon identity + request routing + daemon isolation tests.
+- Phase 4 (Index management): `tldr index list/info/rm/gc` (+ optional `gc`) + cleanup/UX polish.
+
 ## Goals (Acceptance Criteria)
 
 1. CLI supports `--scan-root`, `--cache-root`, `--index` and uses them consistently across:
@@ -343,14 +350,6 @@ Ignore knobs (`--ignore-file`, `--use-gitignore/--no-gitignore`) must work in **
 
 Pros: no migration complexity; no test churn for existing expectations.
 Cons: two layouts to support long-term.
-
-### Option B: Always use new layout (with migration)
-
-- Treat current state as `index_id="default"`, store in `indexes/<key-of-default>/`.
-- On first run, migrate existing `.tldr/cache/*` into the default index dir (or keep reading old paths as fallback).
-
-Pros: one layout going forward.
-Cons: migration risk; requires updating multiple tests/docs in one go.
 
 ## Ignore Handling (Index-Scoped)
 

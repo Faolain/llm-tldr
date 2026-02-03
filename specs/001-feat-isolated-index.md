@@ -16,6 +16,14 @@
 Goal
   Enable “index this dependency in-place, but store all TLDR state under the repo root” with one index per module@version, without copying.
 
+  **Phases (recommended delivery slices)**
+  - Phase 1 (MVP: isolated index + semantic): items 1–4 + a minimal subset of tests to prove per-index cache separation.
+  - Phase 2 (Ignore scoping + CLI completeness): item 5 + ensure ignore config is index-scoped and no writes occur under scan_root.
+  - Phase 3 (Daemon + MCP): item 6 + one-daemon-per-index identity/routing; add the daemon isolation test.
+  - Phase 4 (Index management): item 7 (+ optional gc) + UX/docs polish.
+
+  (The numbered requirements below remain the full list; phases are a suggested sequencing for implementation/PRs.)
+
   1. Add A First-Class “Index” Concept
 
   1. Define an index as {cache_root, scan_root, index_id, language(s), model, ignore_spec}.
