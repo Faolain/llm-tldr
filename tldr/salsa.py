@@ -35,13 +35,11 @@ from typing import (
     Any,
     Callable,
     Dict,
-    Generic,
     List,
     Optional,
     Set,
     Tuple,
     TypeVar,
-    Union,
 )
 
 # Type variables for generic query handling

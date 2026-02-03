@@ -18,7 +18,7 @@ import ast
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Optional
 
 from tldr.workspace import WorkspaceConfig, load_workspace_config, filter_paths
 
@@ -3899,7 +3899,6 @@ def _build_java_call_graph(
                     # Object.method() call
                     if '.' in call_target:
                         parts = call_target.split('.')
-                        obj_name = parts[0]
                         method_name = parts[-1]
 
                         # Try to find the method in the function index
@@ -3939,7 +3938,6 @@ def _build_c_call_graph(
 
         for inc in includes:
             module = inc['module']
-            is_system = inc.get('is_system', False)
             # Map the header file name to its path
             # e.g., "utils.h" -> "utils.h"
             header_name = module.split('/')[-1] if '/' in module else module

@@ -15,8 +15,7 @@ Based on pflux/python-program-analysis architecture:
 Uses reaching definitions analysis on CFG to build def-use chains.
 """
 import ast
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import dataclass
 
 
 @dataclass
@@ -615,7 +614,7 @@ TREE_SITTER_RUST_AVAILABLE = False
 try:
     from tree_sitter import Language, Parser
     import tree_sitter_typescript
-    import tree_sitter_javascript
+    import tree_sitter_javascript  # noqa: F401
     TREE_SITTER_AVAILABLE = True
 except ImportError:
     pass
@@ -2912,143 +2911,6 @@ class LuaDefUseVisitor:
         # Visit loop body
         if body:
             self._visit_node(body)
-
-
-# =============================================================================
-# Luau DFG Extraction
-# =============================================================================
-
-
-def extract_luau_dfg(code: str, function_name: str) -> DFGInfo:
-    """
-    Extract DFG for a Luau function.
-
-    Luau is syntactically similar to Lua with type annotations,
-    continue statement, and compound assignments (+=, -=, etc.)
-
-    Args:
-        code: Luau source code
-        function_name: Name of function to analyze
-
-    Returns:
-        DFGInfo with variable references and def-use chains
-    """
-    if not TREE_SITTER_LUAU_AVAILABLE:
-        return DFGInfo(
-            function_name=function_name,
-            var_refs=[],
-            dataflow_edges=[],
-        )
-
-    # Parse with tree-sitter
-    luau_lang = Language(tree_sitter_luau.language())
-    parser = Parser(luau_lang)
-    source_bytes = code.encode('utf-8')
-    tree = parser.parse(source_bytes)
-
-    # Find the function
-    func_node = _find_luau_function_by_name(tree.root_node, function_name, source_bytes)
-    if func_node is None:
-        return DFGInfo(
-            function_name=function_name,
-            var_refs=[],
-            dataflow_edges=[],
-        )
-
-    # Extract definitions and uses - reuse LuaDefUseVisitor with Luau extensions
-    visitor = LuauDefUseVisitor(source_bytes)
-    visitor.visit(func_node)
-
-    # Compute def-use chains
-    analyzer = PythonReachingDefsAnalyzer(visitor.refs)
-    edges = analyzer.compute_def_use_chains()
-
-    return DFGInfo(
-        function_name=function_name,
-        var_refs=visitor.refs,
-        dataflow_edges=edges,
-    )
-
-
-def _find_luau_function_by_name(root, name: str, source: bytes):
-    """Find a Luau function node by name in tree-sitter tree.
-
-    Handles both:
-    - function name() ... end (function_declaration)
-    - local function name() ... end (function_declaration with local)
-    """
-    def search(node):
-        # Check function_declaration: function name() end or local function name() end
-        if node.type == "function_declaration":
-            # Find the identifier child (the function name)
-            for child in node.children:
-                if child.type == "identifier":
-                    func_name = source[child.start_byte:child.end_byte].decode('utf-8')
-                    if func_name == name:
-                        return node
-                    break
-                elif child.type in ("dot_index_expression", "method_index_expression"):
-                    # Table.method - get the last identifier
-                    for subchild in child.children:
-                        if subchild.type == "identifier":
-                            last_id = source[subchild.start_byte:subchild.end_byte].decode('utf-8')
-                    if last_id == name:
-                        return node
-                    break
-
-        for child in node.children:
-            result = search(child)
-            if result:
-                return result
-        return None
-
-    return search(root)
-
-
-class LuauDefUseVisitor(LuaDefUseVisitor):
-    """
-    Extract variable definitions and uses from Luau tree-sitter parse tree.
-
-    Extends LuaDefUseVisitor to handle Luau-specific features:
-    - Type annotations (ignored for DFG purposes)
-    - Compound assignment operators (+=, -=, etc.) - both USE and DEF
-    - Continue statement (control flow, not DFG relevant)
-    """
-
-    def _handle_assignment(self, node):
-        """Handle assignment statement, including compound assignment."""
-        # Check for compound assignment: x += 1 (node type is compound_assignment_statement in Luau)
-        if node.type == "compound_assignment_statement":
-            # Find the target (left side) - this is both USE and DEF
-            for child in node.children:
-                if child.type == "identifier":
-                    name = self.get_node_text(child)
-                    self._add_ref(name, "use", child)  # First use the current value
-                    self._add_ref(name, "definition", child)  # Then define new value
-                    break
-                elif child.type in ("dot_index_expression", "bracket_index_expression"):
-                    # Table field compound assignment
-                    self._visit_table_access(child)
-                    break
-
-            # Visit the right side (expression)
-            for child in node.children:
-                if child.type not in ("identifier", "+=", "-=", "*=", "/=", "%=", "..=", "^="):
-                    if child.type != "dot_index_expression" and child.type != "bracket_index_expression":
-                        self._visit_node(child)
-            return
-
-        # Standard assignment - delegate to parent
-        super()._handle_assignment(node)
-
-    def _visit_node(self, node):
-        """Visit a node and extract variable references."""
-        if node.type == "compound_assignment_statement":
-            self._handle_assignment(node)
-            return
-
-        # Call parent implementation for standard nodes
-        super()._visit_node(node)
 
 
 # =============================================================================

@@ -12,8 +12,7 @@ Key components:
 import hashlib
 import json
 import logging
-import pickle
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
@@ -26,7 +25,7 @@ TREE_SITTER_GO_AVAILABLE = False
 TREE_SITTER_RUST_AVAILABLE = False
 
 try:
-    from tree_sitter import Language, Parser, Tree
+    from tree_sitter import Language, Parser
     import tree_sitter_typescript
     import tree_sitter_javascript
     TREE_SITTER_AVAILABLE = True

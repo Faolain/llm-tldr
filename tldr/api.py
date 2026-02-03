@@ -17,7 +17,6 @@ Usage:
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
 from .ast_extractor import (
     CallGraphInfo,  # Re-exported for API consumers
@@ -153,11 +152,11 @@ from .dfg_extractor import (
     extract_swift_dfg,
     extract_typescript_dfg,
 )
-from .hybrid_extractor import (
+from .hybrid_extractor import (  # noqa: F401
     HybridExtractor,
     extract_directory,  # Re-exported for API
 )
-from .pdg_extractor import (
+from .pdg_extractor import (  # noqa: F401
     PDGInfo,
     extract_c_pdg,
     extract_cpp_pdg,
@@ -550,15 +549,6 @@ def get_relevant_context(
     # Module query mode: path with / and no . (e.g., "providers/anthropic")
     if "/" in entry_point and "." not in entry_point:
         return _get_module_exports(project, entry_point, language, include_docstrings)
-
-    # Check if entry_point is a module name (no / or .)
-    # e.g., "unified_gate" -> check for unified_gate.py
-    ext_for_lang = {
-        "python": ".py",
-        "typescript": ".ts",
-        "go": ".go",
-        "rust": ".rs"
-    }.get(language, ".py")
 
     # NOTE: Removed module-file shortcut that conflicted with function lookup.
     # If entry_point="main" matched "main.ts", it would return module exports
@@ -1638,7 +1628,6 @@ def get_code_structure(
             # Collect class methods
             methods = []
             for cls in info_dict.get("classes", []):
-                cls_name = cls.get("name", "")
                 for method in cls.get("methods", []):
                     method_name = method.get("name", "")
                     if method_name:

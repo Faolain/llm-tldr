@@ -19,7 +19,7 @@ import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional, Tuple, Dict, Any
+from typing import List, Optional, Dict, Any
 
 logger = logging.getLogger("tldr.semantic")
 
@@ -185,7 +185,7 @@ def _confirm_download(model_key: str) -> bool:
 
     print(f"\n⚠️  Semantic search requires embedding model: {hf_name}", file=sys.stderr)
     print(f"   Download size: {size}", file=sys.stderr)
-    print(f"   (Set TLDR_AUTO_DOWNLOAD=1 to skip this prompt)\n", file=sys.stderr)
+    print("   (Set TLDR_AUTO_DOWNLOAD=1 to skip this prompt)\n", file=sys.stderr)
 
     try:
         response = input("Continue with download? [Y/n] ").strip().lower()
@@ -251,7 +251,7 @@ def get_model(model_name: Optional[str] = None, device: Optional[str] = None):
     if not _model_exists_locally(hf_name):
         model_key = model_name if model_name in SUPPORTED_MODELS else None
         if model_key and not _confirm_download(model_key):
-            raise ValueError(f"Model download declined. Use --model to choose a smaller model.")
+            raise ValueError("Model download declined. Use --model to choose a smaller model.")
 
     logger.info("Loading model %s on device: %s", hf_name, device)
     from sentence_transformers import SentenceTransformer
@@ -362,7 +362,7 @@ def extract_units_from_project(
     Returns:
         List of EmbeddingUnit objects with enriched metadata.
     """
-    from tldr.api import get_code_structure, build_project_call_graph, get_imports
+    from tldr.api import get_code_structure, build_project_call_graph
     from tldr.tldrignore import IgnoreSpec
 
     project = Path(project_path).resolve()
@@ -1197,8 +1197,6 @@ def build_semantic_index(
     if not units:
         return 0
 
-    import numpy as np
-
     BATCH_SIZE = 64
     num_units = len(units)
     texts = [build_embedding_text(unit) for unit in units]
@@ -1303,8 +1301,6 @@ def semantic_search(
     Returns:
         List of result dictionaries with name, file, line, score, etc.
     """
-    import numpy as np
-
     # Handle empty query
     if not query or not query.strip():
         return []

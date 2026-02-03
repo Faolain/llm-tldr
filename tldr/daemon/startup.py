@@ -14,7 +14,7 @@ import sys
 import time
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional, IO
+from typing import Optional, IO
 
 from tldr.indexing import IndexContext, get_index_context
 
@@ -33,9 +33,6 @@ if sys.platform == "win32":
     import msvcrt
 else:
     import fcntl
-
-if TYPE_CHECKING:
-    from .core import TLDRDaemon
 
 logger = logging.getLogger(__name__)
 
@@ -226,6 +223,11 @@ def _is_daemon_alive(identity: DaemonIdentity, retries: int = 3, delay: float = 
             time.sleep(delay)
 
     return False
+
+
+def is_daemon_alive(identity: DaemonIdentity) -> bool:
+    """Public wrapper for daemon liveness checks."""
+    return _is_daemon_alive(identity)
 
 
 def _create_client_socket(identity: DaemonIdentity) -> socket.socket:
@@ -478,7 +480,7 @@ def stop_daemon(
     try:
         client = _create_client_socket(identity)
         client.sendall(json.dumps({"cmd": "shutdown"}).encode() + b"\n")
-        response = client.recv(4096)
+        client.recv(4096)
         client.close()
         return True
     except (ConnectionRefusedError, FileNotFoundError, OSError):

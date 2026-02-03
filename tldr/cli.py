@@ -22,10 +22,10 @@ from pathlib import Path
 # silent DLL loading failures when running as a console script entry point.
 if os.name == 'nt':
     try:
-        import tree_sitter
-        import tree_sitter_python
-        import tree_sitter_javascript
-        import tree_sitter_typescript
+        import tree_sitter  # noqa: F401
+        import tree_sitter_python  # noqa: F401
+        import tree_sitter_javascript  # noqa: F401
+        import tree_sitter_typescript  # noqa: F401
     except ImportError:
         pass
 
@@ -94,7 +94,7 @@ def _show_first_run_tip():
 
     # Check if Swift is already installed
     try:
-        import tree_sitter_swift
+        import tree_sitter_swift  # noqa: F401
         # Swift already works, no tip needed
         marker.touch()
         return
@@ -531,6 +531,54 @@ Device Selection:
     )
     daemon_notify_p.add_argument("file", help="Path to changed file")
     daemon_notify_p.add_argument("--project", "-p", default=".", help="Project path (default: current directory)")
+
+    # tldr index list/info/rm/gc
+    index_mgmt_p = subparsers.add_parser(
+        "index", help="Index management commands", parents=[index_parent]
+    )
+    index_sub = index_mgmt_p.add_subparsers(dest="index_action", required=True)
+
+    index_sub.add_parser(
+        "list", help="List indexes", parents=[index_parent]
+    )
+
+    index_info_p = index_sub.add_parser(
+        "info", help="Show index details", parents=[index_parent]
+    )
+    index_info_p.add_argument(
+        "index_ref", help="Index id (or key) to inspect"
+    )
+
+    index_rm_p = index_sub.add_parser(
+        "rm", help="Remove an index", parents=[index_parent]
+    )
+    index_rm_p.add_argument(
+        "index_ref", help="Index id (or key) to remove"
+    )
+    index_rm_p.add_argument(
+        "--force",
+        action="store_true",
+        help="Remove even if daemon appears running or metadata is invalid",
+    )
+
+    index_gc_p = index_sub.add_parser(
+        "gc", help="Garbage collect indexes", parents=[index_parent]
+    )
+    index_gc_p.add_argument(
+        "--days",
+        type=int,
+        help="Remove indexes not used in N days",
+    )
+    index_gc_p.add_argument(
+        "--max-total-mb",
+        type=float,
+        help="Remove oldest indexes until total size is under N MB",
+    )
+    index_gc_p.add_argument(
+        "--force",
+        action="store_true",
+        help="Remove even if daemon appears running or metadata is invalid",
+    )
 
     # tldr doctor [--install LANG]
     doctor_p = subparsers.add_parser(
@@ -1468,6 +1516,39 @@ def main():
                 )
                 print(json.dumps(results, indent=2))
 
+        elif args.command == "index":
+            from .indexing.management import (
+                gc_indexes,
+                get_index_info,
+                list_indexes,
+                remove_index,
+            )
+
+            if not args.cache_root:
+                print("Error: --cache-root is required for index commands", file=sys.stderr)
+                sys.exit(1)
+
+            cache_root = Path(args.cache_root).resolve()
+
+            if args.index_action == "list":
+                result = list_indexes(cache_root)
+            elif args.index_action == "info":
+                result = get_index_info(cache_root, args.index_ref)
+            elif args.index_action == "rm":
+                result = remove_index(cache_root, args.index_ref, force=args.force)
+            elif args.index_action == "gc":
+                result = gc_indexes(
+                    cache_root,
+                    days=args.days,
+                    max_total_mb=args.max_total_mb,
+                    force=args.force,
+                )
+            else:
+                print(f"Error: Unknown index action {args.index_action}", file=sys.stderr)
+                sys.exit(1)
+
+            print(json.dumps(result, indent=2))
+
         elif args.command == "doctor":
             import shutil
             import subprocess
@@ -1606,7 +1687,6 @@ def main():
 
                     missing_count = 0
                     for lang, checks in sorted(results.items()):
-                        has_issues = False
                         lines = []
 
                         tc = checks["type_checker"]
@@ -1616,7 +1696,6 @@ def main():
                             else:
                                 lines.append(f"  ✗ {tc['name']} - not found")
                                 lines.append(f"    → {tc['install']}")
-                                has_issues = True
                                 missing_count += 1
 
                         linter = checks["linter"]
@@ -1626,7 +1705,6 @@ def main():
                             else:
                                 lines.append(f"  ✗ {linter['name']} - not found")
                                 lines.append(f"    → {linter['install']}")
-                                has_issues = True
                                 missing_count += 1
 
                         if lines:

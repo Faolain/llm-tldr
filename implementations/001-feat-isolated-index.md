@@ -20,11 +20,19 @@ Add a first-class **Index** concept so TLDR can:
 - [x] Update MCP server to accept index flags, enforce fixed index routing, and pass flags to daemon auto-start.
 - [x] Add daemon identity isolation tests.
 - [x] Run targeted tests: `pytest tests/test_daemon_identity.py`
+- [x] Add index management helpers for list/info/rm/gc, including daemon-running safety checks and port file cleanup.
+- [x] Wire `tldr index` CLI subcommands with cache-root validation and JSON output.
+- [x] Add index management tests (list/info/rm/gc + daemon-running guard).
+- [x] Run full test suite: `uv run pytest`.
+- [x] Run lint: `uv run ruff check tldr/`.
 
 ## Gotchas / Learnings (rolling)
 
 - MCP tool defaults pass `project="."`; when MCP is started with a fixed index, treat `"."` as “unset” to avoid false mismatches.
 - Windows daemon port collisions are now mitigated by persisting the selected port in a temp file keyed by the daemon identity.
+- Index GC uses `meta.last_used_at` when present; otherwise it falls back to `meta.json`/index dir mtime for age decisions.
+- Exposed a small `is_daemon_alive()` wrapper to reuse daemon liveness checks in index management without duplicating lock logic.
+- Ruff surfaced a set of pre-existing unused imports/vars; cleaned these as part of Phase 4 to get `ruff check` green.
 
 ## Phases (suggested delivery)
 
