@@ -131,6 +131,27 @@ class EmbeddingUnit:
 MODEL_NAME = "BAAI/bge-large-en-v1.5"  # Legacy, use SUPPORTED_MODELS
 
 
+def _canonical_model_id(model_name: Optional[str]) -> Optional[str]:
+    if model_name is None:
+        return None
+    if model_name in SUPPORTED_MODELS:
+        return SUPPORTED_MODELS[model_name]["hf_name"]
+    for info in SUPPORTED_MODELS.values():
+        if model_name == info["hf_name"]:
+            return info["hf_name"]
+    return model_name
+
+
+def _model_dimension(model_name: Optional[str]) -> Optional[int]:
+    canonical = _canonical_model_id(model_name)
+    if canonical is None:
+        return None
+    for info in SUPPORTED_MODELS.values():
+        if info["hf_name"] == canonical:
+            return info["dimension"]
+    return None
+
+
 def _model_exists_locally(hf_name: str) -> bool:
     """Check if a model is already downloaded locally."""
     try:
@@ -283,7 +304,13 @@ def compute_embedding(text: str, model_name: Optional[str] = None):
     return np.array(embedding, dtype=np.float32)
 
 
-def extract_units_from_project(project_path: str, lang: str = "python", respect_ignore: bool = True, progress_callback=None) -> List[EmbeddingUnit]:
+def extract_units_from_project(
+    project_path: str,
+    lang: str = "python",
+    respect_ignore: bool = True,
+    progress_callback=None,
+    workspace_root: Path | None = None,
+) -> List[EmbeddingUnit]:
     """Extract all functions/methods/classes from a project.
 
     Uses existing TLDR APIs:
@@ -322,7 +349,12 @@ def extract_units_from_project(project_path: str, lang: str = "python", respect_
 
     # Build call graph (L2)
     try:
-        call_graph = build_project_call_graph(str(project), language=lang)
+        if workspace_root is not None:
+            call_graph = build_project_call_graph(
+                str(project), language=lang, workspace_root=workspace_root
+            )
+        else:
+            call_graph = build_project_call_graph(str(project), language=lang)
 
         # Build call/called_by maps
         calls_map = {}  # func -> [called functions]
@@ -936,6 +968,9 @@ def build_semantic_index(
     model: Optional[str] = None,
     show_progress: bool = True,
     respect_ignore: bool = True,
+    index_paths=None,
+    index_config=None,
+    rebuild: bool = False,
 ) -> int:
     """Build and save FAISS index + metadata for a project.
 
@@ -961,25 +996,49 @@ def build_semantic_index(
 
     # Resolve paths: scan_path is where to look for code, project_root is where to store cache
     scan_path = Path(project_path).resolve()
-    project_root = _find_project_root(scan_path)
+    if index_paths is None:
+        project_root = _find_project_root(scan_path)
+    else:
+        project_root = scan_path
 
-    # Ensure .tldrignore exists at project root (create with defaults if not)
-    created, message = ensure_tldrignore(project_root)
-    if created and console:
-        console.print(f"[yellow]{message}[/yellow]")
+    if index_paths is None:
+        # Ensure .tldrignore exists at project root (create with defaults if not)
+        created, message = ensure_tldrignore(project_root)
+        if created and console:
+            console.print(f"[yellow]{message}[/yellow]")
 
     # Resolve model name early to get HF name for metadata
     model_key = model if model else DEFAULT_MODEL
-    if model_key in SUPPORTED_MODELS:
-        hf_name = SUPPORTED_MODELS[model_key]["hf_name"]
-    else:
-        hf_name = model_key
+    hf_name = _canonical_model_id(model_key) or model_key
 
-    # Always store cache at project root, not scan path
+    # Always store cache at project root, not scan path (legacy)
     cache_dir = project_root / ".tldr" / "cache" / "semantic"
+    if index_paths is not None:
+        cache_dir = index_paths.semantic_dir
     cache_dir.mkdir(parents=True, exist_ok=True)
 
+    # If an index already exists, enforce model compatibility unless rebuild is requested
+    metadata_file = cache_dir / "metadata.json"
+    if metadata_file.exists() and not rebuild:
+        try:
+            existing = json.loads(metadata_file.read_text())
+            existing_model = _canonical_model_id(existing.get("model"))
+            if existing_model and existing_model != _canonical_model_id(hf_name):
+                raise ValueError(
+                    "Semantic index model mismatch. Use --rebuild to overwrite."
+                )
+        except (json.JSONDecodeError, OSError):
+            pass
+
     # Extract all units (respecting .tldrignore) - scan from scan_path, not project_root
+    workspace_root = None
+    if index_config is not None:
+        try:
+            scan_path.resolve().relative_to(index_config.cache_root.resolve())
+            workspace_root = index_config.cache_root
+        except ValueError:
+            workspace_root = None
+
     if console:
         with console.status("[bold green]Extracting code units...") as status:
             def update_progress(file_path, units_count, total_files):
@@ -998,9 +1057,23 @@ def build_semantic_index(
                 units = []
                 for lang_name in target_languages:
                     status.update(f"[bold green]Extracting {lang_name} code units...")
-                    units.extend(extract_units_from_project(str(scan_path), lang=lang_name, respect_ignore=respect_ignore, progress_callback=update_progress))
+                    units.extend(
+                        extract_units_from_project(
+                            str(scan_path),
+                            lang=lang_name,
+                            respect_ignore=respect_ignore,
+                            progress_callback=update_progress,
+                            workspace_root=workspace_root,
+                        )
+                    )
             else:
-                units = extract_units_from_project(str(scan_path), lang=lang, respect_ignore=respect_ignore, progress_callback=update_progress)
+                units = extract_units_from_project(
+                    str(scan_path),
+                    lang=lang,
+                    respect_ignore=respect_ignore,
+                    progress_callback=update_progress,
+                    workspace_root=workspace_root,
+                )
             status.update(f"[bold green]Extracted {len(units)} code units")
     else:
         if lang == "all":
@@ -1009,9 +1082,21 @@ def build_semantic_index(
                 return 0
             units = []
             for lang_name in target_languages:
-                units.extend(extract_units_from_project(str(scan_path), lang=lang_name, respect_ignore=respect_ignore))
+                units.extend(
+                    extract_units_from_project(
+                        str(scan_path),
+                        lang=lang_name,
+                        respect_ignore=respect_ignore,
+                        workspace_root=workspace_root,
+                    )
+                )
         else:
-            units = extract_units_from_project(str(scan_path), lang=lang, respect_ignore=respect_ignore)
+            units = extract_units_from_project(
+                str(scan_path),
+                lang=lang,
+                respect_ignore=respect_ignore,
+                workspace_root=workspace_root,
+            )
 
     if not units:
         return 0
@@ -1075,12 +1160,22 @@ def build_semantic_index(
     # Save metadata with actual model used
     metadata = {
         "units": [u.to_dict() for u in units],
-        "model": hf_name,
+        "model": _canonical_model_id(hf_name),
         "dimension": dimension,
         "count": len(units),
     }
     metadata_file = cache_dir / "metadata.json"
     metadata_file.write_text(json.dumps(metadata, indent=2))
+
+    if index_paths is not None and index_config is not None:
+        from tldr.indexing import update_meta_semantic
+        update_meta_semantic(
+            index_paths,
+            index_config,
+            model=_canonical_model_id(hf_name) or hf_name,
+            dim=dimension,
+            lang=None if lang == "all" else lang,
+        )
 
     if console:
         console.print(f"[bold green]✓[/] Indexed {len(units)} code units")
@@ -1094,6 +1189,8 @@ def semantic_search(
     k: int = 5,
     expand_graph: bool = False,
     model: Optional[str] = None,
+    index_paths=None,
+    index_config=None,
 ) -> List[dict]:
     """Search for code units semantically.
 
@@ -1117,8 +1214,13 @@ def semantic_search(
 
     # Find project root for cache location (matches build_semantic_index behavior)
     scan_path = Path(project_path).resolve()
-    project_root = _find_project_root(scan_path)
+    if index_paths is None:
+        project_root = _find_project_root(scan_path)
+    else:
+        project_root = scan_path
     cache_dir = project_root / ".tldr" / "cache" / "semantic"
+    if index_paths is not None:
+        cache_dir = index_paths.semantic_dir
 
     index_file = cache_dir / "index.faiss"
     metadata_file = cache_dir / "metadata.json"
@@ -1136,9 +1238,23 @@ def semantic_search(
     units = metadata["units"]
 
     # Use model from metadata if not specified (ensures matching embeddings)
-    index_model = metadata.get("model")
+    index_model = _canonical_model_id(metadata.get("model"))
     if model is None and index_model:
         model = index_model
+    elif model is not None:
+        requested = _canonical_model_id(model)
+        if index_model and requested and requested != index_model:
+            raise ValueError(
+                "Semantic search model mismatch with index. Use the index model or rebuild."
+            )
+
+    # Validate dimension compatibility
+    meta_dim = metadata.get("dimension")
+    if meta_dim and index.d != meta_dim:
+        raise ValueError("Semantic index dimension mismatch; rebuild required.")
+    expected_dim = _model_dimension(model)
+    if expected_dim and meta_dim and expected_dim != meta_dim:
+        raise ValueError("Semantic model dimension mismatch; rebuild required.")
 
     # Embed query (with instruction prefix for BGE)
     query_text = f"Represent this code search query: {query}"

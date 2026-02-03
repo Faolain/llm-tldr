@@ -154,6 +154,7 @@ def find_affected_tests(
     changed_files: list[str],
     language: str = "python",
     max_depth: int = 5,
+    workspace_root: str | None = None,
 ) -> dict:
     """
     Find test files affected by changes to the given files.
@@ -204,6 +205,7 @@ def find_affected_tests(
                 func_name,
                 max_depth=max_depth,
                 language=language,
+                workspace_root=workspace_root,
             )
 
             # Walk the caller tree and collect test files
@@ -312,6 +314,7 @@ def analyze_change_impact(
     git_base: str = "HEAD~1",
     language: str = "python",
     max_depth: int = 5,
+    workspace_root: str | None = None,
 ) -> dict:
     """
     Main entry point for change impact analysis.
@@ -386,6 +389,7 @@ def analyze_change_impact(
         source_files + test_files,
         language=language,
         max_depth=max_depth,
+        workspace_root=workspace_root,
     )
     result["source"] = source
 

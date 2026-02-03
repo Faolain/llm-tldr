@@ -29,8 +29,13 @@ from typing import List, Union
 DIRTY_FILE = ".tldr/cache/dirty.json"
 
 
-def _get_dirty_path(project_path: Union[str, Path]) -> Path:
+def _get_dirty_path(
+    project_path: Union[str, Path],
+    dirty_path: Union[str, Path, None] = None,
+) -> Path:
     """Get the full path to the dirty flag file."""
+    if dirty_path is not None:
+        return Path(dirty_path)
     return Path(project_path) / DIRTY_FILE
 
 
@@ -47,7 +52,11 @@ def _get_timestamp() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def mark_dirty(project_path: Union[str, Path], edited_file: str) -> None:
+def mark_dirty(
+    project_path: Union[str, Path],
+    edited_file: str,
+    dirty_path: Union[str, Path, None] = None,
+) -> None:
     """Mark a file as dirty (needing cache rebuild).
 
     Creates or updates the dirty flag file with the edited file path.
@@ -57,7 +66,7 @@ def mark_dirty(project_path: Union[str, Path], edited_file: str) -> None:
         project_path: Root directory of the project
         edited_file: Relative path to the edited file
     """
-    dirty_path = _get_dirty_path(project_path)
+    dirty_path = _get_dirty_path(project_path, dirty_path)
     normalized_file = _normalize_file_path(edited_file)
     now = _get_timestamp()
 
@@ -91,7 +100,10 @@ def mark_dirty(project_path: Union[str, Path], edited_file: str) -> None:
     dirty_path.write_text(json.dumps(data, indent=2))
 
 
-def is_dirty(project_path: Union[str, Path]) -> bool:
+def is_dirty(
+    project_path: Union[str, Path],
+    dirty_path: Union[str, Path, None] = None,
+) -> bool:
     """Check if the project has dirty files needing rebuild.
 
     Args:
@@ -100,11 +112,14 @@ def is_dirty(project_path: Union[str, Path]) -> bool:
     Returns:
         True if dirty flag file exists, False otherwise
     """
-    dirty_path = _get_dirty_path(project_path)
+    dirty_path = _get_dirty_path(project_path, dirty_path)
     return dirty_path.exists()
 
 
-def get_dirty_files(project_path: Union[str, Path]) -> List[str]:
+def get_dirty_files(
+    project_path: Union[str, Path],
+    dirty_path: Union[str, Path, None] = None,
+) -> List[str]:
     """Get the list of dirty files.
 
     Args:
@@ -114,7 +129,7 @@ def get_dirty_files(project_path: Union[str, Path]) -> List[str]:
         List of file paths that were edited since last rebuild.
         Empty list if no dirty flag exists.
     """
-    dirty_path = _get_dirty_path(project_path)
+    dirty_path = _get_dirty_path(project_path, dirty_path)
 
     if not dirty_path.exists():
         return []
@@ -126,7 +141,10 @@ def get_dirty_files(project_path: Union[str, Path]) -> List[str]:
         return []
 
 
-def get_dirty_count(project_path: Union[str, Path]) -> int:
+def get_dirty_count(
+    project_path: Union[str, Path],
+    dirty_path: Union[str, Path, None] = None,
+) -> int:
     """Get the count of dirty files.
 
     Useful for threshold-based decisions (e.g., full rebuild vs incremental).
@@ -137,10 +155,13 @@ def get_dirty_count(project_path: Union[str, Path]) -> int:
     Returns:
         Number of dirty files, or 0 if no dirty flag exists.
     """
-    return len(get_dirty_files(project_path))
+    return len(get_dirty_files(project_path, dirty_path))
 
 
-def clear_dirty(project_path: Union[str, Path]) -> None:
+def clear_dirty(
+    project_path: Union[str, Path],
+    dirty_path: Union[str, Path, None] = None,
+) -> None:
     """Clear the dirty flag (after rebuild).
 
     Removes the dirty flag file. Safe to call even if file doesn't exist.
@@ -148,7 +169,7 @@ def clear_dirty(project_path: Union[str, Path]) -> None:
     Args:
         project_path: Root directory of the project
     """
-    dirty_path = _get_dirty_path(project_path)
+    dirty_path = _get_dirty_path(project_path, dirty_path)
 
     try:
         dirty_path.unlink(missing_ok=True)

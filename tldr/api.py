@@ -527,7 +527,8 @@ def get_relevant_context(
     entry_point: str,
     depth: int = 2,
     language: str = "python",
-    include_docstrings: bool = True
+    include_docstrings: bool = True,
+    workspace_root: str | None = None,
 ) -> RelevantContext:
     """
     Get token-efficient context for an LLM starting from an entry point.
@@ -563,7 +564,9 @@ def get_relevant_context(
     # (e.g., "main/" or with extension) for module exports.
 
     # Build cross-file call graph
-    call_graph = build_project_call_graph(str(project), language=language)
+    call_graph = build_project_call_graph(
+        str(project), language=language, workspace_root=workspace_root
+    )
 
     # Index all signatures
     extractor = HybridExtractor()
