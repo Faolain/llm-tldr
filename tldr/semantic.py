@@ -25,9 +25,15 @@ logger = logging.getLogger("tldr.semantic")
 
 ALL_LANGUAGES = ["python", "typescript", "javascript", "go", "rust", "java", "c", "cpp", "ruby", "php", "kotlin", "swift", "csharp", "scala", "lua", "luau", "elixir"]
 
+# Avoid OpenMP runtime conflicts between torch and faiss on macOS.
+if sys.platform == "darwin":
+    os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+    os.environ.setdefault("OMP_NUM_THREADS", "1")
+
 # Lazy imports for heavy dependencies
 _model = None
 _model_name = None  # Track which model is loaded
+_model_device = None  # Track device used for cached model
 
 # Supported models with approximate download sizes
 SUPPORTED_MODELS = {
@@ -188,7 +194,27 @@ def _confirm_download(model_key: str) -> bool:
         return False
 
 
-def get_model(model_name: Optional[str] = None):
+def _get_device() -> str:
+    """Determine inference device, defaulting to CPU on macOS for stability."""
+    env_device = os.environ.get("TLDR_DEVICE")
+    if env_device:
+        return env_device
+
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return "cuda"
+    except Exception:
+        pass
+
+    # If MPS fallback enabled, prefer CPU for stability on macOS
+    if sys.platform == "darwin" and os.environ.get("PYTORCH_ENABLE_MPS_FALLBACK") == "1":
+        return "cpu"
+
+    return "cpu"
+
+
+def get_model(model_name: Optional[str] = None, device: Optional[str] = None):
     """Lazy-load the embedding model (cached).
 
     Args:
@@ -201,7 +227,7 @@ def get_model(model_name: Optional[str] = None):
     Raises:
         ValueError: If model not found or user declines download.
     """
-    global _model, _model_name
+    global _model, _model_name, _model_device
 
     # Resolve model name
     if model_name is None:
@@ -214,8 +240,11 @@ def get_model(model_name: Optional[str] = None):
         # Allow arbitrary HuggingFace model names
         hf_name = model_name
 
+    if device is None:
+        device = _get_device()
+
     # Return cached model if same
-    if _model is not None and _model_name == hf_name:
+    if _model is not None and _model_name == hf_name and _model_device == device:
         return _model
 
     # Check if model needs downloading
@@ -224,9 +253,14 @@ def get_model(model_name: Optional[str] = None):
         if model_key and not _confirm_download(model_key):
             raise ValueError(f"Model download declined. Use --model to choose a smaller model.")
 
+    logger.info("Loading model %s on device: %s", hf_name, device)
     from sentence_transformers import SentenceTransformer
-    _model = SentenceTransformer(hf_name)
+    if device:
+        _model = SentenceTransformer(hf_name, device=device)
+    else:
+        _model = SentenceTransformer(hf_name)
     _model_name = hf_name
+    _model_device = device
     return _model
 
 
@@ -283,7 +317,7 @@ def build_embedding_text(unit: EmbeddingUnit) -> str:
     return "\n".join(parts)
 
 
-def compute_embedding(text: str, model_name: Optional[str] = None):
+def compute_embedding(text: str, model_name: Optional[str] = None, device: Optional[str] = None):
     """Compute embedding vector for text.
 
     Args:
@@ -295,7 +329,7 @@ def compute_embedding(text: str, model_name: Optional[str] = None):
     """
     import numpy as np
 
-    model = get_model(model_name)
+    model = get_model(model_name, device=device)
 
     # BGE models work best with instruction prefix for queries
     # For document embedding, we use text directly
@@ -308,6 +342,7 @@ def extract_units_from_project(
     project_path: str,
     lang: str = "python",
     respect_ignore: bool = True,
+    ignore_spec=None,
     progress_callback=None,
     workspace_root: Path | None = None,
 ) -> List[EmbeddingUnit]:
@@ -328,33 +363,37 @@ def extract_units_from_project(
         List of EmbeddingUnit objects with enriched metadata.
     """
     from tldr.api import get_code_structure, build_project_call_graph, get_imports
-    from tldr.tldrignore import load_ignore_patterns, should_ignore
+    from tldr.tldrignore import IgnoreSpec
 
     project = Path(project_path).resolve()
     units = []
 
-    # Load ignore spec before getting structure
-    ignore_spec = load_ignore_patterns(project) if respect_ignore else None
+    if respect_ignore and ignore_spec is None:
+        ignore_spec = IgnoreSpec(project)
 
     # Get code structure (L1) - use high limit for semantic index
-    structure = get_code_structure(str(project), language=lang, max_results=100000, ignore_spec=ignore_spec)
-
-    # Filter ignored files
-    if respect_ignore:
-        spec = load_ignore_patterns(project)
-        structure["files"] = [
-            f for f in structure.get("files", [])
-            if not should_ignore(project / f.get("path", ""), project, spec)
-        ]
+    structure = get_code_structure(
+        str(project),
+        language=lang,
+        max_results=100000,
+        ignore_spec=ignore_spec,
+    )
 
     # Build call graph (L2)
     try:
         if workspace_root is not None:
             call_graph = build_project_call_graph(
-                str(project), language=lang, workspace_root=workspace_root
+                str(project),
+                language=lang,
+                ignore_spec=ignore_spec,
+                workspace_root=workspace_root,
             )
         else:
-            call_graph = build_project_call_graph(str(project), language=lang)
+            call_graph = build_project_call_graph(
+                str(project),
+                language=lang,
+                ignore_spec=ignore_spec,
+            )
 
         # Build call/called_by maps
         calls_map = {}  # func -> [called functions]
@@ -905,9 +944,13 @@ def _get_progress_console():
         return None
 
 
-def _detect_project_languages(project_path: Path, respect_ignore: bool = True) -> List[str]:
+def _detect_project_languages(
+    project_path: Path,
+    respect_ignore: bool = True,
+    ignore_spec=None,
+) -> List[str]:
     """Scan project files to detect present languages."""
-    from tldr.tldrignore import load_ignore_patterns, should_ignore
+    from tldr.tldrignore import IgnoreSpec
 
     # Extension map (copied from cli.py to avoid circular import)
     EXTENSION_TO_LANGUAGE = {
@@ -941,7 +984,9 @@ def _detect_project_languages(project_path: Path, respect_ignore: bool = True) -
     }
 
     found_languages = set()
-    spec = load_ignore_patterns(project_path) if respect_ignore else None
+    spec = ignore_spec
+    if respect_ignore and spec is None:
+        spec = IgnoreSpec(project_path)
 
     for root, dirs, files in os.walk(project_path):
         # Prune common heavy dirs immediately for speed
@@ -951,8 +996,13 @@ def _detect_project_languages(project_path: Path, respect_ignore: bool = True) -
              file_path = Path(root) / file
 
              # Check ignore patterns
-             if respect_ignore and should_ignore(file_path, project_path, spec):
-                 continue
+             if respect_ignore and spec:
+                 try:
+                     rel_path = file_path.relative_to(project_path)
+                 except ValueError:
+                     rel_path = file_path
+                 if spec.match_file(str(rel_path)):
+                     continue
 
              ext = file_path.suffix.lower()
              if ext in EXTENSION_TO_LANGUAGE:
@@ -966,8 +1016,10 @@ def build_semantic_index(
     project_path: str,
     lang: str = "python",
     model: Optional[str] = None,
+    device: Optional[str] = None,
     show_progress: bool = True,
     respect_ignore: bool = True,
+    ignore_spec=None,
     index_paths=None,
     index_config=None,
     rebuild: bool = False,
@@ -988,9 +1040,8 @@ def build_semantic_index(
     Returns:
         Number of indexed units.
     """
-    import faiss
     import numpy as np
-    from tldr.tldrignore import ensure_tldrignore
+    from tldr.tldrignore import ensure_tldrignore, IgnoreSpec
 
     console = _get_progress_console() if show_progress else None
 
@@ -999,6 +1050,8 @@ def build_semantic_index(
     if index_paths is None:
         project_root = _find_project_root(scan_path)
     else:
+        if index_config is None:
+            raise ValueError("index_config is required when index_paths is provided")
         project_root = scan_path
 
     if index_paths is None:
@@ -1006,6 +1059,21 @@ def build_semantic_index(
         created, message = ensure_tldrignore(project_root)
         if created and console:
             console.print(f"[yellow]{message}[/yellow]")
+    else:
+        # Ensure index-scoped ignore file exists (only within cache_root)
+        ignore_path = index_paths.ignore_file
+        if not ignore_path.exists():
+            try:
+                ignore_path.resolve().relative_to(index_config.cache_root.resolve())
+                created, message = ensure_tldrignore(
+                    index_paths.index_dir, ignore_file=ignore_path
+                )
+                if created and console:
+                    console.print(f"[yellow]{message}[/yellow]")
+            except ValueError:
+                raise ValueError(
+                    f"Ignore file does not exist: {ignore_path}. Create it manually or choose a path under cache-root."
+                )
 
     # Resolve model name early to get HF name for metadata
     model_key = model if model else DEFAULT_MODEL
@@ -1039,6 +1107,22 @@ def build_semantic_index(
         except ValueError:
             workspace_root = None
 
+    if respect_ignore and ignore_spec is None:
+        if index_config is not None:
+            ignore_spec = IgnoreSpec(
+                scan_path,
+                use_gitignore=index_config.use_gitignore,
+                cli_patterns=list(index_config.cli_patterns or ()),
+                ignore_file=index_config.ignore_file,
+                gitignore_root=index_config.gitignore_root,
+            )
+        else:
+            ignore_spec = IgnoreSpec(
+                scan_path,
+                use_gitignore=True,
+                cli_patterns=None,
+            )
+
     if console:
         with console.status("[bold green]Extracting code units...") as status:
             def update_progress(file_path, units_count, total_files):
@@ -1047,7 +1131,11 @@ def build_semantic_index(
 
             if lang == "all":
                 status.update("[bold green]Scanning project languages...")
-                target_languages = _detect_project_languages(scan_path, respect_ignore=respect_ignore)
+                target_languages = _detect_project_languages(
+                    scan_path,
+                    respect_ignore=respect_ignore,
+                    ignore_spec=ignore_spec,
+                )
                 if not target_languages:
                     console.print("[yellow]No supported languages detected in project[/yellow]")
                     return 0
@@ -1062,6 +1150,7 @@ def build_semantic_index(
                             str(scan_path),
                             lang=lang_name,
                             respect_ignore=respect_ignore,
+                            ignore_spec=ignore_spec,
                             progress_callback=update_progress,
                             workspace_root=workspace_root,
                         )
@@ -1071,13 +1160,18 @@ def build_semantic_index(
                     str(scan_path),
                     lang=lang,
                     respect_ignore=respect_ignore,
+                    ignore_spec=ignore_spec,
                     progress_callback=update_progress,
                     workspace_root=workspace_root,
                 )
             status.update(f"[bold green]Extracted {len(units)} code units")
     else:
         if lang == "all":
-            target_languages = _detect_project_languages(scan_path, respect_ignore=respect_ignore)
+            target_languages = _detect_project_languages(
+                scan_path,
+                respect_ignore=respect_ignore,
+                ignore_spec=ignore_spec,
+            )
             if not target_languages:
                 return 0
             units = []
@@ -1087,6 +1181,7 @@ def build_semantic_index(
                         str(scan_path),
                         lang=lang_name,
                         respect_ignore=respect_ignore,
+                        ignore_spec=ignore_spec,
                         workspace_root=workspace_root,
                     )
                 )
@@ -1095,6 +1190,7 @@ def build_semantic_index(
                 str(scan_path),
                 lang=lang,
                 respect_ignore=respect_ignore,
+                ignore_spec=ignore_spec,
                 workspace_root=workspace_root,
             )
 
@@ -1118,7 +1214,7 @@ def build_semantic_index(
         ) as progress:
             task = progress.add_task("Computing embeddings...", total=num_units)
 
-            model_obj = get_model(model)
+            model_obj = get_model(model, device=device)
             all_embeddings = []
 
             for i in range(0, num_units, BATCH_SIZE):
@@ -1141,7 +1237,7 @@ def build_semantic_index(
 
             embeddings_matrix = np.vstack(all_embeddings)
     else:
-        model_obj = get_model(model)
+        model_obj = get_model(model, device=device)
         result = model_obj.encode(
             texts,
             batch_size=BATCH_SIZE,
@@ -1149,6 +1245,7 @@ def build_semantic_index(
         )
         embeddings_matrix = np.array(result, dtype=np.float32)
 
+    import faiss
     dimension = embeddings_matrix.shape[1]
     index = faiss.IndexFlatIP(dimension)
     index.add(embeddings_matrix)
@@ -1189,6 +1286,7 @@ def semantic_search(
     k: int = 5,
     expand_graph: bool = False,
     model: Optional[str] = None,
+    device: Optional[str] = None,
     index_paths=None,
     index_config=None,
 ) -> List[dict]:
@@ -1205,7 +1303,6 @@ def semantic_search(
     Returns:
         List of result dictionaries with name, file, line, score, etc.
     """
-    import faiss
     import numpy as np
 
     # Handle empty query
@@ -1232,8 +1329,7 @@ def semantic_search(
     if not metadata_file.exists():
         raise FileNotFoundError(f"Metadata not found at {metadata_file}. Run build_semantic_index first.")
 
-    # Load index and metadata
-    index = faiss.read_index(str(index_file))
+    # Load metadata
     metadata = json.loads(metadata_file.read_text())
     units = metadata["units"]
 
@@ -1248,6 +1344,15 @@ def semantic_search(
                 "Semantic search model mismatch with index. Use the index model or rebuild."
             )
 
+    # Embed query (with instruction prefix for BGE)
+    query_text = f"Represent this code search query: {query}"
+    query_embedding = compute_embedding(query_text, model_name=model, device=device)
+    query_embedding = query_embedding.reshape(1, -1)
+
+    # Load index after torch initialization to avoid OpenMP conflicts on macOS
+    import faiss
+    index = faiss.read_index(str(index_file))
+
     # Validate dimension compatibility
     meta_dim = metadata.get("dimension")
     if meta_dim and index.d != meta_dim:
@@ -1255,11 +1360,6 @@ def semantic_search(
     expected_dim = _model_dimension(model)
     if expected_dim and meta_dim and expected_dim != meta_dim:
         raise ValueError("Semantic model dimension mismatch; rebuild required.")
-
-    # Embed query (with instruction prefix for BGE)
-    query_text = f"Represent this code search query: {query}"
-    query_embedding = compute_embedding(query_text, model_name=model)
-    query_embedding = query_embedding.reshape(1, -1)
 
     # Search
     k = min(k, len(units))

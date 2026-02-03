@@ -528,6 +528,7 @@ def get_relevant_context(
     depth: int = 2,
     language: str = "python",
     include_docstrings: bool = True,
+    ignore_spec=None,
     workspace_root: str | None = None,
 ) -> RelevantContext:
     """
@@ -539,6 +540,7 @@ def get_relevant_context(
         depth: How deep to traverse the call graph
         language: python, typescript, go, or rust
         include_docstrings: Whether to include function docstrings
+        ignore_spec: Optional ignore spec for filtering files
 
     Returns:
         RelevantContext with functions reachable from entry_point
@@ -565,7 +567,10 @@ def get_relevant_context(
 
     # Build cross-file call graph
     call_graph = build_project_call_graph(
-        str(project), language=language, workspace_root=workspace_root
+        str(project),
+        language=language,
+        ignore_spec=ignore_spec,
+        workspace_root=workspace_root,
     )
 
     # Index all signatures
@@ -583,7 +588,24 @@ def get_relevant_context(
     # Also cache file sources for CFG extraction
     file_sources: dict[str, str] = {}
 
-    for file_path in project.rglob("*"):
+    from .cross_file_calls import scan_project
+    from .workspace import load_workspace_config
+
+    workspace_config = load_workspace_config(
+        Path(workspace_root) if workspace_root is not None else project
+    )
+
+    files = scan_project(
+        project,
+        language=language,
+        workspace_config=workspace_config,
+        respect_ignore=ignore_spec is not None,
+        ignore_spec=ignore_spec,
+        workspace_root=Path(workspace_root) if workspace_root is not None else None,
+    )
+
+    for file_path in files:
+        file_path = Path(file_path)
         # Check for hidden paths relative to project root, not absolute path
         try:
             rel_path = file_path.relative_to(project)
@@ -1086,6 +1108,7 @@ def scan_project_files(
     root: str,
     language: str = "python",
     respect_ignore: bool = True,
+    ignore_spec=None,
 ) -> list[str]:
     """
     Find all source files in project for given language.
@@ -1093,7 +1116,8 @@ def scan_project_files(
     Args:
         root: Project root directory path
         language: "python", "typescript", "go", or "rust"
-        respect_ignore: If True, respect .tldrignore patterns (default True)
+        respect_ignore: If True, respect ignore patterns (default True)
+        ignore_spec: Optional ignore spec (tldrignore.IgnoreSpec or pathspec.PathSpec)
 
     Returns:
         List of absolute paths to source files
@@ -1103,7 +1127,12 @@ def scan_project_files(
         >>> print(files)
         ['/path/to/project/main.py', '/path/to/project/utils/helper.py']
     """
-    return _scan_project(root, language, respect_ignore=respect_ignore)
+    return _scan_project(
+        root,
+        language,
+        respect_ignore=respect_ignore,
+        ignore_spec=ignore_spec,
+    )
 
 
 def get_imports(file_path: str, language: str = "python") -> list[dict]:
@@ -1318,6 +1347,8 @@ def get_file_tree(
             return result
 
         for item in items:
+            if item.name == ".tldr":
+                continue
             # Skip hidden files/dirs
             if exclude_hidden and item.name.startswith("."):
                 continue
@@ -1416,6 +1447,10 @@ def search(
             rel_path_str = str(rel_path)
             parts = rel_path.parts
         except ValueError:
+            continue
+
+        # Always skip TLDR cache dir to avoid self-indexing
+        if ".tldr" in parts:
             continue
 
         # Use ignore_spec if provided, otherwise fall back to hardcoded SKIP_DIRS

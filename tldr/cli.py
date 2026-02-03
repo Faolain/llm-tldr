@@ -128,6 +128,38 @@ def build_parser() -> argparse.ArgumentParser:
         help="Logical index id (namespaces caches under cache-root)",
     )
     index_parent.add_argument(
+        "--ignore-file",
+        help="Path to a .tldrignore file (index-scoped in index mode)",
+    )
+    gitignore_group = index_parent.add_mutually_exclusive_group()
+    gitignore_group.add_argument(
+        "--use-gitignore",
+        dest="use_gitignore",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="Also honor .gitignore (default)",
+    )
+    gitignore_group.add_argument(
+        "--no-gitignore",
+        dest="use_gitignore",
+        action="store_false",
+        default=argparse.SUPPRESS,
+        help="Do not use .gitignore",
+    )
+    index_parent.add_argument(
+        "--no-ignore",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="Ignore .tldrignore patterns (include all files)",
+    )
+    index_parent.add_argument(
+        "--ignore",
+        action="append",
+        default=argparse.SUPPRESS,
+        metavar="PATTERN",
+        help="Additional ignore patterns (gitignore syntax, can be repeated)",
+    )
+    index_parent.add_argument(
         "--force-rebind",
         action="store_true",
         help="Rebind index to a new scan root (wipes index directory)",
@@ -174,6 +206,10 @@ Semantic Search:
     First run downloads embedding model (1.3GB default).
     Use --model all-MiniLM-L6-v2 for smaller 80MB model.
     Set TLDR_AUTO_DOWNLOAD=1 to skip download prompts.
+
+Device Selection:
+    By default on macOS, TLDR uses CPU to avoid MPS crashes.
+    Override with --device or TLDR_DEVICE=cpu|cuda|mps.
         """,
         parents=[index_parent],
     )
@@ -184,18 +220,6 @@ Semantic Search:
         action="version",
         version=f"%(prog)s {__version__}",
     )
-    parser.add_argument(
-        "--no-ignore",
-        action="store_true",
-        help="Ignore .tldrignore patterns (include all files)",
-    )
-    parser.add_argument(
-        "--ignore",
-        action="append",
-        metavar="PATTERN",
-        help="Additional ignore patterns (gitignore syntax, can be repeated)",
-    )
-
     # Shell completion support
     try:
         import shtab
@@ -440,6 +464,12 @@ Semantic Search:
         default=None,
         help="Embedding model: bge-large-en-v1.5 (1.3GB, default) or all-MiniLM-L6-v2 (80MB)",
     )
+    index_p.add_argument(
+        "--device",
+        choices=["cpu", "cuda", "mps"],
+        default=None,
+        help="Device to use for embeddings (default: cpu on macOS)",
+    )
 
     # tldr semantic search <query>
     search_p = semantic_sub.add_parser(
@@ -454,6 +484,12 @@ Semantic Search:
         "--model",
         default=None,
         help="Embedding model (uses index model if not specified)",
+    )
+    search_p.add_argument(
+        "--device",
+        choices=["cpu", "cuda", "mps"],
+        default=None,
+        help="Device to use for query embeddings (default: cpu on macOS)",
     )
 
     # tldr daemon start/stop/status/query
@@ -520,6 +556,14 @@ def main():
         args.cache_root = os.environ.get("TLDR_CACHE_ROOT")
     if not hasattr(args, "index_id"):
         args.index_id = os.environ.get("TLDR_INDEX")
+    if not hasattr(args, "ignore_file"):
+        env_ignore_file = os.environ.get("TLDR_IGNORE_FILE")
+        if env_ignore_file:
+            args.ignore_file = env_ignore_file
+    if not hasattr(args, "use_gitignore"):
+        env_use_gitignore = os.environ.get("TLDR_USE_GITIGNORE")
+        if env_use_gitignore is not None:
+            args.use_gitignore = env_use_gitignore.lower() in ("1", "true", "yes", "on")
     if not hasattr(args, "force_rebind"):
         args.force_rebind = False
     if not hasattr(args, "rebuild"):
@@ -608,6 +652,10 @@ def main():
                 index_id_arg=args.index_id,
                 allow_create=allow_create,
                 force_rebind=args.force_rebind,
+                ignore_file_arg=getattr(args, "ignore_file", None),
+                use_gitignore_arg=getattr(args, "use_gitignore", None),
+                cli_patterns_arg=getattr(args, "ignore", None),
+                no_ignore_arg=getattr(args, "no_ignore", None),
             )
         except (FileNotFoundError, ValueError) as exc:
             print(f"Error: {exc}", file=sys.stderr)
@@ -622,7 +670,14 @@ def main():
             return None
         return index_ctx.cache_root
 
-    def _get_or_build_graph(project_path, lang, build_fn, index_paths=None, workspace_root=None):
+    def _get_or_build_graph(
+        project_path,
+        lang,
+        build_fn,
+        index_paths=None,
+        workspace_root=None,
+        ignore_spec=None,
+    ):
         """Get cached graph with incremental patches, or build fresh.
 
         This implements P4 incremental updates:
@@ -683,9 +738,18 @@ def main():
 
         # No cache or invalid cache - do fresh build
         if workspace_root is not None:
-            graph = build_fn(project_path, language=lang, workspace_root=workspace_root)
+            graph = build_fn(
+                project_path,
+                language=lang,
+                ignore_spec=ignore_spec,
+                workspace_root=workspace_root,
+            )
         else:
-            graph = build_fn(project_path, language=lang)
+            graph = build_fn(
+                project_path,
+                language=lang,
+                ignore_spec=ignore_spec,
+            )
 
         # Save to cache
         cache_file.parent.mkdir(parents=True, exist_ok=True)
@@ -705,19 +769,56 @@ def main():
         return graph
 
     # Helper to load ignore patterns from .tldrignore + CLI --ignore flags + .gitignore
-    def get_ignore_spec(project_path: str | Path):
+    def get_ignore_spec(project_path: str | Path, index_ctx=None):
         """Load ignore patterns, combining .tldrignore, .gitignore, and CLI --ignore flags."""
+        from .tldrignore import IgnoreSpec
+
+        if index_ctx is not None and getattr(index_ctx, "config", None) is not None:
+            cfg = index_ctx.config
+            if cfg.no_ignore:
+                return None
+            cli_patterns = list(cfg.cli_patterns or ())
+            return IgnoreSpec(
+                project_dir=project_path,
+                use_gitignore=cfg.use_gitignore,
+                cli_patterns=cli_patterns if cli_patterns else None,
+                ignore_file=cfg.ignore_file,
+                gitignore_root=cfg.gitignore_root,
+            )
+
         if getattr(args, 'no_ignore', False):
             return None
 
-        from .tldrignore import IgnoreSpec
-
-        cli_patterns = getattr(args, 'ignore', None) or []
+        cli_patterns = getattr(args, 'ignore', None) or None
+        use_gitignore = getattr(args, 'use_gitignore', None)
+        if use_gitignore is None:
+            use_gitignore = True
         return IgnoreSpec(
             project_dir=project_path,
-            use_gitignore=True,
-            cli_patterns=cli_patterns if cli_patterns else None,
+            use_gitignore=use_gitignore,
+            cli_patterns=cli_patterns,
+            ignore_file=getattr(args, 'ignore_file', None),
         )
+
+    def _ensure_index_ignore_file(index_ctx):
+        if index_ctx is None or getattr(index_ctx, "config", None) is None:
+            return
+        cfg = index_ctx.config
+        if cfg.no_ignore:
+            return
+        ignore_path = cfg.ignore_file
+        if ignore_path.exists():
+            return
+        try:
+            ignore_path.resolve().relative_to(cfg.cache_root.resolve())
+        except ValueError:
+            raise ValueError(
+                f"Ignore file does not exist: {ignore_path}. Create it manually or choose a path under cache-root."
+            )
+        from .tldrignore import ensure_tldrignore
+        created, msg = ensure_tldrignore(index_ctx.paths.index_dir, ignore_file=ignore_path)
+        if created:
+            print(msg)
 
     def get_cached_languages(project_path: str | Path, index_paths=None) -> list[str] | None:
         """Read cached languages from .tldr/languages.json if available."""
@@ -732,7 +833,12 @@ def main():
                 pass
         return None
 
-    def resolve_language(lang_arg: str, project_path: str | Path, index_paths=None) -> str:
+    def resolve_language(
+        lang_arg: str,
+        project_path: str | Path,
+        index_paths=None,
+        ignore_spec=None,
+    ) -> str:
         """Resolve 'auto'/'all' to actual language. Returns first language for single-lang commands."""
         project_path = Path(project_path).resolve()
         if lang_arg == "auto":
@@ -742,13 +848,17 @@ def main():
                 return cached[0]
             # No cache - detect languages
             from .semantic import _detect_project_languages
-            respect_ignore = not getattr(args, 'no_ignore', False)
-            langs = _detect_project_languages(project_path, respect_ignore=respect_ignore)
+            respect_ignore = ignore_spec is not None
+            langs = _detect_project_languages(
+                project_path, respect_ignore=respect_ignore, ignore_spec=ignore_spec
+            )
             return langs[0] if langs else "python"
         elif lang_arg == "all":
             from .semantic import _detect_project_languages
-            respect_ignore = not getattr(args, 'no_ignore', False)
-            langs = _detect_project_languages(project_path, respect_ignore=respect_ignore)
+            respect_ignore = ignore_spec is not None
+            langs = _detect_project_languages(
+                project_path, respect_ignore=respect_ignore, ignore_spec=ignore_spec
+            )
             return langs[0] if langs else "python"
         return lang_arg
 
@@ -759,9 +869,9 @@ def main():
                 _explicit_path(args.path, "."),
                 default=".",
             )
-            _get_index_ctx(scan_root, allow_create=False)
+            index_ctx = _get_index_ctx(scan_root, allow_create=False)
             ext = set(args.ext) if args.ext else None
-            ignore_spec = get_ignore_spec(scan_root)
+            ignore_spec = get_ignore_spec(scan_root, index_ctx)
             result = get_file_tree(
                 scan_root, extensions=ext, exclude_hidden=not args.show_hidden,
                 ignore_spec=ignore_spec
@@ -775,26 +885,36 @@ def main():
                 default=".",
             )
             index_ctx = _get_index_ctx(scan_root, allow_create=False)
-            ignore_spec = get_ignore_spec(scan_root)
+            ignore_spec = get_ignore_spec(scan_root, index_ctx)
             project_path = Path(scan_root).resolve()
 
             # Determine language(s) to analyze
             if args.lang == "auto":
                 # Use cached languages, or detect if no cache
-                cached = get_cached_languages(project_path, index_paths=getattr(index_ctx, "paths", None))
+                cached = get_cached_languages(
+                    project_path, index_paths=getattr(index_ctx, "paths", None)
+                )
                 if cached:
                     languages = cached
                 else:
                     from .semantic import _detect_project_languages
-                    respect_ignore = not getattr(args, 'no_ignore', False)
-                    languages = _detect_project_languages(project_path, respect_ignore=respect_ignore)
+                    respect_ignore = ignore_spec is not None
+                    languages = _detect_project_languages(
+                        project_path,
+                        respect_ignore=respect_ignore,
+                        ignore_spec=ignore_spec,
+                    )
                     if not languages:
                         languages = ["python"]
             elif args.lang == "all":
                 # Detect all languages in project
                 from .semantic import _detect_project_languages
-                respect_ignore = not getattr(args, 'no_ignore', False)
-                languages = _detect_project_languages(project_path, respect_ignore=respect_ignore)
+                respect_ignore = ignore_spec is not None
+                languages = _detect_project_languages(
+                    project_path,
+                    respect_ignore=respect_ignore,
+                    ignore_spec=ignore_spec,
+                )
                 if not languages:
                     languages = ["python"]
             else:
@@ -822,9 +942,9 @@ def main():
                 _explicit_path(args.path, "."),
                 default=".",
             )
-            _get_index_ctx(scan_root, allow_create=False)
+            index_ctx = _get_index_ctx(scan_root, allow_create=False)
             ext = set(args.ext) if args.ext else None
-            ignore_spec = get_ignore_spec(scan_root)
+            ignore_spec = get_ignore_spec(scan_root, index_ctx)
             result = api_search(
                 args.pattern, scan_root,
                 extensions=ext,
@@ -890,12 +1010,14 @@ def main():
                 default=".",
             )
             index_ctx = _get_index_ctx(scan_root, allow_create=False)
+            ignore_spec = get_ignore_spec(scan_root, index_ctx)
             workspace_root = _workspace_root(scan_root, index_ctx)
             ctx = get_relevant_context(
                 scan_root,
                 args.entry,
                 depth=args.depth,
                 language=args.lang,
+                ignore_spec=ignore_spec,
                 workspace_root=str(workspace_root) if workspace_root is not None else None,
             )
             # Output LLM-ready string directly
@@ -933,7 +1055,13 @@ def main():
             )
             index_ctx = _get_index_ctx(scan_root, allow_create=True)
             index_paths = index_ctx.paths if index_ctx else None
-            lang = resolve_language(args.lang, scan_root, index_paths=index_paths)
+            ignore_spec = get_ignore_spec(scan_root, index_ctx)
+            lang = resolve_language(
+                args.lang,
+                scan_root,
+                index_paths=index_paths,
+                ignore_spec=ignore_spec,
+            )
             workspace_root = _workspace_root(scan_root, index_ctx)
             graph = _get_or_build_graph(
                 scan_root,
@@ -941,6 +1069,7 @@ def main():
                 build_project_call_graph,
                 index_paths=index_paths,
                 workspace_root=workspace_root,
+                ignore_spec=ignore_spec,
             )
             result = {
                 "edges": [
@@ -965,7 +1094,13 @@ def main():
                 default=".",
             )
             index_ctx = _get_index_ctx(scan_root, allow_create=False)
-            lang = resolve_language(args.lang, scan_root, index_paths=getattr(index_ctx, "paths", None))
+            ignore_spec = get_ignore_spec(scan_root, index_ctx)
+            lang = resolve_language(
+                args.lang,
+                scan_root,
+                index_paths=getattr(index_ctx, "paths", None),
+                ignore_spec=ignore_spec,
+            )
             workspace_root = _workspace_root(scan_root, index_ctx)
             result = analyze_impact(
                 scan_root,
@@ -973,6 +1108,7 @@ def main():
                 max_depth=args.depth,
                 target_file=args.file,
                 language=lang,
+                ignore_spec=ignore_spec,
                 workspace_root=str(workspace_root) if workspace_root is not None else None,
             )
             print(json.dumps(result, indent=2))
@@ -984,12 +1120,19 @@ def main():
                 default=".",
             )
             index_ctx = _get_index_ctx(scan_root, allow_create=False)
-            lang = resolve_language(args.lang, scan_root, index_paths=getattr(index_ctx, "paths", None))
+            ignore_spec = get_ignore_spec(scan_root, index_ctx)
+            lang = resolve_language(
+                args.lang,
+                scan_root,
+                index_paths=getattr(index_ctx, "paths", None),
+                ignore_spec=ignore_spec,
+            )
             workspace_root = _workspace_root(scan_root, index_ctx)
             result = analyze_dead_code(
                 scan_root,
                 entry_points=args.entry if args.entry else None,
                 language=lang,
+                ignore_spec=ignore_spec,
                 workspace_root=str(workspace_root) if workspace_root is not None else None,
             )
             print(json.dumps(result, indent=2))
@@ -1001,11 +1144,18 @@ def main():
                 default=".",
             )
             index_ctx = _get_index_ctx(scan_root, allow_create=False)
-            lang = resolve_language(args.lang, scan_root, index_paths=getattr(index_ctx, "paths", None))
+            ignore_spec = get_ignore_spec(scan_root, index_ctx)
+            lang = resolve_language(
+                args.lang,
+                scan_root,
+                index_paths=getattr(index_ctx, "paths", None),
+                ignore_spec=ignore_spec,
+            )
             workspace_root = _workspace_root(scan_root, index_ctx)
             result = analyze_architecture(
                 scan_root,
                 language=lang,
+                ignore_spec=ignore_spec,
                 workspace_root=str(workspace_root) if workspace_root is not None else None,
             )
             print(json.dumps(result, indent=2))
@@ -1026,15 +1176,20 @@ def main():
                 _explicit_path(args.path, "."),
                 default=".",
             )
-            _get_index_ctx(scan_root, allow_create=False)
             project = Path(scan_root).resolve()
             if not project.exists():
                 print(f"Error: Path not found: {scan_root}", file=sys.stderr)
                 sys.exit(1)
 
             # Scan all source files and check their imports
-            respect_ignore = not getattr(args, 'no_ignore', False)
-            files = scan_project_files(str(project), language=args.lang, respect_ignore=respect_ignore)
+            index_ctx = _get_index_ctx(scan_root, allow_create=False)
+            ignore_spec = get_ignore_spec(scan_root, index_ctx)
+            files = scan_project_files(
+                str(project),
+                language=args.lang,
+                respect_ignore=ignore_spec is not None,
+                ignore_spec=ignore_spec,
+            )
             importers = []
             for file_path in files:
                 try:
@@ -1062,6 +1217,7 @@ def main():
                 default=".",
             )
             index_ctx = _get_index_ctx(scan_root, allow_create=False)
+            ignore_spec = get_ignore_spec(scan_root, index_ctx)
             workspace_root = _workspace_root(scan_root, index_ctx)
             result = analyze_change_impact(
                 project_path=str(scan_root),
@@ -1071,6 +1227,7 @@ def main():
                 git_base=args.git_base,
                 language=args.lang,
                 max_depth=args.depth,
+                ignore_spec=ignore_spec,
                 workspace_root=str(workspace_root) if workspace_root is not None else None,
             )
 
@@ -1139,6 +1296,17 @@ def main():
                     cmd.extend(["--cache-root", str(args.cache_root)])
                 if args.index_id:
                     cmd.extend(["--index", str(args.index_id)])
+                if index_ctx is not None and getattr(index_ctx, "config", None) is not None:
+                    cfg = index_ctx.config
+                    if cfg.ignore_file is not None:
+                        cmd.extend(["--ignore-file", str(cfg.ignore_file)])
+                    if cfg.no_ignore:
+                        cmd.append("--no-ignore")
+                    elif cfg.use_gitignore is False:
+                        cmd.append("--no-gitignore")
+                    if cfg.cli_patterns:
+                        for pattern in cfg.cli_patterns:
+                            cmd.extend(["--ignore", pattern])
                 subprocess.Popen(
                     cmd,
                     stdout=subprocess.DEVNULL,
@@ -1156,14 +1324,21 @@ def main():
                     created, msg = ensure_tldrignore(project_path)
                     if created:
                         print(msg)
+                else:
+                    _ensure_index_ignore_file(index_ctx)
 
-                respect_ignore = not getattr(args, 'no_ignore', False)
+                ignore_spec = get_ignore_spec(project_path, index_ctx)
+                respect_ignore = ignore_spec is not None
                 
                 # Determine languages to process
                 if args.lang == "all":
                     try:
                         from .semantic import _detect_project_languages
-                        target_languages = _detect_project_languages(project_path, respect_ignore=respect_ignore)
+                        target_languages = _detect_project_languages(
+                            project_path,
+                            respect_ignore=respect_ignore,
+                            ignore_spec=ignore_spec,
+                        )
                         print(f"Detected languages: {', '.join(target_languages)}")
                     except ImportError:
                         # Fallback if semantic module issue
@@ -1179,16 +1354,28 @@ def main():
                 for lang in target_languages:
                     try:
                         # Scan files
-                        files = scan_project(project_path, language=lang, respect_ignore=respect_ignore)
+                        files = scan_project(
+                            project_path,
+                            language=lang,
+                            respect_ignore=respect_ignore,
+                            ignore_spec=ignore_spec,
+                        )
                         all_files.update(files)
                         
                         # Build graph
                         if workspace_root is not None:
                             graph = build_project_call_graph(
-                                project_path, language=lang, workspace_root=workspace_root
+                                project_path,
+                                language=lang,
+                                ignore_spec=ignore_spec,
+                                workspace_root=workspace_root,
                             )
                         else:
-                            graph = build_project_call_graph(project_path, language=lang)
+                            graph = build_project_call_graph(
+                                project_path,
+                                language=lang,
+                                ignore_spec=ignore_spec,
+                            )
                         combined_edges.extend([
                             {"from_file": e[0], "from_func": e[1], "to_file": e[2], "to_func": e[3]}
                             for e in graph.edges
@@ -1242,18 +1429,20 @@ def main():
             from .semantic import build_semantic_index, semantic_search
 
             if args.action == "index":
-                respect_ignore = not getattr(args, 'no_ignore', False)
                 scan_root = _resolve_scan_root(
                     args.scan_root,
                     _explicit_path(args.path, "."),
                     default=".",
                 )
                 index_ctx = _get_index_ctx(scan_root, allow_create=True)
+                ignore_spec = get_ignore_spec(scan_root, index_ctx)
                 count = build_semantic_index(
                     scan_root,
                     lang=args.lang,
                     model=args.model,
-                    respect_ignore=respect_ignore,
+                    device=args.device,
+                    respect_ignore=ignore_spec is not None,
+                    ignore_spec=ignore_spec,
                     index_paths=getattr(index_ctx, "paths", None),
                     index_config=getattr(index_ctx, "config", None),
                     rebuild=args.rebuild,
@@ -1273,6 +1462,7 @@ def main():
                     k=args.k,
                     expand_graph=args.expand,
                     model=args.model,
+                    device=args.device,
                     index_paths=getattr(index_ctx, "paths", None),
                     index_config=getattr(index_ctx, "config", None),
                 )

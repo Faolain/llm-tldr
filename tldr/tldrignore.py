@@ -19,6 +19,13 @@ from typing import TYPE_CHECKING, Sequence
 if TYPE_CHECKING:
     from pathspec import PathSpec
 
+
+class _NullSpec:
+    patterns: list = []
+
+    def match_file(self, _path: str) -> bool:
+        return False
+
 # Default .tldrignore template
 DEFAULT_TEMPLATE = """\
 # TLDR ignore patterns (gitignore syntax)
@@ -29,6 +36,7 @@ DEFAULT_TEMPLATE = """\
 # Dependencies
 # ===================
 node_modules/
+.tldr/
 .venv/
 venv/
 env/
@@ -109,29 +117,34 @@ Thumbs.db
 
 
 @lru_cache(maxsize=128)
-def is_git_repo(project_dir: str) -> bool:
-    """Check if directory is inside a git repository.
-
-    Args:
-        project_dir: Directory path to check
-
-    Returns:
-        True if inside a git repo, False otherwise
-    """
+def resolve_git_root(project_dir: str | Path) -> Path | None:
+    """Resolve git root for a directory (git rev-parse --show-toplevel)."""
     try:
         result = subprocess.run(
-            ["git", "rev-parse", "--git-dir"],
-            cwd=project_dir,
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=str(project_dir),
             capture_output=True,
             timeout=5,
         )
-        return result.returncode == 0
+        if result.returncode != 0:
+            return None
+        root = result.stdout.decode().strip()
+        return Path(root).resolve() if root else None
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-        # git not installed, timeout, or other error
-        return False
+        return None
 
 
-def is_gitignored(file_path: str | Path, project_dir: str | Path) -> bool:
+@lru_cache(maxsize=128)
+def is_git_repo(project_dir: str) -> bool:
+    """Check if directory is inside a git repository."""
+    return resolve_git_root(project_dir) is not None
+
+
+def is_gitignored(
+    file_path: str | Path,
+    project_dir: str | Path,
+    git_root: str | Path | None = None,
+) -> bool:
     """Check if a file is ignored by .gitignore using git check-ignore.
 
     This handles all gitignore complexity including:
@@ -147,7 +160,7 @@ def is_gitignored(file_path: str | Path, project_dir: str | Path) -> bool:
     Returns:
         True if file is gitignored, False otherwise
     """
-    project_path = Path(project_dir)
+    project_path = Path(git_root) if git_root is not None else Path(project_dir)
     file_path = Path(file_path)
 
     # Make path relative for git check-ignore
@@ -172,6 +185,7 @@ def is_gitignored(file_path: str | Path, project_dir: str | Path) -> bool:
 def batch_gitignored(
     file_paths: "Sequence[str | Path]",
     project_dir: str | Path,
+    git_root: str | Path | None = None,
 ) -> set[str]:
     """Check multiple files against .gitignore in a single subprocess call.
 
@@ -187,7 +201,7 @@ def batch_gitignored(
     if not file_paths:
         return set()
 
-    project_path = Path(project_dir)
+    project_path = Path(git_root) if git_root is not None else Path(project_dir)
 
     # Convert to relative paths
     rel_paths = []
@@ -216,7 +230,10 @@ def batch_gitignored(
         return set()
 
 
-def load_ignore_patterns(project_dir: str | Path) -> "PathSpec":
+def load_ignore_patterns(
+    project_dir: str | Path,
+    ignore_file: str | Path | None = None,
+) -> "PathSpec":
     """Load ignore patterns from .tldrignore file.
 
     Args:
@@ -225,10 +242,16 @@ def load_ignore_patterns(project_dir: str | Path) -> "PathSpec":
     Returns:
         PathSpec matcher for checking if files should be ignored
     """
-    import pathspec
+    try:
+        import pathspec
+    except ImportError:
+        return _NullSpec()
 
     project_path = Path(project_dir)
-    tldrignore_path = project_path / ".tldrignore"
+    if ignore_file is None:
+        tldrignore_path = project_path / ".tldrignore"
+    else:
+        tldrignore_path = Path(ignore_file)
 
     patterns: list[str] = []
 
@@ -254,18 +277,35 @@ class IgnoreSpec:
         project_dir: str | Path,
         use_gitignore: bool = True,
         cli_patterns: list[str] | None = None,
+        ignore_file: str | Path | None = None,
+        gitignore_root: str | Path | None = None,
     ):
-        import pathspec
+        try:
+            import pathspec
+        except ImportError:
+            pathspec = None
 
         self.project_path = Path(project_dir).resolve()
         self.use_gitignore = use_gitignore
-        self._is_git = is_git_repo(str(self.project_path)) if use_gitignore else False
+        self.ignore_file = Path(ignore_file).resolve() if ignore_file is not None else None
+
+        if use_gitignore:
+            root_candidate = (
+                Path(gitignore_root).resolve()
+                if gitignore_root is not None
+                else self.project_path
+            )
+            self._git_root = resolve_git_root(root_candidate)
+            self._is_git = self._git_root is not None
+        else:
+            self._git_root = None
+            self._is_git = False
 
         # Load base tldrignore patterns
-        self._spec = load_ignore_patterns(self.project_path)
+        self._spec = load_ignore_patterns(self.project_path, ignore_file=self.ignore_file)
 
         # Add CLI --ignore patterns if provided
-        if cli_patterns:
+        if cli_patterns and pathspec is not None:
             # Combine existing patterns with CLI patterns using from_lines
             existing_lines = [str(p) for p in self._spec.patterns]
             self._spec = pathspec.PathSpec.from_lines(
@@ -305,14 +345,22 @@ class IgnoreSpec:
         """Check single file against gitignore (uses per-file call)."""
         # For single-file checks, fall back to per-file subprocess
         # Batch checking is used in filter_files() for better perf
-        return is_gitignored(self.project_path / rel_path, self.project_path)
+        return is_gitignored(
+            self.project_path / rel_path,
+            self.project_path,
+            git_root=self._git_root,
+        )
 
     def preload_gitignore(self, paths: list[str]) -> None:
         """Batch-load gitignore status for multiple paths (performance optimization)."""
         if not self._is_git or not paths:
             return
         full_paths = [self.project_path / p for p in paths]
-        self._gitignore_cache = batch_gitignored(full_paths, self.project_path)
+        self._gitignore_cache = batch_gitignored(
+            full_paths,
+            self.project_path,
+            git_root=self._git_root,
+        )
 
     def match_file_cached(self, rel_path: str) -> bool:
         """Check if file should be ignored, using preloaded cache if available."""
@@ -332,7 +380,10 @@ class IgnoreSpec:
         return False
 
 
-def ensure_tldrignore(project_dir: str | Path) -> tuple[bool, str]:
+def ensure_tldrignore(
+    project_dir: str | Path,
+    ignore_file: str | Path | None = None,
+) -> tuple[bool, str]:
     """Ensure .tldrignore exists, creating with defaults if needed.
 
     Args:
@@ -346,7 +397,10 @@ def ensure_tldrignore(project_dir: str | Path) -> tuple[bool, str]:
     if not project_path.exists():
         return False, f"Project directory does not exist: {project_path}"
 
-    tldrignore_path = project_path / ".tldrignore"
+    if ignore_file is None:
+        tldrignore_path = project_path / ".tldrignore"
+    else:
+        tldrignore_path = Path(ignore_file)
 
     if tldrignore_path.exists():
         return False, f".tldrignore already exists at {tldrignore_path}"
@@ -372,6 +426,8 @@ def should_ignore(
     project_dir: str | Path,
     spec: "PathSpec | None" = None,
     use_gitignore: bool = True,
+    ignore_file: str | Path | None = None,
+    gitignore_root: str | Path | None = None,
 ) -> bool:
     """Check if a file should be ignored.
 
@@ -389,7 +445,7 @@ def should_ignore(
         True if file should be ignored, False otherwise
     """
     if spec is None:
-        spec = load_ignore_patterns(project_dir)
+        spec = load_ignore_patterns(project_dir, ignore_file=ignore_file)
 
     project_path = Path(project_dir)
     file_path = Path(file_path)
@@ -424,8 +480,14 @@ def should_ignore(
         return True
 
     # .tldrignore has no opinion - check gitignore as fallback
-    if use_gitignore and is_git_repo(str(project_path)):
-        return is_gitignored(file_path, project_path)
+    if use_gitignore:
+        git_root = (
+            Path(gitignore_root).resolve()
+            if gitignore_root is not None
+            else resolve_git_root(project_path)
+        )
+        if git_root is not None:
+            return is_gitignored(file_path, project_path, git_root=git_root)
 
     return False
 
@@ -451,6 +513,8 @@ def filter_files(
     project_dir: str | Path,
     respect_ignore: bool = True,
     use_gitignore: bool = True,
+    ignore_file: str | Path | None = None,
+    gitignore_root: str | Path | None = None,
 ) -> list[Path]:
     """Filter a list of files, removing those matching ignore patterns.
 
@@ -471,7 +535,7 @@ def filter_files(
         return files
 
     project_path = Path(project_dir)
-    spec = load_ignore_patterns(project_dir)
+    spec = load_ignore_patterns(project_dir, ignore_file=ignore_file)
 
     # First pass: filter by .tldrignore patterns
     # Also track files that need gitignore check (not matched by tldrignore)
@@ -497,9 +561,39 @@ def filter_files(
             tldr_passed.append(f)
 
     # Second pass: batch check gitignore for files that passed tldrignore
-    if use_gitignore and tldr_passed and is_git_repo(str(project_path)):
-        gitignored = batch_gitignored(tldr_passed, project_path)
+    if use_gitignore and tldr_passed:
+        git_root = (
+            Path(gitignore_root).resolve()
+            if gitignore_root is not None
+            else resolve_git_root(project_path)
+        )
+        if git_root is not None:
+            gitignored = batch_gitignored(
+                tldr_passed,
+                project_path,
+                git_root=git_root,
+            )
+        else:
+            gitignored = set()
         return [f for f in tldr_passed
                 if str(f.relative_to(project_path) if f.is_absolute() else f) not in gitignored]
 
     return tldr_passed
+
+
+def compute_ignore_hash(ignore_file: str | Path | None) -> str:
+    """Compute a stable hash of ignore file content (or defaults if missing)."""
+    import hashlib
+
+    content = None
+    if ignore_file is not None:
+        try:
+            content = Path(ignore_file).read_text()
+        except (OSError, IOError):
+            content = None
+
+    if content is None:
+        content = DEFAULT_TEMPLATE
+
+    digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    return digest
