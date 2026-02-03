@@ -16,6 +16,7 @@ Add a first-class **Index** concept so TLDR can:
 
 1. CLI supports `--scan-root`, `--cache-root`, `--index` and uses them consistently across:
    - `warm`, `semantic index/search`, `tree`, `structure`, `search`, `context`, `calls`, `impact`, `imports`, `importers`, daemon commands.
+   - `dead`, `arch`, `change-impact` (and any daemon/MCP wrappers that call these analyses).
    - Index flags work both **before and after** subcommands (argparse parent parser strategy; see “CLI Parsing” below).
 2. All caches are **namespaced per index** under `cache_root/.tldr/indexes/<index_key>/...`.
 3. Semantic indexing:
@@ -27,6 +28,7 @@ Add a first-class **Index** concept so TLDR can:
    - Default ignore file at `cache_root/.tldr/indexes/<index_key>/.tldrignore`.
    - Add `--ignore-file`, and `--use-gitignore/--no-gitignore`.
    - Default ignore includes `.tldr/` (and scanners hard-prune `.tldr/` to prevent self-indexing).
+   - Ignore configuration is persisted in `meta.json` and treated as part of the index’s stable configuration (see “Index metadata schema”).
 5. Daemon/MCP:
    - Legacy daemon identity (socket/lock/pid naming) is unchanged when **not** in index mode.
    - In index mode, daemon socket/lock/pid identity is keyed by `(cache_root, index_id)` (one daemon per index).
@@ -62,6 +64,7 @@ Implement index flags using an argparse **parent parser** attached to all subpar
 
 - Create `index_parent = argparse.ArgumentParser(add_help=False)` containing:
   - `--scan-root`, `--cache-root`, `--index`, `--ignore-file`, `--use-gitignore/--no-gitignore` (+ env resolution)
+  - optional cross-cutting write flags: `--force-rebind`, `--rebuild` (or attach these only to write subcommands)
 - Attach it to **every** subcommand parser via `parents=[index_parent]` (and do the same for nested subparsers):
   - `semantic index/search`
   - `daemon start/stop/status/query/notify`
@@ -76,6 +79,8 @@ Add index flags (and env vars) to all subcommands:
 - `--index <id>` (env `TLDR_INDEX`)
 - `--ignore-file <path>` (env `TLDR_IGNORE_FILE`)
 - `--use-gitignore` / `--no-gitignore` (env `TLDR_USE_GITIGNORE=1|0`)
+- `--force-rebind` (where applicable; see “Binding guard” below)
+- `--rebuild` (where applicable; forces overwrite of per-index caches)
 
 Precedence (highest → lowest):
 
@@ -83,13 +88,35 @@ Precedence (highest → lowest):
 2. env vars
 3. legacy defaults (current behavior)
 
+#### Write / overwrite flags (make explicit)
+
+Some commands build or mutate per-index caches. Standardize overwrite semantics:
+
+- `--force-rebind`:
+  - Allowed on commands that create/overwrite index state (`warm`, `semantic index`, daemon-triggered rebuilds, etc.).
+  - If an index directory already exists but is bound to a different `scan_root` (or has a different ignore configuration fingerprint), `--force-rebind` wipes that index directory, rewrites `meta.json`, and proceeds.
+- `--rebuild`:
+  - Forces overwrite of existing per-index caches (e.g., semantic FAISS index + metadata; optionally call graph/languages/dirty-derived caches).
+  - Should be supported at minimum by `tldr semantic index` (and optionally by `tldr warm`).
+
 ### Path semantics (positional vs `--scan-root`)
 
 - For subcommands with a positional directory `path` argument (e.g. `warm/tree/structure/search`), treat that positional value as the default `scan_root`.
 - `--scan-root` overrides the positional directory path.
 - If both are provided and resolve to different paths, exit with an error (avoid silently indexing the wrong tree).
 - For existing command-specific flags that represent a scan root (e.g. `context --project`, `semantic search --path`), keep them as aliases for `scan_root` for backward compatibility, but prefer documenting `--scan-root`.
-- These legacy aliases only set `scan_root`; they do not activate index mode (layout stays legacy unless `--cache-root` or `--index` is set).
+- These legacy aliases only set `scan_root`; they do not activate index mode (layout stays legacy unless `--cache-root` is set).
+
+### Optional convenience: `--scan-root` default from `meta.json` (quality-of-life)
+
+When querying an existing index, allow omitting `--scan-root`:
+
+- If `--cache-root` + `--index` identify an existing `meta.json`, default `scan_root` from meta for read-only commands (e.g. `semantic search`, `tree`, `search`, `context`, daemon query).
+- Still enforce binding:
+  - If the user provides an explicit `--scan-root` that differs from meta, error unless `--force-rebind`.
+- For write commands (`warm`, `semantic index`), either:
+  - require `--scan-root` explicitly, or
+  - default from meta (safer UX), but still require `--rebuild` / dirty checks as appropriate.
 
 ### Examples
 
@@ -148,6 +175,23 @@ Add a small module to centralize index concerns, e.g. `tldr/indexing/index.py`:
   - `semantic_metadata = semantic_dir/metadata.json`
   - `daemon_status = index_dir/status` (optional; stop writing `.tldr/status` under `scan_root`)
 
+- `IndexContext` (computed once per invocation; recommended):
+  - Purpose: centralize “which roots/paths/ignore rules are active” so command handlers don’t re-derive paths and accidentally write into `scan_root`.
+  - Fields (suggested):
+    - `mode: Literal["legacy", "index"]`
+    - `scan_root: Path`
+    - `cache_root: Path | None` (None in legacy)
+    - `index_id: str | None`
+    - `index_key: str | None`
+    - `paths: IndexPaths | LegacyPaths`
+    - `ignore_spec: IgnoreSpec | None`
+    - `workspace_root: Path | None` (where `.claude/workspace.json` is loaded from; see below)
+  - All CLI subcommands should build an `IndexContext` first and then pass it through to:
+    - call graph builders / warm
+    - semantic index/search
+    - analysis wrappers (`impact/dead/arch/context/change-impact`)
+    - daemon/MCP startup + request handling
+
 ### Index ID vs on-disk key
 
 To stay cross-platform, introduce a filesystem-safe `index_key`:
@@ -159,6 +203,15 @@ To stay cross-platform, introduce a filesystem-safe `index_key`:
   - Store the human-readable `index_id` in `meta.json` and use `tldr index list/info` to map keys back.
 
 Rationale: `:` and `/` are invalid on Windows; raw `index_id` cannot safely be used as a directory name.
+
+### Spec alignment (index_id vs on-disk key)
+
+The spec uses `cache_root/.tldr/indexes/<index_id>/...` as a conceptual layout. Implementation should be explicit that:
+
+- The on-disk directory name is `index_key`, not raw `index_id` (Windows path safety).
+- `meta.json` is the source of truth for mapping `index_key -> index_id`.
+- `tldr index list/info` is the canonical user surface for this mapping.
+- The spec examples elide internal subdirectories; this plan uses `indexes/<index_key>/cache/...` for most mutable caches to keep the index dir tidy. Tests/docs should assert against the actual layout.
 
 ### Index metadata schema + binding rules
 
@@ -173,6 +226,7 @@ Add a small `meta.json` schema (versioned) used by CLI, daemon, and index manage
 - `created_at: str` (ISO-8601)
 - `last_used_at: str` (ISO-8601; rate-limit updates to avoid constant rewrites)
 - `tldr_version: str` (optional; for future migrations)
+- `ignore: { ignore_file: str | null, use_gitignore: bool, gitignore_root_abs: str | null, fingerprint: str }` (persisted index config; see below)
 - `semantic: { model: str, dim: int, lang: str | null }` (optional; if semantic index exists)
 
 Binding guard (prevents silent cross-contamination):
@@ -181,8 +235,14 @@ Binding guard (prevents silent cross-contamination):
   - `meta.index_id == requested index_id`
   - Compare normalized paths using `Path(...).resolve()` and `os.path.normcase()` (Windows):
     - If `scan_root_rel_to_cache_root` is present and requested `scan_root` is under requested `cache_root`, prefer comparing the **relative** value (portable across moves).
-    - Otherwise compare `scan_root_abs`/`cache_root_abs`.
+    - Otherwise compare `scan_root_abs`.
   - Ensure `index_dir` is under `cache_root/.tldr/indexes`.
+  - **Do not hard-fail solely due to `cache_root_abs` mismatch.** Index dirs are already discovered under the current `cache_root`, and repos commonly move (CI temp dirs, user renames). Treat `cache_root_abs` as informational/debug and update it opportunistically (rate-limited) when opening the index.
+  - Treat ignore config as part of the stable index identity:
+    - Persist an `ignore.fingerprint = sha256(ignore file contents + CLI ignore patterns + use_gitignore + gitignore_root)` in `meta.json`.
+    - If the user passes ignore-related flags (`--ignore-file`, `--use-gitignore/--no-gitignore`) that would change the fingerprint, require an explicit override:
+      - either `--force-rebind` (wipe index dir, rewrite meta, rebuild as needed), or
+      - a dedicated future “reconfigure index ignore” command (optional enhancement).
 - On mismatch: **error** with actionable next steps:
   - choose a new `--index`
   - or run `tldr index rm <index_id>`
@@ -229,7 +289,10 @@ Two viable approaches; pick one early and keep it consistent:
 ### Option A (recommended): “Legacy mode” stays untouched
 
 - If the user does not provide any **index mode knobs** (`--cache-root`, `--index`, or env equivalents), keep current paths and behavior exactly.
-- Index mode activates only when `--cache-root` or `--index` (or env equivalents) is set.
+- Index mode requires a cache root:
+  - Index mode activates only when `--cache-root` (or env `TLDR_CACHE_ROOT`) is set.
+  - `--index` (or env `TLDR_INDEX`) selects/creates a namespace under that cache root.
+  - If `--index` is set but `--cache-root` is missing, exit with an error explaining that index mode requires an explicit cache root (to preserve the “no writes to scan_root” guarantee).
   - `--scan-root` by itself is allowed but **does not** change the cache layout (still legacy).
   - Positional paths and legacy alias flags (e.g. `context --project`, `semantic search --path`) only set `scan_root`; they do **not** activate index mode.
 - When index mode is active, use the new `indexes/<index_key>/...` layout.
@@ -270,12 +333,20 @@ Suggested interface:
 Default in index mode:
 
 - `ignore_file = index_dir/.tldrignore` (create if missing using existing DEFAULT_TEMPLATE)
-- Update DEFAULT_TEMPLATE to include:
+- Introduce two default templates to avoid “dependency index is empty” failures:
+  - `DEFAULT_TEMPLATE_PROJECT` (current behavior; includes `dist/`, `build/`, etc.)
+  - `DEFAULT_TEMPLATE_DEP` (minimal; **does not** ignore `dist/` / `build/` by default; still ignores nested `node_modules/`, VCS dirs, caches like `__pycache__/`, and TLDR state like `.tldr/`)
+- Update project-default ignore to include:
   - `.tldr/` (prevents self-indexing when cache_root is within scan_root)
   - optional: `.claude/` (often large/noisy)
 - Additionally, hard-prune `.tldr/` (and `indexes/`) in scanners regardless of ignore config to prevent recursion/self-indexing.
 - `use_gitignore = False` if `scan_root` looks like a dependency dir (`node_modules`, `.venv`, `site-packages`) OR if user passes `--no-gitignore`
 - `gitignore_root = <git toplevel for cache_root>` if `use_gitignore=True` (fallback to `cache_root` if not in a git repo)
+- If `use_gitignore=True` but gitignore would ignore most/all of `scan_root` (common for `node_modules/` inside a repo), warn loudly and/or auto-disable gitignore unless explicitly forced.
+- Persist ignore configuration in `meta.json`:
+  - On index creation, write `ignore.ignore_file` (prefer a path relative to `cache_root` when possible), `ignore.use_gitignore`, `ignore.gitignore_root_abs`, and `ignore.fingerprint`.
+  - On subsequent runs, if the user does **not** pass ignore-related flags, default to the ignore config stored in meta to keep caches consistent.
+  - If the user *does* pass ignore-related flags that would change the fingerprint, require `--force-rebind` (or an explicit “reconfigure ignore” flow).
 
 ### Plumbing: ensure all scanners use the same ignore rules
 
@@ -292,6 +363,15 @@ Thread ignore handling through all call sites that currently bypass CLI ignore c
   - stop constructing `IgnoreSpec(project, use_gitignore=True)` directly; use the daemon’s `IndexConfig`/`IndexPaths`-derived ignore spec.
 - Daemon startup:
   - stop creating `.tldrignore` inside `scan_root`; in index mode, create the ignore file at `IndexPaths.ignore_file` (or `--ignore-file` target).
+- **Commands that bypass ignore spec today (must-fix for feature correctness):**
+  - `tldr/api.py::get_relevant_context(...)`:
+    - replace direct `project.rglob("*")` walking with an ignore-aware scan (either reuse `scan_project_files(...)` with an index-derived `IgnoreSpec`, or thread an `IgnoreSpec` into the function).
+    - ensure the call graph build uses the same ignore rules.
+  - `tldr/analysis.py::{analyze_impact, analyze_dead_code, analyze_architecture}`:
+    - accept `ignore_spec: IgnoreSpec | None` (or accept `IndexContext/IndexConfig`) and pass it to call graph + structure builders.
+  - `tldr/change_impact.py`:
+    - must use index-scoped dirty flag path (via `IndexPaths.dirty`) and pass ignore spec into `scan_project_files(...)` and impact analysis.
+  - CLI handlers `context`, `impact`, `dead`, `arch`, `change-impact` must build the ignore spec from `IndexContext` and pass it through (including in daemon cached wrappers).
 
 ### Gitignore Root
 
@@ -301,6 +381,18 @@ Rule:
 
 - When `use_gitignore=True`, set `gitignore_root` to the actual git toplevel for `cache_root` (e.g., via `git -C <cache_root> rev-parse --show-toplevel`).
 - If that fails, treat as “not a git repo” and fall back to `cache_root` (gitignore checks become no-ops).
+
+### Workspace config (`.claude/workspace.json`)
+
+`cross_file_calls.build_project_call_graph(..., use_workspace_config=True)` loads workspace config from the *root it is given*. In index mode this can subtly change scope:
+
+- If `scan_root` is a package subdir in a monorepo, `.claude/workspace.json` likely lives at repo root (`cache_root`), not at `scan_root`.
+- Passing `scan_root` as the root will miss workspace config and change results compared to legacy behavior.
+
+Policy decision (make explicit and test/document):
+
+- In index mode, if `scan_root` is under `cache_root`, load workspace config from `cache_root` but apply it to scans rooted at `scan_root` (via a separate `workspace_root` / `workspace_config_root` parameter or by loading config explicitly and passing it through).
+- If `scan_root` is outside `cache_root`, disable workspace config by default (or require an explicit opt-in flag).
 
 ## Semantic Indexing Changes
 
@@ -382,7 +474,10 @@ Index mode increases concurrent read/write scenarios (CLI + daemon + background 
   - semantic metadata writes
 - All JSON writes (meta, call graph, languages, dirty, file_hashes, content_index) are **atomic**: write to a temp file in the same directory, then `os.replace()`.
 - FAISS index writes are **atomic**: write to a temp path then replace.
-- Add a per-index rebuild lock (e.g., `index_dir/index.lock`) for operations that rewrite multiple files (semantic rebuild, full warm).
+- Atomic replace prevents corruption but **not lost updates** for read-modify-write files.
+  - Protect all per-index state writes with a lock (recommended simplest: reuse `index_dir/index.lock` for *any* write to per-index state).
+  - At minimum, lock around updates to: `dirty.json`, `file_hashes.json`, `content_index.json`, and any “patching” updates to `call_graph.json`.
+  - Optionally split into `state.lock` (all writes) vs `rebuild.lock` (long rebuilds) if contention becomes an issue.
 
 ## Daemon + MCP Multi-Index Support
 
@@ -480,6 +575,9 @@ Audit and update every `.tldr/...` write in the repo so index mode never touches
 - `tldr/dirty_flag.py`: dirty.json path
 - `tldr/semantic.py`: semantic dir + ignore file creation location + `_find_project_root` bypass
 - `tldr/cross_file_calls.py` / `tldr/api.py::scan_project_files`: ignore plumbing
+- `tldr/api.py::get_relevant_context`: must stop bypassing ignore config via `rglob` and must honor index-scoped ignore
+- `tldr/analysis.py::analyze_impact/analyze_dead_code/analyze_architecture`: pass ignore spec through wrappers
+- `tldr/change_impact.py`: dirty flag path + impact/import scans must use index-scoped ignore + paths
 - `tldr/patch.py`: file_hashes.json
 - `tldr/dedup.py`: content_index.json
 - `tldr/stats.py`: stats dir + hook_activity.jsonl
@@ -527,12 +625,15 @@ Audit and update every `.tldr/...` write in the repo so index mode never touches
    - Run `tldr warm` (and optionally daemon start) with `scan_root=node_modules/pkg` and `cache_root=<repo>`.
    - Assert `scan_root/.tldr` and `scan_root/.tldrignore` are not created.
    - Run `tldr warm --background` with the same flags and assert the same.
+   - Run `tldr context`, `tldr impact`, `tldr dead`, `tldr arch`, and `tldr change-impact` with the same flags and assert the same (these commands currently bypass ignore/index plumbing and are a high regression risk).
 
 2. **Ignore plumbing consistency**
    - Ensure the same ignore rules apply to:
      - `scan_project_files` (importers)
      - `warm` scan
      - semantic unit extraction / language detection
+     - `context` (`get_relevant_context`) and `impact/dead/arch` analyses
+   - Add an index-scoped `.tldrignore` that excludes a known file/function and assert those commands do not report it.
 
 3. **Index binding guard**
    - Create index `A` bound to scan_root `A`.
@@ -558,12 +659,12 @@ Audit and update every `.tldr/...` write in the repo so index mode never touches
 ## Implementation Sequence (Phased)
 
 1. **Index core**
-   - Add `IndexConfig` + `IndexPaths` + meta read/write helpers
+   - Add `IndexConfig` + `IndexPaths` + `IndexContext` + meta read/write helpers
    - Implement binding validation + `--force-rebind`
 2. **CLI plumbing**
    - Add global flags/env resolution (parent parser attached to all subcommands)
-   - Implement index mode activation rule (`--cache-root` or `--index` only)
-   - Thread `IndexConfig` into relevant CLI handlers
+   - Implement index mode activation rule (`--cache-root` required; `--index` without `--cache-root` is an error)
+   - Thread `IndexContext` into all CLI handlers (and daemon/MCP construction)
 3. **State audit + namespacing**
    - Call graph + languages + dirty + semantic cache paths via `IndexPaths`
    - Patch/dedup/stats/daemon state migrated to `IndexPaths` (no scan_root writes)
@@ -571,8 +672,9 @@ Audit and update every `.tldr/...` write in the repo so index mode never touches
 4. **Ignore refactor**
    - Index-scoped ignore file creation + gitignore root derivation
    - Thread ignore spec into `cross_file_calls`, `api.scan_project_files`, semantic helpers, daemon cached queries
+   - Fix ignore bypasses in `api.get_relevant_context`, `analysis.py` wrappers, and `change_impact.py`
 5. **Atomic IO + locking**
-   - Atomic writes for all JSON + FAISS; per-index rebuild lock
+   - Atomic writes for all JSON + FAISS; lock around all per-index state writes
 6. **Daemon/MCP**
    - Daemon keyed by `(cache_root,index_id)` and uses correct scan_root
    - Preserve legacy daemon identity when not in index mode
@@ -585,9 +687,12 @@ Audit and update every `.tldr/...` write in the repo so index mode never touches
 ## Design Decisions (Recommended)
 
 1. **Positional path stays** for backward compatibility and convenience, and is treated as the default `scan_root`. `--scan-root` overrides it; specifying both with different resolved paths is an error.
-2. **Index mode activates** only when `--cache-root` or `--index` (or env equivalents) is set. `--scan-root` and legacy alias flags (`--project/--path`) only set `scan_root` and must not switch layouts. Ignore-only knobs (`--ignore-file`, `--use-gitignore/--no-gitignore`) must not switch layouts.
+2. **Index mode activates** only when `--cache-root` (or env `TLDR_CACHE_ROOT`) is set. `--index` (or env `TLDR_INDEX`) requires an explicit cache root and selects a namespace under it. `--scan-root` and legacy alias flags (`--project/--path`) only set `scan_root` and must not switch layouts. Ignore-only knobs (`--ignore-file`, `--use-gitignore/--no-gitignore`) must not switch layouts.
 3. **Semantic model mismatch is a hard error** when searching with an explicit `--model` that differs from metadata; rebuilding with a different model requires an explicit overwrite flag (recommend `--rebuild`).
-4. **Index binding is strict**: an existing `meta.json` must match `(cache_root, scan_root, index_id)` unless `--force-rebind` is used.
+4. **Index binding is strict (but portable)**:
+   - `meta.json` must match `index_id` and `scan_root` (prefer `scan_root_rel_to_cache_root` when available; otherwise `scan_root_abs`).
+   - Never hard-fail solely due to `cache_root_abs` mismatch (repos move); treat it as informational and update it opportunistically.
+   - Treat ignore config as part of the stable index config via `ignore.fingerprint`; changing ignore settings requires `--force-rebind` (or an explicit reconfigure flow).
 5. **Gitignore root is debuggable**: derive gitignore root from `git rev-parse --show-toplevel` for `cache_root`; fall back to `cache_root` if not in a git repo.
 6. **All writes are atomic** (temp + `os.replace()`), and long rebuilds take a per-index lock.
 7. **Rate-limit meta rewrites**: update `last_used_at` at most once every N minutes to reduce unnecessary IO.
