@@ -16,16 +16,20 @@ Add a first-class **Index** concept so TLDR can:
 
 1. CLI supports `--scan-root`, `--cache-root`, `--index` and uses them consistently across:
    - `warm`, `semantic index/search`, `tree`, `structure`, `search`, `context`, `calls`, `impact`, `imports`, `importers`, daemon commands.
+   - Index flags work both **before and after** subcommands (argparse parent parser strategy; see “CLI Parsing” below).
 2. All caches are **namespaced per index** under `cache_root/.tldr/indexes/<index_key>/...`.
 3. Semantic indexing:
    - Never “walks upward” to find the project root when explicit `--cache-root/--index` are provided.
    - Reads/writes FAISS + metadata only under the selected index directory.
-   - Stores the embedding model in index metadata and rejects mismatches (or forces explicit override).
+   - Stores a canonical embedding model id in index metadata and rejects mismatches (or forces explicit override).
+   - Validates FAISS dimensionality matches expected model dim and stored metadata dim.
 4. Ignore config is **index-scoped**:
    - Default ignore file at `cache_root/.tldr/indexes/<index_key>/.tldrignore`.
    - Add `--ignore-file`, and `--use-gitignore/--no-gitignore`.
+   - Default ignore includes `.tldr/` (and scanners hard-prune `.tldr/` to prevent self-indexing).
 5. Daemon/MCP:
-   - Daemon socket/lock/pid identity is keyed by `(cache_root, index_id)` (one daemon per index).
+   - Legacy daemon identity (socket/lock/pid naming) is unchanged when **not** in index mode.
+   - In index mode, daemon socket/lock/pid identity is keyed by `(cache_root, index_id)` (one daemon per index).
    - Daemon always uses the correct scan_root + index caches.
 6. Index management commands exist and are safe:
    - `tldr index list --cache-root ...`
@@ -36,6 +40,8 @@ Add a first-class **Index** concept so TLDR can:
    - Path resolution and collision avoidance across two indexes
    - Two indexes under one repo root don’t overwrite each other
    - Daemon queries for index A never read caches for index B
+   - Legacy mode behavior unchanged (cache layout + daemon identity)
+   - Background subprocesses in index mode propagate flags and don’t write to `scan_root`
 8. In index mode, TLDR performs **no writes to `scan_root`**:
    - All persisted TLDR state (call graph, languages, dirty, semantic, patch file hashes, dedup content index, hook stats, daemon status/config) lives under `cache_root/.tldr/...`.
    - Runtime-only daemon artifacts (socket/pid/lock/port) may remain in the OS temp dir.
@@ -50,7 +56,20 @@ Add a first-class **Index** concept so TLDR can:
 
 ### Global flags / env vars
 
-Add to top-level parser (applies to all subcommands):
+#### CLI Parsing (argparse)
+
+Implement index flags using an argparse **parent parser** attached to all subparsers so flags work **after** subcommands too (e.g. `tldr warm --cache-root ...`).
+
+- Create `index_parent = argparse.ArgumentParser(add_help=False)` containing:
+  - `--scan-root`, `--cache-root`, `--index`, `--ignore-file`, `--use-gitignore/--no-gitignore` (+ env resolution)
+- Attach it to **every** subcommand parser via `parents=[index_parent]` (and do the same for nested subparsers):
+  - `semantic index/search`
+  - `daemon start/stop/status/query/notify`
+  - `index list/info/rm/gc`
+
+#### Flags
+
+Add index flags (and env vars) to all subcommands:
 
 - `--scan-root <path>` (env `TLDR_SCAN_ROOT`)
 - `--cache-root <path>` (env `TLDR_CACHE_ROOT`)
@@ -70,6 +89,7 @@ Precedence (highest → lowest):
 - `--scan-root` overrides the positional directory path.
 - If both are provided and resolve to different paths, exit with an error (avoid silently indexing the wrong tree).
 - For existing command-specific flags that represent a scan root (e.g. `context --project`, `semantic search --path`), keep them as aliases for `scan_root` for backward compatibility, but prefer documenting `--scan-root`.
+- These legacy aliases only set `scan_root`; they do not activate index mode (layout stays legacy unless `--cache-root` or `--index` is set).
 
 ### Examples
 
@@ -87,7 +107,7 @@ Index a Python dep in `.venv`:
 tldr warm --cache-root . --scan-root .venv/lib/python3.12/site-packages/requests --index py:requests@2.31.0 --no-gitignore
 ```
 
-Default behavior (no flags): unchanged.
+Default behavior (no `--cache-root/--index`): unchanged.
 
 ## Index Model
 
@@ -110,6 +130,7 @@ Add a small module to centralize index concerns, e.g. `tldr/indexing/index.py`:
 - `IndexPaths` helper (covers **all persisted state**):
   - `tldr_dir = cache_root/.tldr/` (global)
   - `tldr_config = tldr_dir/config.json` (global; used by daemon config loading in index mode)
+  - `claude_settings = cache_root/.claude/settings.json` (global; used by daemon config loading in index mode)
   - `indexes_dir = tldr_dir/indexes/`
   - `index_dir = indexes_dir/<index_key>/`
   - `meta = index_dir/meta.json`
@@ -133,8 +154,9 @@ To stay cross-platform, introduce a filesystem-safe `index_key`:
 
 - Keep `index_id` as the stable external identifier shown to users and stored in `meta.json`.
 - Derive `index_key` via a deterministic encoding (recommended):
-  - `index_key = base32(sha256(index_id))[:16] + "-" + slug(index_id)[:48]`
-  - Store both fields in `meta.json` so list/info can map back.
+  - Prefer a **short hash-only** key to reduce Windows `MAX_PATH` risk:
+    - `index_key = base32(sha256(index_id))[:20]`
+  - Store the human-readable `index_id` in `meta.json` and use `tldr index list/info` to map keys back.
 
 Rationale: `:` and `/` are invalid on Windows; raw `index_id` cannot safely be used as a directory name.
 
@@ -145,10 +167,11 @@ Add a small `meta.json` schema (versioned) used by CLI, daemon, and index manage
 - `schema_version: int`
 - `index_id: str`
 - `index_key: str`
-- `scan_root: str` (resolved, normalized path string)
-- `cache_root: str` (resolved, normalized path string)
+- `scan_root_abs: str` (resolved, normalized path string)
+- `cache_root_abs: str` (resolved, normalized path string)
+- `scan_root_rel_to_cache_root: str | null` (portable when `scan_root` is under `cache_root`)
 - `created_at: str` (ISO-8601)
-- `last_used_at: str` (ISO-8601; update on reads/writes)
+- `last_used_at: str` (ISO-8601; rate-limit updates to avoid constant rewrites)
 - `tldr_version: str` (optional; for future migrations)
 - `semantic: { model: str, dim: int, lang: str | null }` (optional; if semantic index exists)
 
@@ -156,8 +179,10 @@ Binding guard (prevents silent cross-contamination):
 
 - If `index_dir/meta.json` exists, validate it matches the requested identity:
   - `meta.index_id == requested index_id`
-  - `meta.scan_root == requested scan_root` (after `Path(...).resolve()` normalization)
-  - `meta.cache_root == requested cache_root` (or at least that `index_dir` is under `cache_root/.tldr/indexes`)
+  - Compare normalized paths using `Path(...).resolve()` and `os.path.normcase()` (Windows):
+    - If `scan_root_rel_to_cache_root` is present and requested `scan_root` is under requested `cache_root`, prefer comparing the **relative** value (portable across moves).
+    - Otherwise compare `scan_root_abs`/`cache_root_abs`.
+  - Ensure `index_dir` is under `cache_root/.tldr/indexes`.
 - On mismatch: **error** with actionable next steps:
   - choose a new `--index`
   - or run `tldr index rm <index_id>`
@@ -188,7 +213,7 @@ Under `cache_root`:
         hook_activity.jsonl
 ```
 
-Keep existing single-index layout for legacy mode (no flags), at minimum:
+Keep existing single-index layout for legacy mode (no `--cache-root/--index`), at minimum:
 
 ```
 .tldr/cache/call_graph.json
@@ -203,8 +228,11 @@ Two viable approaches; pick one early and keep it consistent:
 
 ### Option A (recommended): “Legacy mode” stays untouched
 
-- If the user does not provide any **identity/location knobs** (`--cache-root`, `--scan-root`, `--index`, or env equivalents), keep current paths and behavior exactly.
-- If **any** identity/location knob is provided, switch into “index mode” and use the new `indexes/<index_key>/...` layout.
+- If the user does not provide any **index mode knobs** (`--cache-root`, `--index`, or env equivalents), keep current paths and behavior exactly.
+- Index mode activates only when `--cache-root` or `--index` (or env equivalents) is set.
+  - `--scan-root` by itself is allowed but **does not** change the cache layout (still legacy).
+  - Positional paths and legacy alias flags (e.g. `context --project`, `semantic search --path`) only set `scan_root`; they do **not** activate index mode.
+- When index mode is active, use the new `indexes/<index_key>/...` layout.
 - If in index mode and `--index` is omitted, auto-derive a deterministic `index_id` from `scan_root`:
   - Prefer `path:<scan_root relative to cache_root>` when `scan_root` is under `cache_root`.
   - Otherwise use `abs:<scan_root resolved>`.
@@ -242,6 +270,10 @@ Suggested interface:
 Default in index mode:
 
 - `ignore_file = index_dir/.tldrignore` (create if missing using existing DEFAULT_TEMPLATE)
+- Update DEFAULT_TEMPLATE to include:
+  - `.tldr/` (prevents self-indexing when cache_root is within scan_root)
+  - optional: `.claude/` (often large/noisy)
+- Additionally, hard-prune `.tldr/` (and `indexes/`) in scanners regardless of ignore config to prevent recursion/self-indexing.
 - `use_gitignore = False` if `scan_root` looks like a dependency dir (`node_modules`, `.venv`, `site-packages`) OR if user passes `--no-gitignore`
 - `gitignore_root = <git toplevel for cache_root>` if `use_gitignore=True` (fallback to `cache_root` if not in a git repo)
 
@@ -289,12 +321,14 @@ This collides across multiple scan roots inside the same repo.
    - Do not call `_find_project_root()`.
    - Read/write strictly within `index_paths.semantic_dir`.
 3. Persist model info:
-   - `meta.json` stores the selected embedding model (HF name) and dimension.
+   - Normalize to a single `canonical_model_id` for persistence and comparisons (e.g. always HF name):
+     - Handle both short keys (`bge-large-en-v1.5`) and HF ids (`BAAI/bge-large-en-v1.5`) without false mismatches.
+   - `meta.json` stores the selected embedding model (canonical id) and dimension.
    - `semantic/metadata.json` also stores model + dimension; enforce consistency.
 4. Model mismatch policy:
    - **Search:** if the user supplies `--model` and it does not match the model recorded in `semantic/metadata.json`, error (results would be invalid and FAISS dimensions may not match). If `--model` is omitted, always use the model recorded in metadata.
    - **Index build:** if an index already exists and the requested `--model` differs, require an explicit overwrite flag (recommend `--rebuild`) to overwrite.
-   - Always validate embedding **dimension** (from metadata vs FAISS index) before querying.
+   - Always validate embedding **dimension** (FAISS index dim == metadata dim == model dim) before querying.
 5. Ignore consistency:
    - Stop calling `ensure_tldrignore(project_root)` in index mode (never create `.tldrignore` under `scan_root`).
    - Build and pass a single `IgnoreSpec` (from `IndexConfig`) into:
@@ -334,11 +368,18 @@ The current codebase writes additional state under `.tldr/...` that must be move
 - Daemon status/pid/config:
   - Stop writing `.tldr/daemon.pid` and `.tldr/status` under `scan_root` in index mode; write status to `IndexPaths.daemon_status` (optional) and rely on temp-dir pid/lock for process identity.
   - Load daemon config from `IndexPaths.tldr_config` (i.e., under `cache_root/.tldr/`) instead of `scan_root/.tldr/config.json` in index mode.
+  - In index mode, read `.claude/settings.json` from `IndexPaths.claude_settings` (i.e., under `cache_root/.claude/`) instead of `scan_root/.claude/settings.json`.
 
 ## Atomic IO + Corruption Resistance
 
 Index mode increases concurrent read/write scenarios (CLI + daemon + background warm + semantic rebuild). Make persistence robust:
 
+- Introduce a shared helper (e.g. `atomic_write_text()` / `atomic_write_json()`) and update *all* persisted writers to use it:
+  - `dirty_flag.mark_dirty`
+  - `patch.save_file_hash_cache`
+  - `dedup.save`
+  - index `meta.json` writes
+  - semantic metadata writes
 - All JSON writes (meta, call graph, languages, dirty, file_hashes, content_index) are **atomic**: write to a temp file in the same directory, then `os.replace()`.
 - FAISS index writes are **atomic**: write to a temp path then replace.
 - Add a per-index rebuild lock (e.g., `index_dir/index.lock`) for operations that rewrite multiple files (semantic rebuild, full warm).
@@ -349,7 +390,8 @@ Index mode increases concurrent read/write scenarios (CLI + daemon + background 
 
 Update `tldr/daemon/startup.py` and `tldr/daemon/core.py`:
 
-- Replace “hash(project_path)” with “hash(cache_root + index_id)”.
+- Legacy mode: keep existing identity (socket/lock/pid naming) keyed exactly as today (e.g. hash of resolved scan root).
+- Index mode: use `hash(str(resolved_cache_root) + "\0" + index_id)` (or `index_key`) for identity.
 - Keep tmp files:
   - `/tmp/tldr-<hash>.sock`
   - `/tmp/tldr-<hash>.pid`
@@ -360,6 +402,10 @@ Windows note (port collisions):
 
 - Current deterministic port mapping can collide across multiple indexes.
 - Mitigation: on bind failure, choose an ephemeral free port and persist it to `/tmp/tldr-<hash>.port` so clients can reliably discover the chosen port.
+- Client discovery rule:
+  - If `port_file` exists, use it.
+  - Otherwise fall back to deterministic mapping.
+  - Clean up the port file on daemon shutdown and on `tldr index rm/gc`.
 
 ### Daemon config
 
@@ -370,18 +416,35 @@ Update TLDRDaemon to be created with `IndexConfig`:
 - All query handlers use:
   - `scan_root` for filesystem scans and relative paths
   - `index_paths.*` for caches
+- Config roots:
+  - In index mode, daemon reads `.claude/settings.json` from `cache_root` (not `scan_root`).
+  - In index mode, daemon reads `.tldr/config.json` from `cache_root/.tldr/config.json` (not `scan_root/.tldr/config.json`).
+  - Legacy behavior unchanged.
 
 ### CLI surface
 
 Update `tldr cli daemon {start,stop,status,query,notify}` to accept global index flags and propagate them to daemon startup/query.
+- In index mode, daemon start must not pre-create `.tldr/` or `.tldrignore` under `scan_root`.
 
 ### MCP server
 
 Update `tldr/mcp_server.py`:
 
 - Accept `--cache-root`, `--scan-root`, `--index` flags (and env vars).
-- Compute socket identity from `(cache_root, index_id)`.
+- Compute socket identity using the same legacy vs index-mode identity rules as the daemon.
 - When auto-starting the daemon, pass the same index flags through to `tldr cli daemon start ...`.
+- Enforce fixed index identity: if MCP is started with `--cache-root/--scan-root/--index`, reject or ignore per-call project args that don’t match to prevent accidental cross-index queries.
+
+## Subprocess Flag Propagation (Must-Fix)
+
+Any subprocess “re-exec” must preserve the active index configuration; otherwise it will silently revert to legacy layout and write to the wrong place.
+
+- Add a helper: `build_reexec_args(index_config, base_cmd: list[str]) -> list[str]`
+- Use it in:
+  - `tldr warm --background` spawn
+  - `tldr/session_warm.py` background warm spawn
+  - daemon semantic reindex subprocess (`_trigger_background_reindex()` or equivalent)
+  - MCP daemon auto-start
 
 ## Index Management Commands
 
@@ -400,12 +463,20 @@ Add `tldr index` subcommand tree in `tldr/cli.py`:
   - Removes indexes not used recently (based on `meta.json` timestamps)
   - Skip or refuse indexes with a running daemon unless `--force`
 
+### Optional enhancements
+
+- `tldr index init`:
+  - Creates `meta.json` + default ignore file without warming/indexing.
+- `tldr index prune-orphans` (or fold into `gc`):
+  - Removes index dirs missing/invalid `meta.json` (with `--force`).
+
 ## State Audit Checklist (Must-Do Before Coding)
 
 Audit and update every `.tldr/...` write in the repo so index mode never touches `scan_root`:
 
 - `tldr/cli.py`: call graph cache, languages cache, ignore file creation
-- `tldr/session_warm.py`: call graph cache path
+- `tldr/cli.py`: warm `--background` subprocess args must include index flags
+- `tldr/session_warm.py`: call graph cache path + background warm subprocess args must include index flags
 - `tldr/dirty_flag.py`: dirty.json path
 - `tldr/semantic.py`: semantic dir + ignore file creation location + `_find_project_root` bypass
 - `tldr/cross_file_calls.py` / `tldr/api.py::scan_project_files`: ignore plumbing
@@ -413,6 +484,8 @@ Audit and update every `.tldr/...` write in the repo so index mode never touches
 - `tldr/dedup.py`: content_index.json
 - `tldr/stats.py`: stats dir + hook_activity.jsonl
 - `tldr/daemon/core.py`: config loading, pid/status writes, call graph load/save path consistency
+- `tldr/daemon/core.py`: background semantic reindex subprocess args must include index flags
+- `tldr/cli.py` daemon start: stop pre-creating `.tldr/` under `scan_root` in index mode
 - `tldr/daemon/cached_queries.py`: ignore spec must come from `IndexConfig`/`IndexPaths`
 
 ## Testing Plan
@@ -433,10 +506,10 @@ Audit and update every `.tldr/...` write in the repo so index mode never touches
 - Create a tmp “repo” directory as `cache_root`
 - Create two “deps” as separate scan roots with distinct code
 - Run:
-  - `build_semantic_index(scan_root=A, cache_root=repo, index=A)`
-  - `build_semantic_index(scan_root=B, cache_root=repo, index=B)`
+  - `build_semantic_index(scan_root=A, cache_root=repo, index=A, model=TEST_MODEL)`
+  - `build_semantic_index(scan_root=B, cache_root=repo, index=B, model=TEST_MODEL)`
 - Assert:
-  - `repo/.tldr/indexes/<A>/cache/semantic/...` and `<B>/cache/semantic/...` both exist
+  - `repo/.tldr/indexes/<key(A)>/cache/semantic/...` and `repo/.tldr/indexes/<key(B)>/cache/semantic/...` both exist
   - `semantic_search(..., index=A)` never opens B’s FAISS
   - Results differ by content (each dep has a uniquely-named function)
 
@@ -453,6 +526,7 @@ Audit and update every `.tldr/...` write in the repo so index mode never touches
 1. **No writes to scan_root (index mode)**
    - Run `tldr warm` (and optionally daemon start) with `scan_root=node_modules/pkg` and `cache_root=<repo>`.
    - Assert `scan_root/.tldr` and `scan_root/.tldrignore` are not created.
+   - Run `tldr warm --background` with the same flags and assert the same.
 
 2. **Ignore plumbing consistency**
    - Ensure the same ignore rules apply to:
@@ -471,13 +545,24 @@ Audit and update every `.tldr/...` write in the repo so index mode never touches
 5. **Windows port collision fallback (if implemented)**
    - Simulate two index identities mapping to the same deterministic port and ensure daemon startup still succeeds using the persisted port file.
 
+6. **Legacy mode unchanged**
+   - Run `tldr warm .` with no index knobs and assert legacy caches are written under `./.tldr/cache/...` and no `./.tldr/indexes/` directory is created.
+   - Start daemon with no index knobs and assert socket identity matches legacy naming (no `(cache_root,index_id)` identity applied).
+
+### Test performance constraints
+
+- Avoid large model downloads in CI:
+  - Use `all-MiniLM-L6-v2` (or similar small model) for integration tests via an env guard like `TLDR_TEST_MODEL`.
+  - Alternatively monkeypatch embedding/model resolution in tests.
+
 ## Implementation Sequence (Phased)
 
 1. **Index core**
    - Add `IndexConfig` + `IndexPaths` + meta read/write helpers
    - Implement binding validation + `--force-rebind`
 2. **CLI plumbing**
-   - Add global flags/env resolution
+   - Add global flags/env resolution (parent parser attached to all subcommands)
+   - Implement index mode activation rule (`--cache-root` or `--index` only)
    - Thread `IndexConfig` into relevant CLI handlers
 3. **State audit + namespacing**
    - Call graph + languages + dirty + semantic cache paths via `IndexPaths`
@@ -490,6 +575,7 @@ Audit and update every `.tldr/...` write in the repo so index mode never touches
    - Atomic writes for all JSON + FAISS; per-index rebuild lock
 6. **Daemon/MCP**
    - Daemon keyed by `(cache_root,index_id)` and uses correct scan_root
+   - Preserve legacy daemon identity when not in index mode
    - Windows port collision mitigation if using TCP
 7. **Index commands**
    - list/info/rm/gc with “refuse to delete running daemon” safety checks
@@ -499,8 +585,9 @@ Audit and update every `.tldr/...` write in the repo so index mode never touches
 ## Design Decisions (Recommended)
 
 1. **Positional path stays** for backward compatibility and convenience, and is treated as the default `scan_root`. `--scan-root` overrides it; specifying both with different resolved paths is an error.
-2. **Index mode activates** only when an identity/location knob is set (`--cache-root`, `--scan-root`, `--index` or env equivalents). Ignore-only knobs (`--ignore-file`, `--use-gitignore/--no-gitignore`) must not switch layouts.
+2. **Index mode activates** only when `--cache-root` or `--index` (or env equivalents) is set. `--scan-root` and legacy alias flags (`--project/--path`) only set `scan_root` and must not switch layouts. Ignore-only knobs (`--ignore-file`, `--use-gitignore/--no-gitignore`) must not switch layouts.
 3. **Semantic model mismatch is a hard error** when searching with an explicit `--model` that differs from metadata; rebuilding with a different model requires an explicit overwrite flag (recommend `--rebuild`).
 4. **Index binding is strict**: an existing `meta.json` must match `(cache_root, scan_root, index_id)` unless `--force-rebind` is used.
 5. **Gitignore root is debuggable**: derive gitignore root from `git rev-parse --show-toplevel` for `cache_root`; fall back to `cache_root` if not in a git repo.
 6. **All writes are atomic** (temp + `os.replace()`), and long rebuilds take a per-index lock.
+7. **Rate-limit meta rewrites**: update `last_used_at` at most once every N minutes to reduce unnecessary IO.
