@@ -5,19 +5,18 @@ Holds indexes in memory and handles commands via Unix/TCP socket.
 """
 
 import atexit
-import hashlib
 import json
 import logging
 import os
 import signal
 import socket
 import sys
-import tempfile
 import time
 from pathlib import Path
 from typing import Any, Optional
 
 from tldr.dedup import ContentHashedIndex
+from tldr.indexing import IndexContext
 from tldr.salsa import SalsaDB
 from tldr.stats import (
     HookStats,
@@ -42,6 +41,14 @@ from .cached_queries import (
     cached_structure,
     cached_tree,
 )
+from .identity import (
+    clear_port_file,
+    get_connection_info,
+    get_pid_path,
+    get_socket_path,
+    resolve_daemon_identity_from_context,
+    write_port_file,
+)
 
 # Idle timeout: 30 minutes
 IDLE_TIMEOUT = 30 * 60
@@ -57,18 +64,44 @@ class TLDRDaemon:
     Automatically shuts down after IDLE_TIMEOUT seconds of inactivity.
     """
 
-    def __init__(self, project_path: Path):
+    def __init__(self, project_path: Path, index_ctx: IndexContext | None = None):
         """
         Initialize the daemon for a project.
 
         Args:
             project_path: Root path of the project to index
+            index_ctx: Optional IndexContext for index-mode operation
         """
-        self.project = project_path
-        self.tldr_dir = project_path / ".tldr"
-        self.socket_path = self._compute_socket_path()
+        self.index_ctx = index_ctx
+        self.index_paths = index_ctx.paths if index_ctx is not None else None
+        self.index_config = index_ctx.config if index_ctx is not None else None
+
+        self.project = (
+            index_ctx.scan_root if index_ctx is not None else Path(project_path)
+        ).resolve()
+
+        self.identity = resolve_daemon_identity_from_context(
+            index_ctx, scan_root=self.project
+        )
+        self.socket_path = get_socket_path(self.identity)
         self.last_query = time.time()
         self.indexes: dict[str, Any] = {}
+
+        if self.index_paths is not None:
+            self.tldr_dir = self.index_paths.index_dir
+            self.cache_dir = self.index_paths.cache_dir
+            self._tldr_config_path = self.index_paths.tldr_config
+            self._claude_settings_path = self.index_paths.claude_settings
+            self._status_path = self.index_paths.daemon_status
+        else:
+            self.tldr_dir = self.project / ".tldr"
+            self.cache_dir = self.tldr_dir / "cache"
+            self._tldr_config_path = self.tldr_dir / "config.json"
+            self._claude_settings_path = self.project / ".claude" / "settings.json"
+            self._status_path = self.tldr_dir / "status"
+
+        self._ignore_spec = self._build_ignore_spec()
+        self._workspace_root = self._resolve_workspace_root()
 
         # Internal state
         self._status = "initializing"
@@ -92,7 +125,8 @@ class TLDRDaemon:
         self._stats_store: StatsStore = get_default_store()
 
         # P8 Features: Per-hook activity stats tracking with persistence
-        self._hook_stats_store: HookStatsStore = HookStatsStore(project_path)
+        stats_dir = self.index_paths.stats_dir if self.index_paths is not None else None
+        self._hook_stats_store = HookStatsStore(self.project, stats_dir=stats_dir)
         self._hook_stats: dict[str, HookStats] = self._hook_stats_store.load()
         self._hook_stats_baseline: dict[str, HookStats] = self._snapshot_hook_stats()
         self._hook_invocation_count: int = 0
@@ -105,9 +139,34 @@ class TLDRDaemon:
 
     def _compute_socket_path(self) -> Path:
         """Compute deterministic socket path from project path."""
-        hash_val = hashlib.md5(str(Path(self.project).resolve()).encode()).hexdigest()[:8]
-        tmp_dir = tempfile.gettempdir()
-        return Path(tmp_dir) / f"tldr-{hash_val}.sock"
+        return get_socket_path(self.identity)
+
+    def _build_ignore_spec(self):
+        """Build ignore spec for this daemon (index-aware)."""
+        from tldr.tldrignore import IgnoreSpec
+
+        if self.index_config is not None:
+            if self.index_config.no_ignore:
+                return None
+            cli_patterns = list(self.index_config.cli_patterns or ())
+            return IgnoreSpec(
+                project_dir=self.project,
+                use_gitignore=self.index_config.use_gitignore,
+                cli_patterns=cli_patterns if cli_patterns else None,
+                ignore_file=self.index_config.ignore_file,
+                gitignore_root=self.index_config.gitignore_root,
+            )
+
+        return IgnoreSpec(self.project, use_gitignore=True)
+
+    def _resolve_workspace_root(self) -> Path | None:
+        if self.index_config is None:
+            return None
+        try:
+            self.project.resolve().relative_to(self.index_config.cache_root.resolve())
+        except ValueError:
+            return None
+        return self.index_config.cache_root
 
     def _load_semantic_config(self) -> dict:
         """Load semantic search configuration.
@@ -125,7 +184,7 @@ class TLDRDaemon:
         }
 
         # Try Claude settings first
-        claude_settings = self.project / ".claude" / "settings.json"
+        claude_settings = self._claude_settings_path
         if claude_settings.exists():
             try:
                 settings = json.loads(claude_settings.read_text())
@@ -135,7 +194,7 @@ class TLDRDaemon:
                 logger.warning(f"Failed to load Claude settings: {e}")
 
         # Try TLDR config
-        tldr_config = self.tldr_dir / "config.json"
+        tldr_config = self._tldr_config_path
         if tldr_config.exists():
             try:
                 config = json.loads(tldr_config.read_text())
@@ -152,14 +211,7 @@ class TLDRDaemon:
         On Windows, uses TCP on localhost with a deterministic port.
         On Unix (Linux/macOS), uses Unix domain sockets.
         """
-        if sys.platform == "win32":
-            # TCP on localhost with deterministic port from hash
-            hash_val = hashlib.md5(str(self.project).encode()).hexdigest()[:8]
-            port = 49152 + (int(hash_val, 16) % 10000)
-            return ("127.0.0.1", port)
-        else:
-            # Unix socket path
-            return (str(self.socket_path), None)
+        return get_connection_info(self.identity)
 
     def is_idle(self) -> bool:
         """Check if daemon has been idle longer than IDLE_TIMEOUT."""
@@ -392,6 +444,7 @@ class TLDRDaemon:
                 str(self.project),
                 pattern,
                 max_results,
+                self._ignore_spec,
             )
         except Exception as e:
             logger.exception("Search failed")
@@ -469,7 +522,11 @@ class TLDRDaemon:
         if "call_graph" in self.indexes:
             return
 
-        call_graph_path = self.tldr_dir / "call_graph.json"
+        call_graph_path = (
+            self.index_paths.call_graph
+            if self.index_paths is not None
+            else self.cache_dir / "call_graph.json"
+        )
         if call_graph_path.exists():
             try:
                 self.indexes["call_graph"] = json.loads(call_graph_path.read_text())
@@ -494,6 +551,8 @@ class TLDRDaemon:
                 str(self.project),
                 entry_tuple,
                 language,
+                self._ignore_spec,
+                self._workspace_root,
             )
         except Exception as e:
             logger.exception("Dead code analysis failed")
@@ -508,6 +567,8 @@ class TLDRDaemon:
                 self.salsa_db,
                 str(self.project),
                 language,
+                self._ignore_spec,
+                self._workspace_root,
             )
         except Exception as e:
             logger.exception("Architecture analysis failed")
@@ -582,7 +643,12 @@ class TLDRDaemon:
         try:
             language = command.get("language", "python")
             from tldr.cross_file_calls import build_project_call_graph
-            graph = build_project_call_graph(self.project, language=language)
+            graph = build_project_call_graph(
+                self.project,
+                language=language,
+                ignore_spec=self._ignore_spec,
+                workspace_root=self._workspace_root,
+            )
             result = {
                 "edges": [
                     {"from_file": e[0], "from_func": e[1], "to_file": e[2], "to_func": e[3]}
@@ -601,11 +667,22 @@ class TLDRDaemon:
             language = command.get("language", "python")
             from tldr.cross_file_calls import scan_project, build_project_call_graph
 
-            files = scan_project(self.project, language=language)
-            graph = build_project_call_graph(self.project, language=language)
+            respect_ignore = self._ignore_spec is not None
+            files = scan_project(
+                self.project,
+                language=language,
+                respect_ignore=respect_ignore,
+                ignore_spec=self._ignore_spec,
+            )
+            graph = build_project_call_graph(
+                self.project,
+                language=language,
+                ignore_spec=self._ignore_spec,
+                workspace_root=self._workspace_root,
+            )
 
             # Create cache directory and save
-            cache_dir = self.tldr_dir / "cache"
+            cache_dir = self.cache_dir
             cache_dir.mkdir(parents=True, exist_ok=True)
             cache_file = cache_dir / "call_graph.json"
             cache_data = {
@@ -635,7 +712,13 @@ class TLDRDaemon:
 
             if action == "index":
                 language = command.get("language", "python")
-                count = build_semantic_index(str(self.project), lang=language)
+                count = build_semantic_index(
+                    str(self.project),
+                    lang=language,
+                    ignore_spec=self._ignore_spec,
+                    index_paths=self.index_paths,
+                    index_config=self.index_config,
+                )
                 return {"status": "ok", "indexed": count}
 
             elif action == "search":
@@ -643,7 +726,13 @@ class TLDRDaemon:
                 if not query:
                     return {"status": "error", "message": "Missing required parameter: query"}
                 k = command.get("k", 10)
-                results = semantic_search(str(self.project), query, k=k)
+                results = semantic_search(
+                    str(self.project),
+                    query,
+                    k=k,
+                    index_paths=self.index_paths,
+                    index_config=self.index_config,
+                )
                 return {"status": "ok", "results": results}
 
             else:
@@ -665,6 +754,7 @@ class TLDRDaemon:
                 str(self.project),
                 ext_tuple,
                 exclude_hidden,
+                self._ignore_spec,
             )
         except Exception as e:
             logger.exception("File tree failed")
@@ -681,6 +771,7 @@ class TLDRDaemon:
                 str(self.project),
                 language,
                 max_results,
+                self._ignore_spec,
             )
         except Exception as e:
             logger.exception("Code structure failed")
@@ -702,6 +793,8 @@ class TLDRDaemon:
                 entry,
                 language,
                 depth,
+                self._ignore_spec,
+                self._workspace_root,
             )
         except Exception as e:
             logger.exception("Relevant context failed")
@@ -739,6 +832,7 @@ class TLDRDaemon:
                 str(self.project),
                 module,
                 language,
+                self._ignore_spec,
             )
         except Exception as e:
             logger.exception("Importers lookup failed")
@@ -749,7 +843,8 @@ class TLDRDaemon:
         if self.dedup_index is not None:
             return
 
-        self.dedup_index = ContentHashedIndex(str(self.project))
+        cache_dir = self.index_paths.cache_dir if self.index_paths is not None else None
+        self.dedup_index = ContentHashedIndex(str(self.project), cache_dir=cache_dir)
 
         # Try to load persisted index
         if self.dedup_index.load():
@@ -843,9 +938,25 @@ class TLDRDaemon:
 
                 # Run semantic index command
                 cmd = [
-                    sys.executable, "-m", "tldr.cli",
-                    "semantic", "index", str(self.project)
+                    sys.executable,
+                    "-m",
+                    "tldr.cli",
+                    "semantic",
+                    "index",
+                    str(self.project),
                 ]
+                if self.index_config is not None:
+                    cmd.extend(["--cache-root", str(self.index_config.cache_root)])
+                    cmd.extend(["--index", str(self.index_config.index_id)])
+                    if self.index_config.ignore_file is not None:
+                        cmd.extend(["--ignore-file", str(self.index_config.ignore_file)])
+                    if self.index_config.no_ignore:
+                        cmd.append("--no-ignore")
+                    elif self.index_config.use_gitignore is False:
+                        cmd.append("--no-gitignore")
+                    if self.index_config.cli_patterns:
+                        for pattern in self.index_config.cli_patterns:
+                            cmd.extend(["--ignore", pattern])
                 result = subprocess.run(
                     cmd,
                     capture_output=True,
@@ -1055,7 +1166,16 @@ class TLDRDaemon:
             # Search for imports of this module in test files
             try:
                 from tldr.cross_file_calls import scan_project
-                test_files = [f for f in scan_project(self.project) if "test" in f.lower()]
+                respect_ignore = self._ignore_spec is not None
+                test_files = [
+                    f
+                    for f in scan_project(
+                        self.project,
+                        respect_ignore=respect_ignore,
+                        ignore_spec=self._ignore_spec,
+                    )
+                    if "test" in f.lower()
+                ]
 
                 for test_file in test_files:
                     try:
@@ -1112,9 +1232,7 @@ class TLDRDaemon:
 
     def _get_tmp_pid_path(self) -> Path:
         """Get PID file path in temp dir (matches socket path pattern)."""
-        hash_val = hashlib.md5(str(Path(self.project).resolve()).encode()).hexdigest()[:8]
-        tmp_dir = tempfile.gettempdir()
-        return Path(tmp_dir) / f"tldr-{hash_val}.pid"
+        return get_pid_path(self.identity)
 
     def write_pid_file(self):
         """Write daemon PID to .tldr/daemon.pid (and /tmp if not already done).
@@ -1124,28 +1242,35 @@ class TLDRDaemon:
         """
         pid = str(os.getpid())
 
-        # Write to .tldr/daemon.pid (backwards compat)
-        self.tldr_dir.mkdir(parents=True, exist_ok=True)
-        pid_file = self.tldr_dir / "daemon.pid"
-        pid_file.write_text(pid)
+        # Write to .tldr/daemon.pid (legacy only)
+        pid_file = None
+        if self.index_paths is None:
+            self.tldr_dir.mkdir(parents=True, exist_ok=True)
+            pid_file = self.tldr_dir / "daemon.pid"
+            pid_file.write_text(pid)
 
         # Only write to /tmp if startup.py didn't already (legacy path)
         if self._pidfile is None:
             tmp_pid_file = self._get_tmp_pid_path()
             tmp_pid_file.write_text(pid)
-            logger.info(f"Wrote PID {pid} to {pid_file} and {tmp_pid_file}")
+            if pid_file is not None:
+                logger.info(f"Wrote PID {pid} to {pid_file} and {tmp_pid_file}")
+            else:
+                logger.info(f"Wrote PID {pid} to {tmp_pid_file}")
         else:
-            logger.info(f"Wrote PID {pid} to {pid_file} (lock held by startup)")
+            if pid_file is not None:
+                logger.info(f"Wrote PID {pid} to {pid_file} (lock held by startup)")
 
     def remove_pid_file(self):
         """Remove PID files and release lock."""
-        # Remove .tldr/daemon.pid
-        pid_file = self.tldr_dir / "daemon.pid"
-        if pid_file.exists():
-            try:
-                pid_file.unlink()
-            except OSError:
-                pass
+        # Remove .tldr/daemon.pid (legacy only)
+        if self.index_paths is None:
+            pid_file = self.tldr_dir / "daemon.pid"
+            if pid_file.exists():
+                try:
+                    pid_file.unlink()
+                except OSError:
+                    pass
 
         # Close and remove /tmp/tldr-{hash}.pid
         # If _pidfile is set, closing it releases the flock
@@ -1165,19 +1290,22 @@ class TLDRDaemon:
             except OSError:
                 pass
 
+        # Clear Windows port file if present
+        clear_port_file(self.identity)
+
         logger.info("Removed PID files")
 
     def write_status(self, status: str):
         """Write status to .tldr/status file."""
-        self.tldr_dir.mkdir(parents=True, exist_ok=True)
-        status_file = self.tldr_dir / "status"
+        status_file = self._status_path
+        status_file.parent.mkdir(parents=True, exist_ok=True)
         status_file.write_text(status)
         self._status = status
         logger.info(f"Status: {status}")
 
     def read_status(self) -> str:
         """Read status from .tldr/status file."""
-        status_file = self.tldr_dir / "status"
+        status_file = self._status_path
         if status_file.exists():
             return status_file.read_text().strip()
         return "unknown"
@@ -1202,7 +1330,13 @@ class TLDRDaemon:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             addr, port = self._get_connection_info()
-            sock.bind((addr, port))
+            try:
+                sock.bind((addr, port))
+            except OSError:
+                # Port collision: fall back to ephemeral port and persist it
+                sock.bind((addr, 0))
+                port = sock.getsockname()[1]
+            write_port_file(self.identity, port)
             sock.listen(5)
             sock.settimeout(1.0)
             logger.info(f"Listening on {addr}:{port}")

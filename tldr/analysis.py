@@ -368,6 +368,8 @@ def analyze_impact(
     max_depth: int = 3,
     target_file: str | None = None,
     language: str = "python",
+    ignore_spec=None,
+    workspace_root: str | None = None,
 ) -> dict:
     """Convenience wrapper that builds call graph from path.
 
@@ -383,7 +385,12 @@ def analyze_impact(
     """
     from .api import build_project_call_graph
 
-    call_graph = build_project_call_graph(path, language=language)
+    call_graph = build_project_call_graph(
+        path,
+        language=language,
+        ignore_spec=ignore_spec,
+        workspace_root=workspace_root,
+    )
     return impact_analysis(call_graph, target_func, max_depth, target_file)
 
 
@@ -391,6 +398,8 @@ def analyze_dead_code(
     path: str,
     entry_points: list[str] | None = None,
     language: str = "python",
+    ignore_spec=None,
+    workspace_root: str | None = None,
 ) -> dict:
     """Convenience wrapper that builds call graph from path.
 
@@ -404,8 +413,18 @@ def analyze_dead_code(
     """
     from .api import build_project_call_graph, get_code_structure
 
-    call_graph = build_project_call_graph(path, language=language)
-    structure = get_code_structure(path, language=language, max_results=1000)
+    call_graph = build_project_call_graph(
+        path,
+        language=language,
+        ignore_spec=ignore_spec,
+        workspace_root=workspace_root,
+    )
+    structure = get_code_structure(
+        path,
+        language=language,
+        max_results=1000,
+        ignore_spec=ignore_spec,
+    )
 
     # Build function list from structure
     all_functions = []
@@ -417,7 +436,12 @@ def analyze_dead_code(
     return dead_code_analysis(call_graph, all_functions, entry_points)
 
 
-def analyze_architecture(path: str, language: str = "python") -> dict:
+def analyze_architecture(
+    path: str,
+    language: str = "python",
+    ignore_spec=None,
+    workspace_root: str | None = None,
+) -> dict:
     """Convenience wrapper that builds call graph from path.
 
     Args:
@@ -429,5 +453,10 @@ def analyze_architecture(path: str, language: str = "python") -> dict:
     """
     from .api import build_project_call_graph
 
-    call_graph = build_project_call_graph(path, language=language)
+    call_graph = build_project_call_graph(
+        path,
+        language=language,
+        ignore_spec=ignore_spec,
+        workspace_root=workspace_root,
+    )
     return architecture_analysis(call_graph)

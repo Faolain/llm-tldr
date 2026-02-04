@@ -112,6 +112,7 @@ def find_tests_importing_module(
     project_path: str,
     module_name: str,
     language: str = "python",
+    ignore_spec=None,
 ) -> list[str]:
     """
     Find test files that import a given module.
@@ -123,7 +124,11 @@ def find_tests_importing_module(
     importing_tests = []
 
     try:
-        all_files = scan_project_files(str(project), language=language)
+        all_files = scan_project_files(
+            str(project),
+            language=language,
+            ignore_spec=ignore_spec,
+        )
         test_files = [f for f in all_files if is_test_file(f)]
 
         for test_file in test_files:
@@ -154,6 +159,8 @@ def find_affected_tests(
     changed_files: list[str],
     language: str = "python",
     max_depth: int = 5,
+    ignore_spec=None,
+    workspace_root: str | None = None,
 ) -> dict:
     """
     Find test files affected by changes to the given files.
@@ -204,6 +211,8 @@ def find_affected_tests(
                 func_name,
                 max_depth=max_depth,
                 language=language,
+                ignore_spec=ignore_spec,
+                workspace_root=workspace_root,
             )
 
             # Walk the caller tree and collect test files
@@ -237,14 +246,18 @@ def find_affected_tests(
         module_name = get_module_name(str(abs_path), str(project))
         if module_name:
             importing_tests = find_tests_importing_module(
-                str(project), module_name, language
+                str(project), module_name, language, ignore_spec=ignore_spec
             )
             affected_tests.update(importing_tests)
 
     # Count total test files for skip calculation
     all_test_files = []
     try:
-        all_files = scan_project_files(str(project), language=language)
+        all_files = scan_project_files(
+            str(project),
+            language=language,
+            ignore_spec=ignore_spec,
+        )
         all_test_files = [f for f in all_files if is_test_file(f)]
     except Exception:
         pass
@@ -312,6 +325,8 @@ def analyze_change_impact(
     git_base: str = "HEAD~1",
     language: str = "python",
     max_depth: int = 5,
+    ignore_spec=None,
+    workspace_root: str | None = None,
 ) -> dict:
     """
     Main entry point for change impact analysis.
@@ -386,6 +401,8 @@ def analyze_change_impact(
         source_files + test_files,
         language=language,
         max_depth=max_depth,
+        ignore_spec=ignore_spec,
+        workspace_root=workspace_root,
     )
     result["source"] = source
 

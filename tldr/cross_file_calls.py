@@ -18,7 +18,7 @@ import ast
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Optional
 
 from tldr.workspace import WorkspaceConfig, load_workspace_config, filter_paths
 
@@ -279,6 +279,8 @@ def scan_project(
     language: str = "python",
     workspace_config: Optional[WorkspaceConfig] = None,
     respect_ignore: bool = True,
+    ignore_spec=None,
+    workspace_root: Optional[Path] = None,
 ) -> list[str]:
     """
     Find all source files in the project for the given language.
@@ -288,18 +290,20 @@ def scan_project(
         language: "python", "typescript", "go", or "rust"
         workspace_config: Optional WorkspaceConfig for monorepo scoping.
                          If provided, filters files by activePackages and excludePatterns.
-        respect_ignore: If True, respect .tldrignore patterns (default True)
+        respect_ignore: If True, respect ignore patterns (default True)
+        ignore_spec: Optional ignore spec (tldrignore.IgnoreSpec or pathspec.PathSpec)
 
     Returns:
         List of absolute paths to source files
     """
-    from .tldrignore import load_ignore_patterns, should_ignore
+    from .tldrignore import IgnoreSpec
 
     root = Path(root)
     files = []
 
-    # Load ignore patterns if respecting .tldrignore
-    ignore_spec = load_ignore_patterns(root) if respect_ignore else None
+    # Load ignore patterns if respecting ignore rules
+    if respect_ignore and ignore_spec is None:
+        ignore_spec = IgnoreSpec(root)
 
     if language == "python":
         extensions = {'.py'}
@@ -339,17 +343,20 @@ def scan_project(
         raise ValueError(f"Unsupported language: {language}")
 
     for dirpath, dirnames, filenames in os.walk(root):
+        # Always prune TLDR cache dir to avoid self-indexing
+        dirnames[:] = [d for d in dirnames if d != ".tldr"]
+
         # Skip ignored directories (modifying dirnames in-place prunes os.walk)
         if respect_ignore and ignore_spec:
             rel_dir = os.path.relpath(dirpath, root)
             # Check if current directory should be ignored
-            if rel_dir != '.' and should_ignore(rel_dir + '/', root, ignore_spec):
+            if rel_dir != '.' and ignore_spec.match_file(rel_dir + '/'):
                 dirnames.clear()  # Don't descend into ignored directories
                 continue
             # Filter subdirectories
             dirnames[:] = [
                 d for d in dirnames
-                if not should_ignore(os.path.join(rel_dir, d) + '/', root, ignore_spec)
+                if not ignore_spec.match_file(os.path.join(rel_dir, d) + '/')
             ]
 
         for filename in filenames:
@@ -358,7 +365,7 @@ def scan_project(
                 # Check individual file against ignore patterns
                 if respect_ignore and ignore_spec:
                     rel_path = os.path.relpath(file_path, root)
-                    if should_ignore(rel_path, root, ignore_spec):
+                    if ignore_spec.match_file(rel_path):
                         continue
                 files.append(file_path)
 
@@ -366,8 +373,29 @@ def scan_project(
     if workspace_config is not None:
         # Convert absolute paths to relative for filtering, then back to absolute
         rel_files = [os.path.relpath(f, root) for f in files]
-        filtered_rel = filter_paths(rel_files, workspace_config)
-        files = [os.path.join(root, f) for f in filtered_rel]
+
+        workspace_prefix = None
+        if workspace_root is not None:
+            try:
+                prefix = Path(root).resolve().relative_to(Path(workspace_root).resolve())
+                if str(prefix) not in (".", ""):
+                    workspace_prefix = prefix
+            except ValueError:
+                workspace_prefix = None
+
+        if workspace_prefix is not None:
+            workspace_rel = [
+                str(Path(workspace_prefix) / rel) for rel in rel_files
+            ]
+            filtered_workspace_rel = set(filter_paths(workspace_rel, workspace_config))
+            files = [
+                os.path.join(root, rel)
+                for rel, wrel in zip(rel_files, workspace_rel)
+                if wrel in filtered_workspace_rel
+            ]
+        else:
+            filtered_rel = filter_paths(rel_files, workspace_config)
+            files = [os.path.join(root, f) for f in filtered_rel]
 
     return files
 
@@ -1891,7 +1919,9 @@ def _parse_csharp_using_node(node, source: bytes) -> dict | None:
 def build_function_index(
     root: str | Path,
     language: str = "python",
-    workspace_config: Optional[WorkspaceConfig] = None
+    workspace_config: Optional[WorkspaceConfig] = None,
+    ignore_spec=None,
+    workspace_root: Optional[Path] = None,
 ) -> dict[tuple[str, str], str]:
     """
     Build an index mapping (module_name, function_name) to file paths.
@@ -1907,7 +1937,13 @@ def build_function_index(
     root = Path(root)
     index = {}
 
-    for src_file in scan_project(root, language, workspace_config):
+    for src_file in scan_project(
+        root,
+        language,
+        workspace_config,
+        ignore_spec=ignore_spec,
+        workspace_root=workspace_root,
+    ):
         src_path = Path(src_file)
         rel_path = src_path.relative_to(root)
 
@@ -3266,7 +3302,9 @@ def _extract_php_file_calls(file_path: Path, root: Path) -> dict[str, list[tuple
 def build_project_call_graph(
     root: str | Path,
     language: str = "python",
-    use_workspace_config: bool = True
+    use_workspace_config: bool = True,
+    ignore_spec=None,
+    workspace_root: Optional[Path] = None,
 ) -> ProjectCallGraph:
     """
     Build a complete project-wide call graph.
@@ -3283,6 +3321,7 @@ def build_project_call_graph(
         use_workspace_config: If True, loads .claude/workspace.json to scope
                              indexing to activePackages and excludePatterns.
                              Defaults to True for monorepo support.
+        ignore_spec: Optional ignore spec (tldrignore.IgnoreSpec or pathspec.PathSpec)
 
     Returns:
         ProjectCallGraph with edges as (src_file, src_func, dst_file, dst_func)
@@ -3293,24 +3332,80 @@ def build_project_call_graph(
     # Load workspace config if enabled
     workspace_config = None
     if use_workspace_config:
-        workspace_config = load_workspace_config(root)
+        config_root = workspace_root if workspace_root is not None else root
+        workspace_config = load_workspace_config(config_root)
 
-    func_index = build_function_index(root, language, workspace_config)
+    func_index = build_function_index(
+        root,
+        language,
+        workspace_config,
+        ignore_spec=ignore_spec,
+        workspace_root=workspace_root,
+    )
 
     if language == "python":
-        _build_python_call_graph(root, graph, func_index, workspace_config)
+        _build_python_call_graph(
+            root,
+            graph,
+            func_index,
+            workspace_config,
+            ignore_spec=ignore_spec,
+            workspace_root=workspace_root,
+        )
     elif language == "typescript":
-        _build_typescript_call_graph(root, graph, func_index, workspace_config)
+        _build_typescript_call_graph(
+            root,
+            graph,
+            func_index,
+            workspace_config,
+            ignore_spec=ignore_spec,
+            workspace_root=workspace_root,
+        )
     elif language == "go":
-        _build_go_call_graph(root, graph, func_index, workspace_config)
+        _build_go_call_graph(
+            root,
+            graph,
+            func_index,
+            workspace_config,
+            ignore_spec=ignore_spec,
+            workspace_root=workspace_root,
+        )
     elif language == "rust":
-        _build_rust_call_graph(root, graph, func_index, workspace_config)
+        _build_rust_call_graph(
+            root,
+            graph,
+            func_index,
+            workspace_config,
+            ignore_spec=ignore_spec,
+            workspace_root=workspace_root,
+        )
     elif language == "java":
-        _build_java_call_graph(root, graph, func_index, workspace_config)
+        _build_java_call_graph(
+            root,
+            graph,
+            func_index,
+            workspace_config,
+            ignore_spec=ignore_spec,
+            workspace_root=workspace_root,
+        )
     elif language == "c":
-        _build_c_call_graph(root, graph, func_index, workspace_config)
+        _build_c_call_graph(
+            root,
+            graph,
+            func_index,
+            workspace_config,
+            ignore_spec=ignore_spec,
+            workspace_root=workspace_root,
+        )
     elif language == "php":
-        _build_php_call_graph(root, graph, func_index, workspace_config)
+        _build_php_call_graph(
+            root,
+            graph,
+            func_index,
+            workspace_config,
+            ignore_spec=ignore_spec,
+            workspace_root=workspace_root,
+        )
 
     return graph
 
@@ -3319,10 +3414,18 @@ def _build_python_call_graph(
     root: Path,
     graph: ProjectCallGraph,
     func_index: dict,
-    workspace_config: Optional[WorkspaceConfig] = None
+    workspace_config: Optional[WorkspaceConfig] = None,
+    ignore_spec=None,
+    workspace_root: Optional[Path] = None,
 ):
     """Build call graph for Python files."""
-    for py_file in scan_project(root, "python", workspace_config):
+    for py_file in scan_project(
+        root,
+        "python",
+        workspace_config,
+        ignore_spec=ignore_spec,
+        workspace_root=workspace_root,
+    ):
         py_path = Path(py_file)
         rel_path = str(py_path.relative_to(root))
 
@@ -3393,10 +3496,18 @@ def _build_typescript_call_graph(
     root: Path,
     graph: ProjectCallGraph,
     func_index: dict,
-    workspace_config: Optional[WorkspaceConfig] = None
+    workspace_config: Optional[WorkspaceConfig] = None,
+    ignore_spec=None,
+    workspace_root: Optional[Path] = None,
 ):
     """Build call graph for TypeScript files."""
-    for ts_file in scan_project(root, "typescript", workspace_config):
+    for ts_file in scan_project(
+        root,
+        "typescript",
+        workspace_config,
+        ignore_spec=ignore_spec,
+        workspace_root=workspace_root,
+    ):
         ts_path = Path(ts_file)
         rel_path = str(ts_path.relative_to(root))
 
@@ -3501,10 +3612,18 @@ def _build_go_call_graph(
     root: Path,
     graph: ProjectCallGraph,
     func_index: dict,
-    workspace_config: Optional[WorkspaceConfig] = None
+    workspace_config: Optional[WorkspaceConfig] = None,
+    ignore_spec=None,
+    workspace_root: Optional[Path] = None,
 ):
     """Build call graph for Go files."""
-    for go_file in scan_project(root, "go", workspace_config):
+    for go_file in scan_project(
+        root,
+        "go",
+        workspace_config,
+        ignore_spec=ignore_spec,
+        workspace_root=workspace_root,
+    ):
         go_path = Path(go_file)
         rel_path = str(go_path.relative_to(root))
 
@@ -3590,10 +3709,18 @@ def _build_rust_call_graph(
     root: Path,
     graph: ProjectCallGraph,
     func_index: dict,
-    workspace_config: Optional[WorkspaceConfig] = None
+    workspace_config: Optional[WorkspaceConfig] = None,
+    ignore_spec=None,
+    workspace_root: Optional[Path] = None,
 ):
     """Build call graph for Rust files."""
-    for rs_file in scan_project(root, "rust", workspace_config):
+    for rs_file in scan_project(
+        root,
+        "rust",
+        workspace_config,
+        ignore_spec=ignore_spec,
+        workspace_root=workspace_root,
+    ):
         rs_path = Path(rs_file)
         rel_path = str(rs_path.relative_to(root))
 
@@ -3713,10 +3840,18 @@ def _build_java_call_graph(
     root: Path,
     graph: ProjectCallGraph,
     func_index: dict,
-    workspace_config: Optional[WorkspaceConfig] = None
+    workspace_config: Optional[WorkspaceConfig] = None,
+    ignore_spec=None,
+    workspace_root: Optional[Path] = None,
 ):
     """Build call graph for Java files."""
-    for java_file in scan_project(root, "java", workspace_config):
+    for java_file in scan_project(
+        root,
+        "java",
+        workspace_config,
+        ignore_spec=ignore_spec,
+        workspace_root=workspace_root,
+    ):
         java_path = Path(java_file)
         rel_path = str(java_path.relative_to(root))
 
@@ -3764,7 +3899,6 @@ def _build_java_call_graph(
                     # Object.method() call
                     if '.' in call_target:
                         parts = call_target.split('.')
-                        obj_name = parts[0]
                         method_name = parts[-1]
 
                         # Try to find the method in the function index
@@ -3780,10 +3914,18 @@ def _build_c_call_graph(
     root: Path,
     graph: ProjectCallGraph,
     func_index: dict,
-    workspace_config: Optional[WorkspaceConfig] = None
+    workspace_config: Optional[WorkspaceConfig] = None,
+    ignore_spec=None,
+    workspace_root: Optional[Path] = None,
 ):
     """Build call graph for C files."""
-    for c_file in scan_project(root, "c", workspace_config):
+    for c_file in scan_project(
+        root,
+        "c",
+        workspace_config,
+        ignore_spec=ignore_spec,
+        workspace_root=workspace_root,
+    ):
         c_path = Path(c_file)
         rel_path = str(c_path.relative_to(root))
 
@@ -3796,7 +3938,6 @@ def _build_c_call_graph(
 
         for inc in includes:
             module = inc['module']
-            is_system = inc.get('is_system', False)
             # Map the header file name to its path
             # e.g., "utils.h" -> "utils.h"
             header_name = module.split('/')[-1] if '/' in module else module
@@ -3825,10 +3966,18 @@ def _build_php_call_graph(
     root: Path,
     graph: ProjectCallGraph,
     func_index: dict,
-    workspace_config: Optional[WorkspaceConfig] = None
+    workspace_config: Optional[WorkspaceConfig] = None,
+    ignore_spec=None,
+    workspace_root: Optional[Path] = None,
 ):
     """Build call graph for PHP files."""
-    for php_file in scan_project(root, "php", workspace_config):
+    for php_file in scan_project(
+        root,
+        "php",
+        workspace_config,
+        ignore_spec=ignore_spec,
+        workspace_root=workspace_root,
+    ):
         php_path = Path(php_file)
         rel_path = str(php_path.relative_to(root))
 

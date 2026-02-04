@@ -11,11 +11,15 @@ from tldr.salsa import SalsaDB, salsa_query
 
 
 @salsa_query
-def cached_search(db: SalsaDB, project: str, pattern: str, max_results: int) -> dict:
+def cached_search(
+    db: SalsaDB,
+    project: str,
+    pattern: str,
+    max_results: int,
+    ignore_spec=None,
+) -> dict:
     """Cached search query - memoized by SalsaDB."""
     from tldr import api
-    from tldr.tldrignore import IgnoreSpec
-    ignore_spec = IgnoreSpec(project, use_gitignore=True)
     results = api.search(pattern=pattern, root=Path(project), max_results=max_results, ignore_spec=ignore_spec)
     return {"status": "ok", "results": results}
 
@@ -29,20 +33,44 @@ def cached_extract(db: SalsaDB, file_path: str) -> dict:
 
 
 @salsa_query
-def cached_dead_code(db: SalsaDB, project: str, entry_points: tuple, language: str) -> dict:
+def cached_dead_code(
+    db: SalsaDB,
+    project: str,
+    entry_points: tuple,
+    language: str,
+    ignore_spec=None,
+    workspace_root=None,
+) -> dict:
     """Cached dead code analysis - memoized by SalsaDB."""
     from tldr.analysis import analyze_dead_code
     # Convert tuple back to list for the API
     entry_list = list(entry_points) if entry_points else None
-    result = analyze_dead_code(project, entry_points=entry_list, language=language)
+    result = analyze_dead_code(
+        project,
+        entry_points=entry_list,
+        language=language,
+        ignore_spec=ignore_spec,
+        workspace_root=workspace_root,
+    )
     return {"status": "ok", "result": result}
 
 
 @salsa_query
-def cached_architecture(db: SalsaDB, project: str, language: str) -> dict:
+def cached_architecture(
+    db: SalsaDB,
+    project: str,
+    language: str,
+    ignore_spec=None,
+    workspace_root=None,
+) -> dict:
     """Cached architecture analysis - memoized by SalsaDB."""
     from tldr.analysis import analyze_architecture
-    result = analyze_architecture(project, language=language)
+    result = analyze_architecture(
+        project,
+        language=language,
+        ignore_spec=ignore_spec,
+        workspace_root=workspace_root,
+    )
     return {"status": "ok", "result": result}
 
 
@@ -72,31 +100,59 @@ def cached_slice(db: SalsaDB, file_path: str, function: str, line: int, directio
 
 
 @salsa_query
-def cached_tree(db: SalsaDB, project: str, extensions: tuple, exclude_hidden: bool) -> dict:
+def cached_tree(
+    db: SalsaDB,
+    project: str,
+    extensions: tuple,
+    exclude_hidden: bool,
+    ignore_spec=None,
+) -> dict:
     """Cached file tree - memoized by SalsaDB."""
     from tldr.api import get_file_tree
-    from tldr.tldrignore import IgnoreSpec
     ext_set = set(extensions) if extensions else None
-    ignore_spec = IgnoreSpec(project, use_gitignore=True)
-    result = get_file_tree(project, extensions=ext_set, exclude_hidden=exclude_hidden, ignore_spec=ignore_spec)
+    result = get_file_tree(
+        project,
+        extensions=ext_set,
+        exclude_hidden=exclude_hidden,
+        ignore_spec=ignore_spec,
+    )
     return {"status": "ok", "result": result}
 
 
 @salsa_query
-def cached_structure(db: SalsaDB, project: str, language: str, max_results: int) -> dict:
+def cached_structure(
+    db: SalsaDB,
+    project: str,
+    language: str,
+    max_results: int,
+    ignore_spec=None,
+) -> dict:
     """Cached code structure - memoized by SalsaDB."""
     from tldr.api import get_code_structure
-    from tldr.tldrignore import IgnoreSpec
-    ignore_spec = IgnoreSpec(project, use_gitignore=True)
     result = get_code_structure(project, language=language, max_results=max_results, ignore_spec=ignore_spec)
     return {"status": "ok", "result": result}
 
 
 @salsa_query
-def cached_context(db: SalsaDB, project: str, entry: str, language: str, depth: int) -> dict:
+def cached_context(
+    db: SalsaDB,
+    project: str,
+    entry: str,
+    language: str,
+    depth: int,
+    ignore_spec=None,
+    workspace_root=None,
+) -> dict:
     """Cached relevant context - memoized by SalsaDB."""
     from tldr.api import get_relevant_context
-    result = get_relevant_context(project, entry, language=language, depth=depth)
+    result = get_relevant_context(
+        project,
+        entry,
+        language=language,
+        depth=depth,
+        ignore_spec=ignore_spec,
+        workspace_root=workspace_root,
+    )
     return {"status": "ok", "result": result}
 
 
@@ -109,11 +165,17 @@ def cached_imports(db: SalsaDB, file_path: str, language: str) -> dict:
 
 
 @salsa_query
-def cached_importers(db: SalsaDB, project: str, module: str, language: str) -> dict:
+def cached_importers(
+    db: SalsaDB,
+    project: str,
+    module: str,
+    language: str,
+    ignore_spec=None,
+) -> dict:
     """Cached reverse import lookup - memoized by SalsaDB."""
     from tldr.api import get_imports, scan_project_files
 
-    files = scan_project_files(project, language=language)
+    files = scan_project_files(project, language=language, ignore_spec=ignore_spec)
     importers = []
     project_path = Path(project)
 

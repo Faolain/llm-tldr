@@ -283,14 +283,18 @@ class HookStatsStore:
     Location: {project}/.tldr/stats/hook_activity.jsonl
     """
 
-    def __init__(self, project_path: Path | str):
+    def __init__(self, project_path: Path | str, *, stats_dir: Path | str | None = None):
         """Initialize hook stats store for a project.
 
         Args:
             project_path: Root path of the project
+            stats_dir: Optional override for stats directory (index mode)
         """
         self.project = Path(project_path)
-        self.stats_dir = self.project / ".tldr" / "stats"
+        if stats_dir is None:
+            self.stats_dir = self.project / ".tldr" / "stats"
+        else:
+            self.stats_dir = Path(stats_dir)
         self.path = self.stats_dir / "hook_activity.jsonl"
 
     def load(self) -> dict[str, HookStats]:

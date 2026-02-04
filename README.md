@@ -196,6 +196,44 @@ tldr semantic "error handling"  # Find by behavior
 
 ---
 
+## Agent Skills (Included)
+
+This repo includes a dependency-indexing skill at `skills/llm-tldr-dep-indexer/`.
+
+It supports:
+- Python dependencies from `.venv` / `site-packages`
+- Node dependencies from `node_modules`
+
+What it lets an agent do:
+- Resolve the exact installed dependency source + version
+- Create or reuse a **versioned, isolated** index for that dependency
+- Keep caches under the repo root via `--cache-root=git`
+- Query the dependency directly without mixing it with the main repo
+
+Quick example (Python):
+```bash
+python skills/llm-tldr-dep-indexer/scripts/ensure_dep_index.py python requests
+```
+
+---
+
+This repo also includes a usage skill at `skills/llm-tldr-usage/`.
+
+It supports:
+- Indexing and querying repos with `tldr warm`, `tldr semantic`, `tldr context`, `tldr slice`, and `tldr impact`
+- Isolated indexes with `--cache-root=git` and `--index`
+- Index management via `tldr index list/info/rm`
+- Daemon workflows and `.tldrignore` usage
+
+Quick example:
+```bash
+tldr warm --cache-root=git .
+tldr semantic index --cache-root=git .
+tldr semantic search "token validation flow" --cache-root=git --path .
+```
+
+---
+
 ## Real Example: Why This Matters
 
 **Scenario:** Debug why `user` is null on line 42.

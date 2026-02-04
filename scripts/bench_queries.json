@@ -1,0 +1,77 @@
+[
+  {
+    "dep": "requests",
+    "query": "Session.request implementation",
+    "expect_path_contains": "requests/sessions.py"
+  },
+  {
+    "dep": "requests",
+    "query": "HTTPAdapter.send implementation",
+    "expect_path_contains": "requests/adapters.py"
+  },
+  {
+    "dep": "requests",
+    "query": "Session.send implementation",
+    "expect_path_contains": "requests/sessions.py"
+  },
+  {
+    "dep": "requests",
+    "query": "PreparedRequest.prepare_url",
+    "expect_path_contains": "requests/models.py"
+  },
+  {
+    "dep": "requests",
+    "query": "get_auth_from_url",
+    "expect_path_contains": "requests/utils.py"
+  },
+  {
+    "dep": "requests",
+    "query": "CaseInsensitiveDict",
+    "expect_path_contains": "requests/structures.py"
+  },
+  {
+    "dep": "requests",
+    "query": "dispatch_hook",
+    "expect_path_contains": "requests/hooks.py"
+  },
+  {
+    "dep": "requests",
+    "query": "BaseModel.model_validate",
+    "expect_none": true
+  },
+  {
+    "dep": "requests",
+    "query": "torch.nn.Module forward",
+    "expect_none": true
+  },
+  {
+    "dep": "urllib3",
+    "query": "HTTPConnectionPool.urlopen",
+    "expect_path_contains": "urllib3/connectionpool.py"
+  },
+  {
+    "dep": "urllib3",
+    "query": "PoolManager.urlopen",
+    "expect_path_contains": "urllib3/poolmanager.py"
+  },
+  {
+    "dep": "urllib3",
+    "query": "Retry.increment",
+    "expect_path_contains": "urllib3/util/retry.py"
+  },
+  {
+    "dep": "urllib3",
+    "query": "request_encode_url",
+    "expect_path_contains": "urllib3/_request_methods.py"
+  },
+  {
+    "dep": "urllib3",
+    "query": "Session.request implementation",
+    "expect_none": true
+  },
+  {
+    "dep": "urllib3",
+    "query": "HTTPAdapter.send implementation",
+    "expect_none": true
+  }
+]

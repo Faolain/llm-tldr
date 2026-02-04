@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional
 
 from tldr.patch import compute_file_hash, extract_edges_from_file, Edge
 
@@ -30,6 +30,7 @@ class ContentHashedIndex:
     """
 
     project_root: str
+    cache_dir: Path | None = None
 
     # {content_hash: list of Edge tuples}
     _by_hash: Dict[str, List[tuple]] = field(default_factory=dict)
@@ -117,7 +118,7 @@ class ContentHashedIndex:
 
     def save(self) -> None:
         """Persist index to disk."""
-        cache_dir = Path(self.project_root) / ".tldr" / "cache"
+        cache_dir = self._resolve_cache_dir()
         cache_dir.mkdir(parents=True, exist_ok=True)
 
         index_file = cache_dir / "content_index.json"
@@ -149,7 +150,7 @@ class ContentHashedIndex:
         Returns:
             True if loaded successfully, False otherwise
         """
-        cache_dir = Path(self.project_root) / ".tldr" / "cache"
+        cache_dir = self._resolve_cache_dir()
         index_file = cache_dir / "content_index.json"
 
         if not index_file.exists():
@@ -175,6 +176,11 @@ class ContentHashedIndex:
         self._cache_hits = stats.get("cache_hits", 0)
 
         return True
+
+    def _resolve_cache_dir(self) -> Path:
+        if self.cache_dir is not None:
+            return self.cache_dir
+        return Path(self.project_root) / ".tldr" / "cache"
 
     def _edges_from_tuples(self, tuples: List[tuple]) -> List[Edge]:
         """Convert edge tuples back to Edge objects."""
