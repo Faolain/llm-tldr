@@ -5,7 +5,7 @@ Provides 1:1 mapping with TLDR daemon commands, enabling AI tools
 (OpenCode, Claude Desktop, Claude Code) to use TLDR's code analysis.
 
 Usage:
-    tldr-mcp --project /path/to/project
+    tldrf-mcp --project /path/to/project
 """
 
 import json
@@ -543,7 +543,7 @@ def status(project: str = ".") -> dict:
 
 
 def main():
-    """Entry point for tldr-mcp command."""
+    """Entry point for tldrf-mcp command."""
     import argparse
     import os
 

@@ -21,7 +21,7 @@ node /Users/aristotle/.agents/skills/llm-tldr-dep-indexer/scripts/resolve_node_d
 
 Use the JSON output to choose a source path, then index:
 ```bash
-tldr semantic index <SOURCE_PATH> \
+tldrf semantic index <SOURCE_PATH> \
   --cache-root=git \
   --index dep_<name>_<site|repo> \
   --lang <python|javascript|all> \

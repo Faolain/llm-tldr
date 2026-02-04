@@ -22,6 +22,8 @@ Your codebase is 100,000 lines. Claude can read ~200,000 tokens. Math says you'r
 
 ## Quick Start: 30 Seconds to Better Context
 
+> Fork note: this repo installs the CLI as `tldrf`. Replace `tldr` with `tldrf` in the examples below.
+
 ```bash
 # Install
 pip install llm-tldr

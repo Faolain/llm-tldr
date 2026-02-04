@@ -171,20 +171,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     parser = argparse.ArgumentParser(
-        prog="tldr",
         description="Token-efficient code analysis for LLMs",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Version: %(prog)s """ + __version__ + """
 
 Examples:
-    tldr tree src/                      # File tree for src/
-    tldr structure . --lang python      # Code structure for Python files
-    tldr search "def process" .         # Search for pattern
-    tldr extract src/main.py            # Full file analysis
-    tldr context main --project .       # LLM context starting from main()
-    tldr cfg src/main.py process        # Control flow for process()
-    tldr slice src/main.py func 42      # Lines affecting line 42
+    %(prog)s tree src/                      # File tree for src/
+    %(prog)s structure . --lang python      # Code structure for Python files
+    %(prog)s search "def process" .         # Search for pattern
+    %(prog)s extract src/main.py            # Full file analysis
+    %(prog)s context main --project .       # LLM context starting from main()
+    %(prog)s cfg src/main.py process        # Control flow for process()
+    %(prog)s slice src/main.py func 42      # Lines affecting line 42
 
 Ignore Patterns:
     TLDR respects .tldrignore files (gitignore syntax).
@@ -198,9 +197,9 @@ Daemon:
     - Auto-shutdown: 30 minutes idle
     - Memory: ~50-100MB base, +500MB-1GB with semantic search
 
-    Start explicitly:  tldr daemon start
-    Check status:      tldr daemon status
-    Stop:              tldr daemon stop
+    Start explicitly:  %(prog)s daemon start
+    Check status:      %(prog)s daemon status
+    Stop:              %(prog)s daemon stop
 
 Semantic Search:
     First run downloads embedding model (1.3GB default).

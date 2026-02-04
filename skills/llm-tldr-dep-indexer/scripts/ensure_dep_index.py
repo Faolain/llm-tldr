@@ -25,7 +25,7 @@ def _load_json(text):
 
 
 def _tldr_prefix():
-    tldr_cmd = os.environ.get("TLDR_CMD", "tldr")
+    tldr_cmd = os.environ.get("TLDR_CMD") or os.environ.get("TLDRF_CMD") or "tldrf"
     return shlex.split(tldr_cmd)
 
 

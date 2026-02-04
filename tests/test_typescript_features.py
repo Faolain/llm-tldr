@@ -12,6 +12,7 @@ import pytest
 import tempfile
 import subprocess
 import json
+import os
 from pathlib import Path
 
 
@@ -115,10 +116,11 @@ async function fetchData(url: string): Promise<string> {
 
 def run_tldr(args: list[str], cwd: str = None) -> dict:
     """Run tldr command and return parsed JSON output."""
-    cmd = ["tldr"] + args + ["--lang", "typescript"]
+    cli = os.environ.get("TLDRF_BIN") or os.environ.get("TLDR_BIN") or "tldrf"
+    cmd = [cli] + args + ["--lang", "typescript"]
     result = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
     if result.returncode != 0:
-        pytest.fail(f"tldr command failed: {result.stderr}")
+        pytest.fail(f"{cli} command failed: {result.stderr}")
     try:
         return json.loads(result.stdout)
     except json.JSONDecodeError:

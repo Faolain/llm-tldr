@@ -21,48 +21,51 @@ Avoid this tool when:
 ## Installation and Setup
 
 ```bash
-pip install llm-tldr
+# Fork install (no 'tldr' command conflicts)
+uv tool install -e /path/to/llm-tldr
+uv tool update-shell
+
 cd /path/to/project
 
-tldr warm --cache-root=git .        # Build structural caches
+tldrf warm --cache-root=git .        # Build structural caches
 
-tldr semantic index --cache-root=git .  # Build semantic embeddings
+tldrf semantic index --cache-root=git .  # Build semantic embeddings
 ```
 
 ## Essential Commands
 
 ### Structure Overview
 ```bash
-tldr tree src/                       # File structure
-tldr structure src/ --lang python    # Functions/classes overview
+tldrf tree src/                       # File structure
+tldrf structure src/ --lang python    # Functions/classes overview
 ```
 
 ### Function Context
 ```bash
-tldr context <function> --project .  # Function summary with dependencies
-tldr extract <file>                  # Complete file analysis
+tldrf context <function> --project .  # Function summary with dependencies
+tldrf extract <file>                  # Complete file analysis
 ```
 
 ### Impact Analysis
 ```bash
-tldr impact <function> .             # Who calls this? (breaks if changed)
-tldr calls .                         # Build full call graph
-tldr arch .                          # Detect architecture layers
-tldr dead .                          # Find unreachable code
+tldrf impact <function> .             # Who calls this? (breaks if changed)
+tldrf calls .                         # Build full call graph
+tldrf arch .                          # Detect architecture layers
+tldrf dead .                          # Find unreachable code
 ```
 
 ### Finding Code by Intent
 ```bash
-tldr semantic search "validate auth tokens" --path .    # Natural language search
-tldr semantic search "error retry logic" --path .       # Finds behavior, not keywords
+tldrf semantic search "validate auth tokens" --path .    # Natural language search
+tldrf semantic search "error retry logic" --path .       # Finds behavior, not keywords
 ```
 
 ### Debugging
 ```bash
-tldr slice <file> <func> <line>      # What affects this line?
-tldr dfg <file> <function>           # Trace data flow
-tldr cfg <file> <function>           # Control flow graph
-tldr diagnostics <file>              # Type check + lint
+tldrf slice <file> <func> <line>      # What affects this line?
+tldrf dfg <file> <function>           # Trace data flow
+tldrf cfg <file> <function>           # Control flow graph
+tldrf diagnostics <file>              # Type check + lint
 ```
 
 ## Index Isolation and Dependency Indexes
@@ -71,11 +74,11 @@ Use `--cache-root=git` inside a repo to store all indexes under the repo-root `.
 ### Dependency index (stored under repo root)
 ```bash
 # Build the dependency index
-tldr --cache-root=git --index dep:requests \
+tldrf --cache-root=git --index dep:requests \
   semantic index .venv/lib/python3.12/site-packages/requests --lang python
 
 # Query it
-tldr --cache-root=git --index dep:requests \
+tldrf --cache-root=git --index dep:requests \
   semantic search "HTTPAdapter.send implementation" \
   --path .venv/lib/python3.12/site-packages/requests
 ```
@@ -83,11 +86,11 @@ tldr --cache-root=git --index dep:requests \
 ### Repo index (same cache root, different index id)
 ```bash
 # Build the repo index
-tldr --cache-root=git --index repo:llm-tldr \
+tldrf --cache-root=git --index repo:llm-tldr \
   semantic index . --lang python
 
 # Query it
-tldr --cache-root=git --index repo:llm-tldr \
+tldrf --cache-root=git --index repo:llm-tldr \
   semantic search "daemon status handling" --path .
 ```
 
@@ -104,22 +107,22 @@ Use the included dependency indexing skill to resolve the correct installed vers
 ```bash
 python skills/llm-tldr-dep-indexer/scripts/ensure_dep_index.py python requests
 ```
-Use the returned `index_id` and `scan_root` for subsequent `tldr` commands.
+Use the returned `index_id` and `scan_root` for subsequent `tldrf` commands.
 
 ## Index Management
 Use these to keep a clean cache and verify what exists.
 
 ```bash
-tldr index list --cache-root=git
-tldr index info --cache-root=git dep:requests@2.31.0:site
-tldr index rm --cache-root=git dep:requests@2.31.0:site
+tldrf index list --cache-root=git
+tldrf index info --cache-root=git dep:requests@2.31.0:site
+tldrf index rm --cache-root=git dep:requests@2.31.0:site
 ```
 
 ## Default Agent Workflow
 
-1. Get structure: `tldr tree` / `tldr structure`
-2. Narrow context: `tldr context <function>`
-3. Validate impact before changes: `tldr impact <function>`
+1. Get structure: `tldrf tree` / `tldrf structure`
+2. Narrow context: `tldrf context <function>`
+3. Validate impact before changes: `tldrf impact <function>`
 
 ## How It Works
 
@@ -177,8 +180,8 @@ For monorepos, create `.claude/workspace.json`:
 ```json
 {
   "mcpServers": {
-    "tldr": {
-      "command": "tldr-mcp",
+    "tldrf": {
+      "command": "tldrf-mcp",
       "args": ["--project", "."]
     }
   }
@@ -189,8 +192,8 @@ For monorepos, create `.claude/workspace.json`:
 ```json
 {
   "mcpServers": {
-    "tldr": {
-      "command": "tldr-mcp",
+    "tldrf": {
+      "command": "tldrf-mcp",
       "args": ["--project", "/absolute/path/to/project"]
     }
   }
@@ -205,23 +208,23 @@ Python, TypeScript, JavaScript, Go, Rust, Java, C, C++, Ruby, PHP, C#, Kotlin, S
 
 **Daemon not responding?**
 ```bash
-tldr daemon status
-tldr daemon stop && tldr daemon start
+tldrf daemon status
+tldrf daemon stop && tldrf daemon start
 ```
 
 **Index out of date?**
 ```bash
-tldr warm --cache-root=git .  # Full rebuild
+tldrf warm --cache-root=git .  # Full rebuild
 ```
 
 **Semantic search not finding relevant code?**
 ```bash
-tldr semantic index --cache-root=git .
+tldrf semantic index --cache-root=git .
 ```
 
 **Not sure which indexes exist?**
 ```bash
-tldr index list --cache-root=git
+tldrf index list --cache-root=git
 ```
 
 ## Principle

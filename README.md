@@ -6,9 +6,11 @@
 
 **Give LLMs exactly the code they need. Nothing more.**
 
+> Fork note: this repo installs the CLI as `tldrf` (and `tldrf-mcp`) to avoid conflicts with other `tldr` tools.
+
 ```bash
 # One-liner: Install, index, search
-pip install llm-tldr && tldr warm . && tldr semantic "what you're looking for" .
+pip install llm-tldr && tldrf warm . && tldrf semantic "what you're looking for" .
 ```
 
 Your codebase is 100K lines. Claude's context window is 200K tokens. Raw code won't fit—and even if it did, the LLM would drown in irrelevant details.
@@ -17,8 +19,8 @@ TLDR extracts *structure* instead of dumping *text*. The result: **95% fewer tok
 
 ```bash
 pip install llm-tldr
-tldr warm .                    # Index your project
-tldr context main --project .  # Get LLM-ready summary
+tldrf warm .                    # Index your project
+tldrf context main --project .  # Get LLM-ready summary
 ```
 
 ---
@@ -90,7 +92,7 @@ This gets encoded into **1024-dimensional vectors** using `bge-large-en-v1.5`. T
 
 ```bash
 # "validate JWT" finds verify_access_token() even without that exact text
-tldr semantic "validate JWT tokens and check expiration" .
+tldrf semantic "validate JWT tokens and check expiration" .
 ```
 
 **Why this works:** Traditional search finds `authentication` in variable names and comments. Semantic search understands that `verify_access_token()` *performs* JWT validation because the call graph and data flow reveal its purpose.
@@ -99,10 +101,10 @@ tldr semantic "validate JWT tokens and check expiration" .
 
 ```bash
 # Build the semantic index (one-time, ~2 min for typical project)
-tldr warm /path/to/project
+tldrf warm /path/to/project
 
 # Search by behavior
-tldr semantic "database connection pooling" .
+tldrf semantic "database connection pooling" .
 ```
 
 Embedding dependencies (`sentence-transformers`, `faiss-cpu`) are included with `pip install llm-tldr`. The index is cached in `.tldr/cache/semantic.faiss`.
@@ -113,24 +115,24 @@ The daemon tracks dirty files and auto-rebuilds after 20 changes, but you need t
 
 ```bash
 # Notify daemon of a changed file
-tldr daemon notify src/auth.py --project .
+tldrf daemon notify src/auth.py --project .
 ```
 
 **Integration options:**
 
 1. **Git hook** (post-commit):
    ```bash
-   git diff --name-only HEAD~1 | xargs -I{} tldr daemon notify {} --project .
+   git diff --name-only HEAD~1 | xargs -I{} tldrf daemon notify {} --project .
    ```
 
 2. **Editor hook** (on save):
    ```bash
-   tldr daemon notify "$FILE" --project .
+   tldrf daemon notify "$FILE" --project .
    ```
 
 3. **Manual rebuild** (when needed):
    ```bash
-   tldr warm .  # Full rebuild
+   tldrf warm .  # Full rebuild
    ```
 
 The daemon auto-rebuilds semantic embeddings in the background once the dirty threshold (default: 20 files) is reached.
@@ -141,31 +143,31 @@ The daemon auto-rebuilds semantic embeddings in the background once the dirty th
 
 ### Before Reading Code
 ```bash
-tldr tree src/                      # See file structure
-tldr structure src/ --lang python   # See functions/classes
+tldrf tree src/                      # See file structure
+tldrf structure src/ --lang python   # See functions/classes
 ```
 
 ### Before Editing
 ```bash
-tldr extract src/auth.py            # Full file analysis
-tldr context login --project .      # LLM-ready summary (95% savings)
+tldrf extract src/auth.py            # Full file analysis
+tldrf context login --project .      # LLM-ready summary (95% savings)
 ```
 
 ### Before Refactoring
 ```bash
-tldr impact login .                 # Who calls this? (reverse call graph)
-tldr change-impact                  # Which tests need to run?
+tldrf impact login .                 # Who calls this? (reverse call graph)
+tldrf change-impact                  # Which tests need to run?
 ```
 
 ### Debugging
 ```bash
-tldr slice src/auth.py login 42     # What affects line 42?
-tldr dfg src/auth.py login          # Trace data flow
+tldrf slice src/auth.py login 42     # What affects line 42?
+tldrf dfg src/auth.py login          # Trace data flow
 ```
 
 ### Finding Code by Behavior
 ```bash
-tldr semantic "validate JWT tokens" .   # Natural language search
+tldrf semantic "validate JWT tokens" .   # Natural language search
 ```
 
 ---
@@ -181,7 +183,7 @@ pip install llm-tldr
 ### 2. Index Your Project
 
 ```bash
-tldr warm /path/to/project
+tldrf warm /path/to/project
 ```
 
 This builds all analysis layers and starts the daemon. Takes 30-60 seconds for a typical project, then queries are instant.
@@ -189,9 +191,9 @@ This builds all analysis layers and starts the daemon. Takes 30-60 seconds for a
 ### 3. Start Using
 
 ```bash
-tldr context main --project .   # Get context for a function
-tldr impact helper_func .       # See who calls it
-tldr semantic "error handling"  # Find by behavior
+tldrf context main --project .   # Get context for a function
+tldrf impact helper_func .       # See who calls it
+tldrf semantic "error handling"  # Find by behavior
 ```
 
 ---
@@ -220,16 +222,16 @@ python skills/llm-tldr-dep-indexer/scripts/ensure_dep_index.py python requests
 This repo also includes a usage skill at `skills/llm-tldr-usage/`.
 
 It supports:
-- Indexing and querying repos with `tldr warm`, `tldr semantic`, `tldr context`, `tldr slice`, and `tldr impact`
+- Indexing and querying repos with `tldrf warm`, `tldrf semantic`, `tldrf context`, `tldrf slice`, and `tldrf impact`
 - Isolated indexes with `--cache-root=git` and `--index`
-- Index management via `tldr index list/info/rm`
+- Index management via `tldrf index list/info/rm`
 - Daemon workflows and `.tldrignore` usage
 
 Quick example:
 ```bash
-tldr warm --cache-root=git .
-tldr semantic index --cache-root=git .
-tldr semantic search "token validation flow" --cache-root=git --path .
+tldrf warm --cache-root=git .
+tldrf semantic index --cache-root=git .
+tldrf semantic search "token validation flow" --cache-root=git --path .
 ```
 
 ---
@@ -245,7 +247,7 @@ tldr semantic search "token validation flow" --cache-root=git --path .
 
 **With TLDR:**
 ```bash
-tldr slice src/auth.py login 42
+tldrf slice src/auth.py login 42
 ```
 
 **Output:** Only 6 lines that affect line 42:
@@ -267,48 +269,48 @@ The bug is obvious. Line 28 uses `user` without going through the null check pat
 ### Exploration
 | Command | What It Does |
 |---------|--------------|
-| `tldr tree [path]` | File tree |
-| `tldr structure [path] --lang <lang>` | Functions, classes, methods |
-| `tldr search <pattern> [path]` | Text pattern search |
-| `tldr extract <file>` | Full file analysis |
+| `tldrf tree [path]` | File tree |
+| `tldrf structure [path] --lang <lang>` | Functions, classes, methods |
+| `tldrf search <pattern> [path]` | Text pattern search |
+| `tldrf extract <file>` | Full file analysis |
 
 ### Analysis
 | Command | What It Does |
 |---------|--------------|
-| `tldr context <func> --project <path>` | LLM-ready summary (95% savings) |
-| `tldr cfg <file> <function>` | Control flow graph |
-| `tldr dfg <file> <function>` | Data flow graph |
-| `tldr slice <file> <func> <line>` | Program slice |
+| `tldrf context <func> --project <path>` | LLM-ready summary (95% savings) |
+| `tldrf cfg <file> <function>` | Control flow graph |
+| `tldrf dfg <file> <function>` | Data flow graph |
+| `tldrf slice <file> <func> <line>` | Program slice |
 
 ### Cross-File
 | Command | What It Does |
 |---------|--------------|
-| `tldr calls [path]` | Build call graph |
-| `tldr impact <func> [path]` | Find all callers (reverse call graph) |
-| `tldr dead [path]` | Find unreachable code |
-| `tldr arch [path]` | Detect architecture layers |
-| `tldr imports <file>` | Parse imports |
-| `tldr importers <module> [path]` | Find files that import a module |
+| `tldrf calls [path]` | Build call graph |
+| `tldrf impact <func> [path]` | Find all callers (reverse call graph) |
+| `tldrf dead [path]` | Find unreachable code |
+| `tldrf arch [path]` | Detect architecture layers |
+| `tldrf imports <file>` | Parse imports |
+| `tldrf importers <module> [path]` | Find files that import a module |
 
 ### Semantic
 | Command | What It Does |
 |---------|--------------|
-| `tldr warm <path>` | Build all indexes (including embeddings) |
-| `tldr semantic <query> [path]` | Natural language code search |
+| `tldrf warm <path>` | Build all indexes (including embeddings) |
+| `tldrf semantic <query> [path]` | Natural language code search |
 
 ### Diagnostics
 | Command | What It Does |
 |---------|--------------|
-| `tldr diagnostics <file>` | Type check + lint |
-| `tldr change-impact [files]` | Find tests affected by changes |
-| `tldr doctor` | Check/install diagnostic tools |
+| `tldrf diagnostics <file>` | Type check + lint |
+| `tldrf change-impact [files]` | Find tests affected by changes |
+| `tldrf doctor` | Check/install diagnostic tools |
 
 ### Daemon
 | Command | What It Does |
 |---------|--------------|
-| `tldr daemon start` | Start background daemon |
-| `tldr daemon stop` | Stop daemon |
-| `tldr daemon status` | Check status |
+| `tldrf daemon start` | Start background daemon |
+| `tldrf daemon stop` | Stop daemon |
+| `tldrf daemon status` | Check status |
 
 ---
 
@@ -328,8 +330,8 @@ For AI tools (Claude Desktop, Claude Code):
 ```json
 {
   "mcpServers": {
-    "tldr": {
-      "command": "tldr-mcp",
+    "tldrf": {
+      "command": "tldrf-mcp",
       "args": ["--project", "/path/to/your/project"]
     }
   }
@@ -340,8 +342,8 @@ For AI tools (Claude Desktop, Claude Code):
 ```json
 {
   "mcpServers": {
-    "tldr": {
-      "command": "tldr-mcp",
+    "tldrf": {
+      "command": "tldrf-mcp",
       "args": ["--project", "."]
     }
   }
@@ -358,7 +360,7 @@ TLDR respects `.tldrignore` (gitignore syntax) for all commands including `tree`
 
 ```bash
 # Auto-create with sensible defaults
-tldr warm .  # Creates .tldrignore if missing
+tldrf warm .  # Creates .tldrignore if missing
 ```
 
 **Default exclusions:**
@@ -378,10 +380,10 @@ data/*.csv
 **CLI Flags:**
 ```bash
 # Add patterns from command line (can be repeated)
-tldr --ignore "packages/old/" --ignore "*.generated.ts" tree .
+tldrf --ignore "packages/old/" --ignore "*.generated.ts" tree .
 
 # Bypass all ignore patterns
-tldr --no-ignore tree .
+tldrf --no-ignore tree .
 ```
 
 ### Settings - Daemon Behavior

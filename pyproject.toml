@@ -83,9 +83,8 @@ Issues = "https://github.com/parcadei/llm-tldr/issues"
 Documentation = "https://github.com/parcadei/llm-tldr#readme"
 
 [project.scripts]
-tldr = "tldr.cli:main"
-llm-tldr = "tldr.cli:main"
-tldr-mcp = "tldr.mcp_server:main"
+tldrf = "tldr.cli:main"
+tldrf-mcp = "tldr.mcp_server:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
