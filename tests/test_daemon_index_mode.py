@@ -126,6 +126,27 @@ def _start_daemon_process(
     )
 
 
+def _start_daemon_process_legacy(
+    project: Path,
+    *,
+    env: dict | None = None,
+) -> subprocess.Popen:
+    cmd = [
+        sys.executable,
+        "-m",
+        "tldr.daemon",
+        str(project),
+        "--foreground",
+    ]
+    return subprocess.Popen(
+        cmd,
+        cwd=str(REPO_ROOT),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        env=env,
+    )
+
+
 def _wait_for_daemon(identity, proc: subprocess.Popen, timeout: float = 10.0) -> None:
     start = time.monotonic()
     last_error = None
@@ -235,3 +256,32 @@ def test_daemon_index_mode_isolated_sockets(tmp_path: Path):
     finally:
         _stop_daemon(identity_a, proc_a)
         _stop_daemon(identity_b, proc_b)
+
+
+def test_daemon_impact_reads_call_graph_from_cache(tmp_path: Path):
+    project = tmp_path / "project"
+    project.mkdir()
+    cache_dir = project / ".tldr" / "cache"
+    cache_dir.mkdir(parents=True)
+
+    call_graph = {
+        "edges": [
+            {"caller": "main", "callee": "helper", "file": "main.py", "line": 12}
+        ],
+        "nodes": {},
+    }
+    (cache_dir / "call_graph.json").write_text(json.dumps(call_graph))
+
+    env = _build_subprocess_env(tmp_path)
+    proc = _start_daemon_process_legacy(project, env=env)
+    identity = resolve_daemon_identity(project)
+
+    try:
+        _wait_for_daemon(identity, proc)
+        result = _send_command(identity, {"cmd": "impact", "func": "helper"})
+        assert result.get("status") == "ok"
+        assert result.get("callers") == [
+            {"caller": "main", "file": "main.py", "line": 12}
+        ]
+    finally:
+        _stop_daemon(identity, proc)
