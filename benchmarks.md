@@ -4,24 +4,26 @@
 
 These benchmarks validate that the isolated index feature preserves search quality while enabling dependency-scoped search and clean cache management.
 
-Results date: 2026-02-03
+Results date: 2026-02-04
 
 ## How To Run
 
 ```bash
-uv run python scripts/bench_dep_indexes.py
+uv run python scripts/bench_dep_indexes.py --dep requests,urllib3
 ```
 
 Common flags:
 ```bash
-uv run python scripts/bench_dep_indexes.py --dep requests --model all-MiniLM-L6-v2 --device cpu --k 5 --queries scripts/bench_queries.json
+uv run python scripts/bench_dep_indexes.py --dep requests,urllib3 --model all-MiniLM-L6-v2 --device cpu --k 5 --queries scripts/bench_queries.json
 ```
 
 ## Environment
 
 - Repo: `llm-tldr`
-- Dependency corpus: `requests` from `.venv`
-  - Source path: `.venv/lib/python3.12/site-packages/requests`
+- Dependency corpora:
+  - `requests` from `.venv` (7 positive queries, 2 negative queries)
+  - `urllib3` from `.venv` (4 positive queries, 2 negative queries)
+  - Source paths: `.venv/lib/python3.12/site-packages/requests`, `.venv/lib/python3.12/site-packages/urllib3`
 - Main repo scan root: `tldr/`
 - Model: `all-MiniLM-L6-v2`
 - Device: `cpu`
@@ -35,19 +37,19 @@ Goal: show that legacy indexing and index-mode indexing produce the same search 
 
 Legacy index (writes `.tldr` inside the corpus):
 - Indexed units: 276
-- Index time: 8.27s
+- Index time: 8.12s
 - Disk usage: ~608 KB
 - Recall@5: 1.0
-- MRR: 1.0
-- Avg time-to-first-relevant-hit: 3.94s
+- MRR: 0.93
+- Avg time-to-first-relevant-hit: 4.38s
 
 Index mode (`--cache-root` + `--index`):
 - Indexed units: 276
-- Index time: 8.43s
+- Index time: 8.03s
 - Disk usage: ~611 KB
 - Recall@5: 1.0
-- MRR: 1.0
-- Avg time-to-first-relevant-hit: 3.93s
+- MRR: 0.93
+- Avg time-to-first-relevant-hit: 4.23s
 
 Conclusion: search quality is equivalent. The change is storage/management, not ranking.
 
@@ -62,8 +64,8 @@ Baseline (search only main repo index):
 
 Dependency index (search the dependency directly):
 - Recall@5: 1.0
-- MRR: 1.0
-- Avg time-to-first-relevant-hit: 3.93s
+- MRR: 0.93
+- Avg time-to-first-relevant-hit: 4.23s
 
 Conclusion: dependency queries are missed if you only index the main repo. Per-dependency indexes fix that.
 
@@ -80,15 +82,20 @@ This is reported in `scripts/bench_dep_indexes.py` under `scope_precision` for:
 - `main_repo_index` (expected low scope_hit_rate)
 
 Results:
-- Dependency index: `scope_hit_rate = 1.0`, `off_scope_rate = 0.0`
-- Main repo index: `scope_hit_rate = 0.0`, `off_scope_rate = 1.0`
+- Dependency index: `scope_hit_rate = 1.0`, `off_scope_rate = 0.0`, `topk_in_scope_rate = 1.0`, `any_in_scope_rate = 1.0`
+- Main repo index: `scope_hit_rate = 0.0`, `off_scope_rate = 1.0`, `topk_in_scope_rate = 0.0`, `any_in_scope_rate = 0.0`
+- Negative queries: `negative_any_in_scope_rate = 1.0` for the dependency index (semantic search still returns in‑scope files even for “should be absent” queries)
+
+Cross-dependency check:
+- Requests queries run against the `urllib3` index yield Recall@5 = 0.0 (expected).
 
 ### Benchmark 4: Storage + Time
 
 Index sizes (from `tldr index list --cache-root ...`):
 - `main:llm-tldr`: ~2.53 MB
 - `dep:requests`: ~0.61 MB
-- Total cache root size: ~3.14 MB
+- `dep:urllib3`: ~1.26 MB
+- Total cache root size: ~4.40 MB
 
 Conclusion: per-dependency indexes are small and cheap to keep around.
 

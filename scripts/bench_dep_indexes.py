@@ -37,6 +37,8 @@ class SearchMetrics:
     mrr: float
     hits: int
     total: int
+    negative_total: int
+    total_queries: int
     avg_time_s: float | None
     per_query: list[dict[str, Any]]
 
@@ -113,26 +115,32 @@ def _evaluate_queries(
 ) -> SearchMetrics:
     hits = 0
     total = 0
+    negative_total = 0
     rr_sum = 0.0
     time_hits: list[float] = []
     per_query: list[dict[str, Any]] = []
 
     for entry in queries:
         query = entry["query"]
-        expected = entry["expect_path_contains"]
-        total += 1
+        expected = entry.get("expect_path_contains")
+        is_negative = bool(entry.get("expect_none") or expected is None)
+        if is_negative:
+            negative_total += 1
+        else:
+            total += 1
         results, duration_s = search_fn(query, k)
 
         hit_rank = None
-        expected_norm = expected.replace("\\", "/")
-        expected_name = Path(expected_norm).name
-        for idx, result in enumerate(results, start=1):
-            path = result.get("file") or ""
-            path_norm = path.replace("\\", "/")
-            path_name = Path(path_norm).name
-            if expected_norm in path_norm or expected_name == path_name:
-                hit_rank = idx
-                break
+        if not is_negative and expected is not None:
+            expected_norm = expected.replace("\\", "/")
+            expected_name = Path(expected_norm).name
+            for idx, result in enumerate(results, start=1):
+                path = result.get("file") or ""
+                path_norm = path.replace("\\", "/")
+                path_name = Path(path_norm).name
+                if expected_norm in path_norm or expected_name == path_name:
+                    hit_rank = idx
+                    break
 
         if hit_rank is not None:
             hits += 1
@@ -143,9 +151,11 @@ def _evaluate_queries(
             {
                 "query": query,
                 "expected": expected,
+                "negative": is_negative,
                 "hit_rank": hit_rank,
                 "duration_s": duration_s,
                 "top_path": results[0]["file"] if results else None,
+                "top_paths": [res.get("file") for res in results[:k]],
             }
         )
 
@@ -158,6 +168,8 @@ def _evaluate_queries(
         mrr=mrr,
         hits=hits,
         total=total,
+        negative_total=negative_total,
+        total_queries=total + negative_total,
         avg_time_s=avg_time,
         per_query=per_query,
     )
@@ -194,21 +206,47 @@ def _scope_metrics(
     total = len(per_query)
     in_scope = 0
     off_scope = 0
+    in_scope_total = 0
+    result_total = 0
+    any_in_scope = 0
+    negative_total = 0
+    negative_any_in_scope = 0
     for entry in per_query:
-        top_path = entry.get("top_path")
-        if not top_path:
+        top_paths = entry.get("top_paths") or []
+        if not top_paths:
             continue
+        top_path = top_paths[0]
         if _path_within_root(
             top_path, result_root=result_root, scope_root=scope_root
         ):
             in_scope += 1
         else:
             off_scope += 1
+        in_scope_k = 0
+        for path in top_paths:
+            result_total += 1
+            if _path_within_root(
+                path, result_root=result_root, scope_root=scope_root
+            ):
+                in_scope_total += 1
+                in_scope_k += 1
+        if in_scope_k > 0:
+            any_in_scope += 1
+        if entry.get("negative"):
+            negative_total += 1
+            if in_scope_k > 0:
+                negative_any_in_scope += 1
     return {
         "result_root": str(result_root),
         "scope_root": str(scope_root),
         "scope_hit_rate": in_scope / total if total else 0.0,
         "off_scope_rate": off_scope / total if total else 0.0,
+        "topk_in_scope_rate": in_scope_total / result_total if result_total else 0.0,
+        "any_in_scope_rate": any_in_scope / total if total else 0.0,
+        "negative_queries": negative_total,
+        "negative_any_in_scope_rate": (
+            negative_any_in_scope / negative_total if negative_total else None
+        ),
         "off_scope_hits": off_scope,
         "total": total,
     }
@@ -216,7 +254,7 @@ def _scope_metrics(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Benchmark isolated indexes")
-    parser.add_argument("--dep", default="requests", help="Dependency import name")
+    parser.add_argument("--dep", default="requests", help="Dependency import name (comma-separated for multiple)")
     parser.add_argument(
         "--queries",
         default="scripts/bench_queries.json",
@@ -238,110 +276,162 @@ def main() -> int:
     args = parser.parse_args()
 
     queries = _load_queries(Path(args.queries))
-    dep_root = _resolve_package_root(args.dep)
+    dep_list = [d.strip() for d in args.dep.split(",") if d.strip()]
+    if any("dep" not in entry for entry in queries) and len(dep_list) > 1:
+        raise ValueError(
+            "queries missing 'dep' while multiple deps requested; add dep fields"
+        )
+    deps_from_queries = sorted({entry.get("dep") for entry in queries if entry.get("dep")})
+    deps = dep_list if dep_list else (deps_from_queries or [args.dep])
+    missing_query_deps = sorted(set(deps_from_queries) - set(deps))
+    if missing_query_deps:
+        print(
+            f"Skipping queries for deps not requested: {', '.join(missing_query_deps)}",
+            file=sys.stderr,
+        )
 
     env = os.environ.copy()
     env.setdefault("TLDR_AUTO_DOWNLOAD", "1")
 
     with tempfile.TemporaryDirectory(prefix="tldr-bench-") as tmp:
         tmp_path = Path(tmp)
-        legacy_src = tmp_path / f"{args.dep}-legacy"
-        index_src = tmp_path / f"{args.dep}-index"
         cache_root = tmp_path / "cache-root"
 
-        _copy_source(dep_root, legacy_src)
-        _copy_source(dep_root, index_src)
+        dep_info: dict[str, dict[str, Any]] = {}
 
-        # Parity: legacy index
-        legacy_index_start = time.perf_counter()
-        legacy_index_res = _run_tldr(
-            [
-                "semantic",
-                "index",
-                str(legacy_src),
-                "--lang",
-                args.lang,
-                "--model",
-                args.model,
-                "--device",
-                args.device,
-                "--no-ignore",
-            ],
-            env,
-        )
-        legacy_index_time = time.perf_counter() - legacy_index_start
-        legacy_units = _parse_indexed_count(legacy_index_res.stdout)
+        for dep in deps:
+            try:
+                dep_root = _resolve_package_root(dep)
+            except Exception as exc:
+                print(f"Skipping dep {dep}: {exc}", file=sys.stderr)
+                continue
 
-        # Parity: index mode
-        dep_index_id = f"dep:{args.dep}"
-        index_index_start = time.perf_counter()
-        index_index_res = _run_tldr(
-            [
-                "--cache-root",
-                str(cache_root),
-                "--index",
-                dep_index_id,
-                "semantic",
-                "index",
-                str(index_src),
-                "--lang",
-                args.lang,
-                "--model",
-                args.model,
-                "--device",
-                args.device,
-                "--no-ignore",
-            ],
-            env,
-        )
-        index_index_time = time.perf_counter() - index_index_start
-        index_units = _parse_indexed_count(index_index_res.stdout)
+            dep_queries = [
+                entry for entry in queries if (entry.get("dep") or dep) == dep
+            ]
+            if not dep_queries:
+                print(f"Skipping dep {dep}: no queries found", file=sys.stderr)
+                continue
 
-        def legacy_search(query: str, k: int):
-            res = _run_tldr(
+            legacy_src = tmp_path / f"{dep}-legacy"
+            index_src = tmp_path / f"{dep}-index"
+
+            _copy_source(dep_root, legacy_src)
+            _copy_source(dep_root, index_src)
+
+            # Parity: legacy index
+            legacy_index_start = time.perf_counter()
+            legacy_index_res = _run_tldr(
                 [
                     "semantic",
-                    "search",
-                    query,
-                    "--path",
+                    "index",
                     str(legacy_src),
-                    "--k",
-                    str(k),
+                    "--lang",
+                    args.lang,
+                    "--model",
+                    args.model,
                     "--device",
                     args.device,
+                    "--no-ignore",
                 ],
                 env,
             )
-            results = json.loads(res.stdout)
-            return results, res.duration_s
+            legacy_index_time = time.perf_counter() - legacy_index_start
+            legacy_units = _parse_indexed_count(legacy_index_res.stdout)
 
-        def index_search(query: str, k: int):
-            res = _run_tldr(
+            # Parity: index mode
+            dep_index_id = f"dep:{dep}"
+            index_index_start = time.perf_counter()
+            index_index_res = _run_tldr(
                 [
                     "--cache-root",
                     str(cache_root),
                     "--index",
                     dep_index_id,
                     "semantic",
-                    "search",
-                    query,
-                    "--path",
+                    "index",
                     str(index_src),
-                    "--k",
-                    str(k),
+                    "--lang",
+                    args.lang,
+                    "--model",
+                    args.model,
                     "--device",
                     args.device,
+                    "--no-ignore",
                 ],
                 env,
             )
-            results = json.loads(res.stdout)
-            return results, res.duration_s
+            index_index_time = time.perf_counter() - index_index_start
+            index_units = _parse_indexed_count(index_index_res.stdout)
 
-        legacy_metrics = _evaluate_queries(queries, legacy_search, args.k)
-        index_metrics = _evaluate_queries(queries, index_search, args.k)
+            def legacy_search(query: str, k: int):
+                res = _run_tldr(
+                    [
+                        "semantic",
+                        "search",
+                        query,
+                        "--path",
+                        str(legacy_src),
+                        "--k",
+                        str(k),
+                        "--device",
+                        args.device,
+                    ],
+                    env,
+                )
+                results = json.loads(res.stdout)
+                return results, res.duration_s
 
-        legacy_cache = legacy_src / ".tldr"
-        legacy_size = _dir_size_bytes(legacy_cache) if legacy_cache.exists() else 0
+            def index_search(query: str, k: int):
+                res = _run_tldr(
+                    [
+                        "--cache-root",
+                        str(cache_root),
+                        "--index",
+                        dep_index_id,
+                        "semantic",
+                        "search",
+                        query,
+                        "--path",
+                        str(index_src),
+                        "--k",
+                        str(k),
+                        "--device",
+                        args.device,
+                    ],
+                    env,
+                )
+                results = json.loads(res.stdout)
+                return results, res.duration_s
+
+            legacy_metrics = _evaluate_queries(dep_queries, legacy_search, args.k)
+            index_metrics = _evaluate_queries(dep_queries, index_search, args.k)
+
+            legacy_cache = legacy_src / ".tldr"
+            legacy_size = _dir_size_bytes(legacy_cache) if legacy_cache.exists() else 0
+
+            dep_info[dep] = {
+                "dep_source": str(dep_root),
+                "paths": {
+                    "legacy_src": str(legacy_src),
+                    "index_src": str(index_src),
+                },
+                "parity": {
+                    "legacy": {
+                        "index_time_s": legacy_index_time,
+                        "indexed_units": legacy_units,
+                        "disk_usage_bytes": legacy_size,
+                        "metrics": legacy_metrics.__dict__,
+                    },
+                    "index_mode": {
+                        "index_time_s": index_index_time,
+                        "indexed_units": index_units,
+                        "disk_usage_bytes": None,
+                        "metrics": index_metrics.__dict__,
+                    },
+                },
+                "index_id": dep_index_id,
+            }
 
         # Workflow benchmark: main repo index vs dependency index
         repo_root = Path.cwd()
@@ -391,19 +481,6 @@ def main() -> int:
             results = json.loads(res.stdout)
             return results, res.duration_s
 
-        main_metrics = _evaluate_queries(queries, main_search, args.k)
-
-        scope_dep = _scope_metrics(
-            index_metrics.per_query,
-            result_root=index_src,
-            scope_root=index_src,
-        )
-        scope_main = _scope_metrics(
-            main_metrics.per_query,
-            result_root=repo_scan,
-            scope_root=index_src,
-        )
-
         index_list = _run_tldr(
             ["--cache-root", str(cache_root), "index", "list"], env
         )
@@ -413,44 +490,116 @@ def main() -> int:
             for entry in index_list_data.get("indexes", [])
         }
 
+        for dep, info in dep_info.items():
+            dep_index_id = info["index_id"]
+            info["parity"]["index_mode"]["disk_usage_bytes"] = index_sizes.get(
+                dep_index_id
+            )
+
+        primary_dep = next(iter(dep_info.keys()), args.dep)
+        primary_info = dep_info.get(primary_dep)
+
+        main_metrics = None
+        scope_dep = None
+        scope_main = None
+        if primary_info is not None:
+            dep_queries = [
+                entry
+                for entry in queries
+                if (entry.get("dep") or primary_dep) == primary_dep
+            ]
+            main_metrics = _evaluate_queries(dep_queries, main_search, args.k)
+            scope_dep = _scope_metrics(
+                primary_info["parity"]["index_mode"]["metrics"]["per_query"],
+                result_root=Path(primary_info["paths"]["index_src"]),
+                scope_root=Path(primary_info["paths"]["index_src"]),
+            )
+            scope_main = _scope_metrics(
+                main_metrics.per_query,
+                result_root=repo_scan,
+                scope_root=Path(primary_info["paths"]["index_src"]),
+            )
+
+        cross_dependency = []
+        dep_names = list(dep_info.keys())
+        for i, dep_a in enumerate(dep_names):
+            for dep_b in dep_names[i + 1 :]:
+                info_a = dep_info[dep_a]
+                info_b = dep_info[dep_b]
+                dep_a_queries = [
+                    entry
+                    for entry in queries
+                    if (entry.get("dep") or dep_a) == dep_a
+                ]
+
+                def dep_b_search(query: str, k: int):
+                    res = _run_tldr(
+                        [
+                            "--cache-root",
+                            str(cache_root),
+                            "--index",
+                            info_b["index_id"],
+                            "semantic",
+                            "search",
+                            query,
+                            "--path",
+                            info_b["paths"]["index_src"],
+                            "--k",
+                            str(k),
+                            "--device",
+                            args.device,
+                        ],
+                        env,
+                    )
+                    results = json.loads(res.stdout)
+                    return results, res.duration_s
+
+                cross_metrics = _evaluate_queries(dep_a_queries, dep_b_search, args.k)
+                cross_scope = _scope_metrics(
+                    cross_metrics.per_query,
+                    result_root=Path(info_b["paths"]["index_src"]),
+                    scope_root=Path(info_a["paths"]["index_src"]),
+                )
+                cross_dependency.append(
+                    {
+                        "from_dep": dep_a,
+                        "to_dep": dep_b,
+                        "metrics": cross_metrics.__dict__,
+                        "scope_precision": cross_scope,
+                    }
+                )
+
         summary = {
-            "dependency": args.dep,
-            "dep_source": str(dep_root),
+            "dependency": primary_dep,
+            "dep_source": primary_info["dep_source"] if primary_info else None,
             "model": args.model,
             "device": args.device,
             "k": args.k,
             "paths": {
-                "legacy_src": str(legacy_src),
-                "index_src": str(index_src),
+                "legacy_src": primary_info["paths"]["legacy_src"] if primary_info else None,
+                "index_src": primary_info["paths"]["index_src"] if primary_info else None,
                 "cache_root": str(cache_root),
                 "repo_scan": str(repo_scan),
             },
-            "parity": {
-                "legacy": {
-                    "index_time_s": legacy_index_time,
-                    "indexed_units": legacy_units,
-                    "disk_usage_bytes": legacy_size,
-                    "metrics": legacy_metrics.__dict__,
-                },
-                "index_mode": {
-                    "index_time_s": index_index_time,
-                    "indexed_units": index_units,
-                    "disk_usage_bytes": index_sizes.get(dep_index_id),
-                    "metrics": index_metrics.__dict__,
-                },
-            },
+            "parity": primary_info["parity"] if primary_info else None,
             "workflow": {
                 "main_repo": {
                     "index_time_s": main_index_time,
-                    "metrics": main_metrics.__dict__,
+                    "metrics": main_metrics.__dict__ if main_metrics else None,
                 },
                 "dependency": {
-                    "metrics": index_metrics.__dict__,
+                    "metrics": primary_info["parity"]["index_mode"]["metrics"]
+                    if primary_info
+                    else None,
                 },
             },
             "scope_precision": {
                 "dependency_index": scope_dep,
                 "main_repo_index": scope_main,
+            },
+            "multi_dep": {
+                "deps": dep_info,
+                "cross_dependency": cross_dependency,
             },
             "index_list": index_list_data,
         }
