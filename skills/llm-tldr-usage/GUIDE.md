@@ -16,9 +16,48 @@ tldrf impact <function> .
 tldrf arch .
 ```
 **Use case:** "Where should I put this new module?"
-- Shows entry/middle/leaf layers
-- Identifies module boundaries
-- Detects circular dependencies
+
+Analyzes your codebase's call graph structure to identify architectural layers:
+
+| Layer | Meaning | Examples |
+|-------|---------|----------|
+| **Entry** | Functions that call others but aren't called | CLI entry points, test functions, main() |
+| **Leaf** | Functions that are called but don't call anything | Utility functions, validators, formatters |
+| **Middle** | Functions that both call and are called | Business logic, service layer |
+| **Circular** | Files/modules that import each other | Potential design smell |
+
+**When it's useful:**
+
+1. **Understanding unfamiliar codebases**
+   - "Where are the entry points?" → Entry layer
+   - "What are the low-level utilities?" → Leaf layer
+   - "What's the core business logic?" → Middle layer
+
+2. **Deciding where to put new code**
+   - New CLI command → belongs with entry layer
+   - New utility function → belongs with leaf layer
+   - New service → belongs with middle layer
+
+3. **Identifying design problems**
+   - Too many circular dependencies → tangled architecture
+   - Entry layer calling leaf directly (skipping middle) → possible layering violation
+   - Middle layer too large → might need decomposition
+
+4. **Refactoring guidance**
+   - High middle-layer count → complex interdependencies
+   - Functions in wrong layer → candidates for moving
+
+**Example output:**
+```json
+{
+  "summary": {
+    "entry_count": 303,   // CLI commands, tests, etc.
+    "leaf_count": 244,    // Utilities, helpers
+    "middle_count": 245,  // Core logic
+    "circular_count": 2   // Potential issues
+  }
+}
+```
 
 ### 3. Function Context Without Reading Full Files
 ```bash
