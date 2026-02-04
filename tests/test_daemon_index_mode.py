@@ -7,6 +7,8 @@ import sys
 import time
 from pathlib import Path
 
+from tldr.indexing import IndexPaths, compute_index_key
+
 
 def _load_identity_module():
     module_path = Path(__file__).resolve().parents[1] / "tldr" / "daemon" / "identity.py"
@@ -282,6 +284,43 @@ def test_daemon_impact_reads_call_graph_from_cache(tmp_path: Path):
         assert result.get("status") == "ok"
         assert result.get("callers") == [
             {"caller": "main", "file": "main.py", "line": 12}
+        ]
+    finally:
+        _stop_daemon(identity, proc)
+
+
+def test_daemon_index_mode_impact_reads_call_graph_from_cache(tmp_path: Path):
+    project = tmp_path / "project"
+    project.mkdir()
+
+    cache_root = tmp_path / "cache"
+    cache_root.mkdir()
+
+    index_id = "dep:test"
+    index_key = compute_index_key(index_id)
+    paths = IndexPaths.from_parts(cache_root, index_key)
+    paths.cache_dir.mkdir(parents=True, exist_ok=True)
+
+    call_graph = {
+        "edges": [
+            {"caller": "main", "callee": "helper", "file": "main.py", "line": 7}
+        ],
+        "nodes": {},
+    }
+    paths.call_graph.write_text(json.dumps(call_graph))
+
+    env = _build_subprocess_env(tmp_path)
+    proc = _start_daemon_process(project, cache_root, index_id, env=env)
+    identity = resolve_daemon_identity(
+        project, cache_root=cache_root, index_id=index_id
+    )
+
+    try:
+        _wait_for_daemon(identity, proc)
+        result = _send_command(identity, {"cmd": "impact", "func": "helper"})
+        assert result.get("status") == "ok"
+        assert result.get("callers") == [
+            {"caller": "main", "file": "main.py", "line": 7}
         ]
     finally:
         _stop_daemon(identity, proc)

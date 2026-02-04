@@ -67,7 +67,19 @@ Dependency index (search the dependency directly):
 
 Conclusion: dependency queries are missed if you only index the main repo. Per-dependency indexes fix that.
 
-### Benchmark 3: Storage + Time
+### Benchmark 3: Query Scope Precision (pollution check)
+
+Goal: quantify whether dependency queries return results **inside** the dependency corpus vs “polluted” hits from the main repo index.
+
+Metric:
+- `scope_hit_rate`: fraction of queries where the top hit is inside the dependency root.
+- `off_scope_rate`: fraction of queries where the top hit is **outside** the dependency root.
+
+This is reported in `scripts/bench_dep_indexes.py` under `scope_precision` for:
+- `dependency_index` (expected high scope_hit_rate)
+- `main_repo_index` (expected low scope_hit_rate)
+
+### Benchmark 4: Storage + Time
 
 Index sizes (from `tldr index list --cache-root ...`):
 - `main:llm-tldr`: ~2.53 MB

@@ -1,4 +1,5 @@
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -56,3 +57,28 @@ def test_cache_root_git_falls_back_to_cwd(tmp_path, monkeypatch):
 
     assert ctx.cache_root == repo.resolve()
     assert ctx.index_id.startswith("abs:")
+
+
+def test_cache_root_git_errors_when_no_repo(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "tldr.cli",
+            "--cache-root",
+            "git",
+            "warm",
+            str(project),
+        ],
+        capture_output=True,
+        text=True,
+        cwd=project,
+    )
+
+    assert result.returncode != 0
+    assert "cache_root 'git' requested but no git repository found" in (
+        result.stderr or ""
+    )

@@ -38,7 +38,17 @@ Goal: show new capability that the old workflow can’t do cleanly.
 
 This shows why per-dependency indexes actually improve debugging tasks.
 
-### Benchmark 3: Storage + Time
+### Benchmark 3: Query Scope Precision (pollution)
+
+Goal: measure how often dependency queries return top hits **inside** the dependency corpus vs “polluted” hits from the main repo index.
+
+Metric:
+- `scope_hit_rate`: top hit is within the dependency root.
+- `off_scope_rate`: top hit is outside the dependency root.
+
+This is reported by `scripts/bench_dep_indexes.py` under `scope_precision`.
+
+### Benchmark 4: Storage + Time
 
 Goal: quantify overhead.
 
@@ -134,7 +144,14 @@ Dependency index (search the dependency directly):
 - MRR: 1.0
 - Avg time-to-first-relevant-hit: 3.93s
 
-### Benchmark 3: Storage + time
+### Benchmark 3: Query scope precision (pollution)
+
+Metric: `scope_precision` in the benchmark output (top-hit in-scope rate for dependency queries).
+
+Note: not re-run in this update; expected to mirror Benchmark 2
+(dependency index hits in-scope, main repo index yields off-scope hits).
+
+### Benchmark 4: Storage + time
 
 Index sizes (from `tldr index list --cache-root ...`):
 - `main:llm-tldr`: ~2.53 MB

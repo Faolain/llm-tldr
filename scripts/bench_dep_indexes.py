@@ -163,6 +163,44 @@ def _evaluate_queries(
     )
 
 
+def _path_within_root(path_str: str | None, root: Path) -> bool:
+    if not path_str:
+        return False
+    try:
+        path = Path(path_str)
+        if not path.is_absolute():
+            path = (root / path).resolve()
+        else:
+            path = path.resolve()
+        root_resolved = root.resolve()
+        return path == root_resolved or str(path).startswith(
+            f"{root_resolved}{os.sep}"
+        )
+    except OSError:
+        return False
+
+
+def _scope_metrics(per_query: list[dict[str, Any]], scope_root: Path) -> dict[str, Any]:
+    total = len(per_query)
+    in_scope = 0
+    off_scope = 0
+    for entry in per_query:
+        top_path = entry.get("top_path")
+        if not top_path:
+            continue
+        if _path_within_root(top_path, scope_root):
+            in_scope += 1
+        else:
+            off_scope += 1
+    return {
+        "scope_root": str(scope_root),
+        "scope_hit_rate": in_scope / total if total else 0.0,
+        "off_scope_rate": off_scope / total if total else 0.0,
+        "off_scope_hits": off_scope,
+        "total": total,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Benchmark isolated indexes")
     parser.add_argument("--dep", default="requests", help="Dependency import name")
@@ -342,6 +380,9 @@ def main() -> int:
 
         main_metrics = _evaluate_queries(queries, main_search, args.k)
 
+        scope_dep = _scope_metrics(index_metrics.per_query, index_src)
+        scope_main = _scope_metrics(main_metrics.per_query, index_src)
+
         index_list = _run_tldr(
             ["--cache-root", str(cache_root), "index", "list"], env
         )
@@ -385,6 +426,10 @@ def main() -> int:
                 "dependency": {
                     "metrics": index_metrics.__dict__,
                 },
+            },
+            "scope_precision": {
+                "dependency_index": scope_dep,
+                "main_repo_index": scope_main,
             },
             "index_list": index_list_data,
         }

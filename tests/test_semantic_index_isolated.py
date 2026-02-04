@@ -72,3 +72,69 @@ def test_semantic_indexes_isolated(tmp_path, monkeypatch):
     )
     assert results
     assert all("a.py" in r.get("file", "") for r in results)
+
+
+def test_semantic_search_scoped_to_index(tmp_path, monkeypatch):
+    pytest.importorskip("faiss")
+    cache_root = tmp_path / "repo"
+    cache_root.mkdir()
+
+    repo_scan = tmp_path / "main_repo"
+    dep_scan = tmp_path / "dep_pkg"
+    repo_scan.mkdir()
+    dep_scan.mkdir()
+
+    (repo_scan / "repo.py").write_text("def repo_func():\n    return 42\n")
+    (dep_scan / "dep.py").write_text("def dep_func():\n    return 7\n")
+
+    monkeypatch.setattr("tldr.semantic.get_model", lambda *_args, **_kwargs: DummyModel())
+
+    ctx_repo = get_index_context(
+        scan_root=repo_scan,
+        cache_root_arg=cache_root,
+        index_id_arg="repo:main",
+        allow_create=True,
+    )
+    ctx_dep = get_index_context(
+        scan_root=dep_scan,
+        cache_root_arg=cache_root,
+        index_id_arg="dep:pkg",
+        allow_create=True,
+    )
+
+    build_semantic_index(
+        str(repo_scan),
+        lang="python",
+        model="dummy-model",
+        show_progress=False,
+        index_paths=ctx_repo.paths,
+        index_config=ctx_repo.config,
+    )
+    build_semantic_index(
+        str(dep_scan),
+        lang="python",
+        model="dummy-model",
+        show_progress=False,
+        index_paths=ctx_dep.paths,
+        index_config=ctx_dep.config,
+    )
+
+    dep_results = semantic_search(
+        str(dep_scan),
+        "function",
+        model="dummy-model",
+        index_paths=ctx_dep.paths,
+        index_config=ctx_dep.config,
+    )
+    assert dep_results
+    assert all("dep.py" in r.get("file", "") for r in dep_results)
+
+    repo_results = semantic_search(
+        str(repo_scan),
+        "function",
+        model="dummy-model",
+        index_paths=ctx_repo.paths,
+        index_config=ctx_repo.config,
+    )
+    assert repo_results
+    assert all("repo.py" in r.get("file", "") for r in repo_results)
