@@ -631,9 +631,7 @@ def main():
         search as api_search,
     )
     from .analysis import (
-        analyze_architecture,
         analyze_dead_code,
-        analyze_impact,
         impact_analysis,
         architecture_analysis,
     )
@@ -742,34 +740,55 @@ def main():
             cache_file = index_paths.call_graph
             dirty_path = index_paths.dirty
         else:
-            # Auto-detect: check for index-mode cache first, then legacy
-            # This allows commands to work without --cache-root=git if the index
-            # was previously built with it.
-            tldr_dir = project / ".tldr"
-            indexes_dir = tldr_dir / "indexes"
+            # Auto-detect: prefer an index-mode cache that matches this scan root,
+            # then fall back to the legacy cache path.
+            #
+            # This keeps "just run `tldrf … .`" working even when the cache was
+            # built with `--cache-root=git` and later queried without it.
             cache_file = None
             dirty_path = None
 
-            if indexes_dir.exists():
-                # Find the most recently modified index with a call graph
-                best_cache = None
-                best_mtime = 0
-                for idx_dir in indexes_dir.iterdir():
-                    if idx_dir.is_dir():
-                        candidate = idx_dir / "cache" / "call_graph.json"
-                        if candidate.exists():
-                            mtime = candidate.stat().st_mtime
-                            if mtime > best_mtime:
-                                best_mtime = mtime
-                                best_cache = candidate
-                                dirty_path = idx_dir / "dirty.json"
+            indexes_dir: Path | None = None
+            for parent in (project, *project.parents):
+                candidate = parent / ".tldr" / "indexes"
+                if candidate.exists():
+                    indexes_dir = candidate
+                    break
 
-                if best_cache:
-                    cache_file = best_cache
+            if indexes_dir is not None:
+                scan_root_abs = os.path.normcase(str(project.resolve()))
+                exact_matches: list[tuple[float, Path, Path]] = []
+
+                for idx_dir in indexes_dir.iterdir():
+                    if not idx_dir.is_dir():
+                        continue
+
+                    graph_path = idx_dir / "cache" / "call_graph.json"
+                    if not graph_path.exists():
+                        continue
+
+                    mtime = graph_path.stat().st_mtime
+                    dirty_candidate = idx_dir / "cache" / "dirty.json"
+
+                    meta_path = idx_dir / "meta.json"
+                    if not meta_path.exists():
+                        continue
+                    try:
+                        meta = json.loads(meta_path.read_text())
+                    except (json.JSONDecodeError, OSError):
+                        continue
+                    if meta.get("scan_root_abs") == scan_root_abs:
+                        exact_matches.append((mtime, graph_path, dirty_candidate))
+
+                if exact_matches:
+                    _, cache_file, dirty_path = max(
+                        exact_matches,
+                        key=lambda item: item[0],
+                    )
 
             # Fall back to legacy path if no index-mode cache found
             if cache_file is None:
-                cache_file = tldr_dir / "cache" / "call_graph.json"
+                cache_file = project / ".tldr" / "cache" / "call_graph.json"
                 dirty_path = None
 
         # Check if we have a cached graph
