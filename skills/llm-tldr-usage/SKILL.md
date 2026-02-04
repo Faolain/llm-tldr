@@ -13,10 +13,23 @@ Use this tool when:
 - Context size is a limiting factor
 - The codebase is unfamiliar
 - You need callers, data flow, or change impact
+- You want to understand "what breaks if I change this"
+- You need architectural guidance (where to place new code)
+- You're searching for code by **concept** rather than exact text
 
-Avoid this tool when:
-- Working on small, self-contained files
-- Writing new code without dependencies
+## When NOT to Use (Use grep/Glob Instead)
+**tldrf operates at function/class granularity on code files only.** Use traditional tools for:
+
+| Task | Use This Instead |
+|------|------------------|
+| Find every occurrence of a string (e.g., "faiss") | `grep -rn "faiss" .` |
+| Search documentation/markdown files | `grep -r "pattern" --include="*.md"` |
+| Search config files (pyproject.toml, package.json) | `grep "pattern" pyproject.toml` |
+| Find module-level code (not in a function) | `grep` or `Read` the file |
+| Get exact line numbers for implementation | `grep -n` or `Read` |
+| Find test patterns (e.g., `pytest.importorskip`) | `grep -r "importorskip" tests/` |
+
+**Rule of thumb:** If you need to find "every place string X appears", use grep. If you need to understand "what code is affected by changing function Y", use tldrf.
 
 ## Installation and Setup
 
@@ -142,12 +155,21 @@ tldrf semantic search "what does X do" --path .  # Find by intent
 ```
 
 ### Planning a migration (e.g., swapping a dependency)
+**Use tldrf for impact analysis, grep for exhaustive touchpoint discovery:**
 ```bash
-tldrf impact <old_api_function> .          # Find all touchpoints
+# Step 1: Understand impact (tldrf)
+tldrf impact <old_api_function> .          # Who calls this function?
+tldrf arch .                               # Where should new code live?
 tldrf context <key_type> --project .       # Understand data structures
-tldrf calls . --filter <module>            # Map internal dependencies
+
+# Step 2: Find ALL references (grep) - tldrf only finds function calls
+grep -rn "old_dependency" --include="*.py" --include="*.toml" --include="*.md"
+
+# Step 3: Verify cleanup
 tldrf dead .                               # Find unused code to remove
 ```
+
+**Why both tools?** tldrf finds function-level dependencies (callers/callees). grep finds every string occurrence including imports, config files, documentation, and module-level code that tldrf doesn't index.
 
 ### Debugging a specific line
 ```bash
@@ -155,6 +177,34 @@ tldrf slice <file> <func> <line>           # What affects this line?
 tldrf dfg <file> <function>                # Trace data flow through function
 tldrf cfg <file> <function>                # See control flow paths
 ```
+
+## tldrf vs grep: Complementary Tools
+
+tldrf and grep serve different purposes. Using the wrong tool wastes time.
+
+| Question | Tool | Why |
+|----------|------|-----|
+| "Who calls `build_index()`?" | `tldrf impact build_index .` | Call graph analysis |
+| "Where is the string 'faiss' used?" | `grep -rn "faiss" .` | Text search |
+| "What happens if I change this function's signature?" | `tldrf impact` | Finds all callers |
+| "What imports this module?" | `grep "import faiss"` or `tldrf importers` | Either works |
+| "Where should I put a new utility module?" | `tldrf arch .` | Architecture layers |
+| "What does this function do?" | `tldrf context <func>` | Summarizes with deps |
+| "Find code that handles authentication" | `tldrf semantic search "auth"` | Concept search |
+| "Find the exact line with `IndexFlatIP`" | `grep -n "IndexFlatIP"` | Exact text match |
+| "What's in pyproject.toml?" | `grep` or `Read` | tldrf doesn't index config |
+| "What tests cover this function?" | `tldrf impact` shows test callers | Reverse call graph |
+
+### Performance Comparison
+
+| Task Type | tldrf | grep |
+|-----------|-------|------|
+| Find all callers of a function | 0.2s (cached index) | 30s+ (manual analysis) |
+| Find every string occurrence | N/A (wrong tool) | 0.5s |
+| Understand function dependencies | 0.3s | Minutes of reading |
+| Search documentation files | N/A (doesn't index .md) | 0.2s |
+
+**Best practice:** Start with `tldrf impact` to understand what's affected, then use `grep` to find every reference for implementation.
 
 ## How It Works
 

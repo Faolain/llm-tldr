@@ -41,11 +41,17 @@ This tells you every caller that would be affected when you refactor `build_sema
 ### 2. Call Graph — "What does this function depend on?"
 
 ```bash
-# What does semantic.py call internally?
-tldrf calls . --filter tldr/semantic.py
+# Build the full call graph, then grep for semantic.py edges
+tldrf calls . | grep "semantic.py"
+
+# Or use context to see what a specific function calls
+tldrf context build_semantic_index --project .
+tldrf context semantic_search --project .
 ```
 
 Shows the dependency graph — helps identify all the FAISS-touching code paths.
+
+> **Note:** `tldrf calls` does not have a `--filter` option. Use grep on the output or `tldrf context` for specific functions.
 
 ### 3. Context — "Give me just what I need to understand this function"
 
