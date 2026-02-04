@@ -634,6 +634,7 @@ def main():
         analyze_architecture,
         analyze_dead_code,
         analyze_impact,
+        impact_analysis,
     )
     from .dirty_flag import is_dirty, get_dirty_files, clear_dirty
     from .patch import patch_call_graph
@@ -734,10 +735,41 @@ def main():
         """
         import time
         project = Path(project_path).resolve()
-        cache_file = (
-            index_paths.call_graph if index_paths is not None else project / ".tldr" / "cache" / "call_graph.json"
-        )
-        dirty_path = index_paths.dirty if index_paths is not None else None
+
+        # Determine cache file location
+        if index_paths is not None:
+            cache_file = index_paths.call_graph
+            dirty_path = index_paths.dirty
+        else:
+            # Auto-detect: check for index-mode cache first, then legacy
+            # This allows commands to work without --cache-root=git if the index
+            # was previously built with it.
+            tldr_dir = project / ".tldr"
+            indexes_dir = tldr_dir / "indexes"
+            cache_file = None
+            dirty_path = None
+
+            if indexes_dir.exists():
+                # Find the most recently modified index with a call graph
+                best_cache = None
+                best_mtime = 0
+                for idx_dir in indexes_dir.iterdir():
+                    if idx_dir.is_dir():
+                        candidate = idx_dir / "cache" / "call_graph.json"
+                        if candidate.exists():
+                            mtime = candidate.stat().st_mtime
+                            if mtime > best_mtime:
+                                best_mtime = mtime
+                                best_cache = candidate
+                                dirty_path = idx_dir / "dirty.json"
+
+                if best_cache:
+                    cache_file = best_cache
+
+            # Fall back to legacy path if no index-mode cache found
+            if cache_file is None:
+                cache_file = tldr_dir / "cache" / "call_graph.json"
+                dirty_path = None
 
         # Check if we have a cached graph
         if cache_file.exists():
@@ -1141,22 +1173,31 @@ def main():
                 default=".",
             )
             index_ctx = _get_index_ctx(scan_root, allow_create=False)
+            index_paths = index_ctx.paths if index_ctx else None
             ignore_spec = get_ignore_spec(scan_root, index_ctx)
             lang = resolve_language(
                 args.lang,
                 scan_root,
-                index_paths=getattr(index_ctx, "paths", None),
+                index_paths=index_paths,
                 ignore_spec=ignore_spec,
             )
             workspace_root = _workspace_root(scan_root, index_ctx)
-            result = analyze_impact(
+            # Use cached graph (which contains all languages) instead of rebuilding
+            # with a single language. This ensures impact analysis works correctly
+            # for multi-language projects.
+            graph = _get_or_build_graph(
                 scan_root,
+                lang,
+                build_project_call_graph,
+                index_paths=index_paths,
+                workspace_root=workspace_root,
+                ignore_spec=ignore_spec,
+            )
+            result = impact_analysis(
+                graph,
                 args.func,
                 max_depth=args.depth,
                 target_file=args.file,
-                language=lang,
-                ignore_spec=ignore_spec,
-                workspace_root=str(workspace_root) if workspace_root is not None else None,
             )
             print(json.dumps(result, indent=2))
 
