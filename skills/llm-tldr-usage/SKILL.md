@@ -312,3 +312,8 @@ tldrf index list --cache-root=git
 ## Principle
 
 Rule of thumb: If raw code does not change your decision, do not include it in context.
+
+## Additional Resources
+
+For a comprehensive guide on when tldrf excels vs when to use grep, see:
+`skills/llm-tldr-usage/GUIDE.md`
