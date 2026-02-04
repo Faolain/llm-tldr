@@ -97,6 +97,30 @@ Shows module-level dependencies — helps you decide where to place `tldr/vector
 | Check what tests cover semantic indexing | `tldrf impact test_semantic_indexes_isolated .` |
 | Validate no dead code after refactor     | `tldrf dead .`                                |
 
+### Bugs Found and Fixed in tldrf During Analysis
+
+While testing the tldrf workflow above, we discovered and fixed bugs in the CLI:
+
+**Bug 1: `impact` command bypassed the cache**
+- Problem: Used `analyze_impact()` which rebuilt the call graph fresh with a single language, ignoring the cached multi-language graph
+- Fix: Changed to use `_get_or_build_graph()` + `impact_analysis()` like the `calls` command (commit `13168ad`)
+
+**Bug 2: No auto-detection of index-mode cache**
+- Problem: Commands failed without `--cache-root=git` even when index was built with it
+- Fix: Added fallback to find most recent index in `.tldr/indexes/*/cache/call_graph.json`
+
+**Root cause identified (not yet fixed):** `_detect_project_languages()` returns alphabetically sorted languages, so JavaScript (1 file) came before Python (63 files), causing single-language rebuilds to miss Python code.
+
+**Verification Results (after fix):**
+
+| Command | Before Fix | After Fix | Status |
+|---------|------------|-----------|--------|
+| `tldrf calls .` | 0 edges | **1150 edges** | ✅ Fixed |
+| `tldrf impact build_semantic_index .` | "Function not found" | **5 callers** | ✅ Fixed |
+| `tldrf impact semantic_search .` | Broken | **4 callers** | ✅ Fixed |
+| `tldrf structure tldr/semantic.py` | `files: []` | `files: []` | ⚠️ Expected (use directory) |
+| `tldrf context build_semantic_index --project .` | Working | **Working** | ✅ Was OK |
+
 ## Gotchas / Learnings (rolling)
 
 - USearch returns **distance** (lower is better); TLDR expects **score** (higher is better). Conversion: `score = 1 - distance` for cosine metric.
