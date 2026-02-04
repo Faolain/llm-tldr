@@ -79,6 +79,10 @@ This is reported in `scripts/bench_dep_indexes.py` under `scope_precision` for:
 - `dependency_index` (expected high scope_hit_rate)
 - `main_repo_index` (expected low scope_hit_rate)
 
+Results:
+- Dependency index: `scope_hit_rate = 1.0`, `off_scope_rate = 0.0`
+- Main repo index: `scope_hit_rate = 0.0`, `off_scope_rate = 1.0`
+
 ### Benchmark 4: Storage + Time
 
 Index sizes (from `tldr index list --cache-root ...`):

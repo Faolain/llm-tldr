@@ -163,24 +163,34 @@ def _evaluate_queries(
     )
 
 
-def _path_within_root(path_str: str | None, root: Path) -> bool:
+def _path_within_root(
+    path_str: str | None,
+    *,
+    result_root: Path,
+    scope_root: Path,
+) -> bool:
     if not path_str:
         return False
     try:
         path = Path(path_str)
         if not path.is_absolute():
-            path = (root / path).resolve()
+            path = (result_root / path).resolve()
         else:
             path = path.resolve()
-        root_resolved = root.resolve()
-        return path == root_resolved or str(path).startswith(
-            f"{root_resolved}{os.sep}"
+        scope_resolved = scope_root.resolve()
+        return path == scope_resolved or str(path).startswith(
+            f"{scope_resolved}{os.sep}"
         )
     except OSError:
         return False
 
 
-def _scope_metrics(per_query: list[dict[str, Any]], scope_root: Path) -> dict[str, Any]:
+def _scope_metrics(
+    per_query: list[dict[str, Any]],
+    *,
+    result_root: Path,
+    scope_root: Path,
+) -> dict[str, Any]:
     total = len(per_query)
     in_scope = 0
     off_scope = 0
@@ -188,11 +198,14 @@ def _scope_metrics(per_query: list[dict[str, Any]], scope_root: Path) -> dict[st
         top_path = entry.get("top_path")
         if not top_path:
             continue
-        if _path_within_root(top_path, scope_root):
+        if _path_within_root(
+            top_path, result_root=result_root, scope_root=scope_root
+        ):
             in_scope += 1
         else:
             off_scope += 1
     return {
+        "result_root": str(result_root),
         "scope_root": str(scope_root),
         "scope_hit_rate": in_scope / total if total else 0.0,
         "off_scope_rate": off_scope / total if total else 0.0,
@@ -380,8 +393,16 @@ def main() -> int:
 
         main_metrics = _evaluate_queries(queries, main_search, args.k)
 
-        scope_dep = _scope_metrics(index_metrics.per_query, index_src)
-        scope_main = _scope_metrics(main_metrics.per_query, index_src)
+        scope_dep = _scope_metrics(
+            index_metrics.per_query,
+            result_root=index_src,
+            scope_root=index_src,
+        )
+        scope_main = _scope_metrics(
+            main_metrics.per_query,
+            result_root=repo_scan,
+            scope_root=index_src,
+        )
 
         index_list = _run_tldr(
             ["--cache-root", str(cache_root), "index", "list"], env
