@@ -31,6 +31,25 @@ Use this tool when:
 
 **Rule of thumb:** If you need to find "every place string X appears", use grep. If you need to understand "what code is affected by changing function Y", use tldrf.
 
+## When to Skip tldrf Entirely (grep is sufficient)
+
+tldrf adds overhead. For these scenarios, **just use grep**:
+
+| Scenario | Why grep is enough |
+|----------|-------------------|
+| Small codebases (<100 files) | grep output is manageable, manual filtering is fast |
+| Shallow call graphs (1-2 levels) | Finding callers via `grep "function_name("` is trivial |
+| Dependency migrations/replacements | You need exhaustive text search anyway (config, docs, imports) |
+| You already know the functions involved | Just grep for them and read the code |
+
+**The test:** If `grep -rn "pattern" .` returns <50 matches, you probably don't need tldrf.
+
+tldrf shines when:
+- Call graphs are deep (5+ levels) and manual tracing is impractical
+- Codebases are large (1000+ files) and grep returns overwhelming results
+- You don't know what to search for (use semantic search)
+- You need program slicing or data flow analysis
+
 ## Installation and Setup
 
 ```bash
