@@ -1,0 +1,4 @@
+interface:
+  display_name: "LLM TLDR Usage"
+  short_description: "Guide agents to index and search code with llm-tldr CLI"
+  default_prompt: "Help me use llm-tldr to index and query codebases or dependencies."
