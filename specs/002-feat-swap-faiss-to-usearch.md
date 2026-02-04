@@ -254,7 +254,7 @@ USearch `Index` is typically HNSW (approximate).
 
 This spec requires explicitly choosing one of:
 
-Option A (recommended for parity): **Exact mode**
+Option A (recommended for parity/testing): **Exact mode**
 - Persist embeddings as `embeddings.npy` (or `embeddings.f32`) alongside metadata.
 - Use `usearch.index.search(vectors, query, k, metric, exact=True)` at query time.
 - Pros: deterministic and should closely match FAISS flat search.
@@ -268,6 +268,16 @@ Option B: **Approximate mode (HNSW)**
 
 The repo should pick one and document it as part of “swap out” scope.
 If the goal is “drop-in replacement with minimal user-visible changes”, Option A is the closer match.
+If the goal is “fastest, robust, high-performance serving under concurrent multi-agent/daemon load”, Option B is the closer match.
+
+### Multi-agent / daemon robustness (preferred behavior)
+The semantic backend is used in workflows where multiple processes/agents may query concurrently, while another process (or the daemon) rebuilds in the background.
+
+Requirements:
+- **Lock-free reads**: readers should never observe a partially-written index.
+- **Atomic swaps**: index + metadata writes must be atomic (write temp in same dir, then `os.replace`).
+- **View-friendly serving**: when using memory-mapped serving (`view=True`), an atomic replace should not break in-flight readers (existing file handles/maps should remain valid while new readers see the new file).
+- **Serialized rebuilds**: avoid two concurrent rebuilds of the same semantic index (e.g., a simple lock file under the semantic cache dir).
 
 ---
 
@@ -358,26 +368,33 @@ When rebuild is required, error message should include:
 
 ---
 
-## Open Questions (Must Decide Before Implementation)
+## Target Defaults (Chosen)
 
-1. **Exact vs approximate**: choose Option A (exact) or Option B (HNSW) as the default implementation strategy.
-2. Default USearch config:
-   - `metric`: `cos` vs `ip` (recommend `cos` for clarity, store normalized vectors either way)
-   - `dtype`: `f32` vs quantized (recommend `f32` for parity)
-   - HNSW params if approximate is chosen
-3. Memory mapping in daemon:
-   - Should daemon use `Index.restore(..., view=True)` to reduce RSS?
-   - If so, ensure file locks / atomic replace don’t break in-flight views.
-4. Deprecation window:
-   - How long to keep FAISS-reading support (if any)?
+These decisions prioritize “fastest, robust, high-performance serving under concurrent multi-agent usage”, while keeping a safe path for determinism/parity when needed.
 
----
+1. **Default strategy: Option B (Approximate / HNSW)**
+   - Default implementation is a persisted USearch HNSW index (`index.usearch`) for fast queries at scale and strong daemon/MCP ergonomics.
+   - Keep Option A (exact) as an opt-in mode for testing, regression/debugging, and “parity checks”.
+
+2. **Default USearch config**
+   - `metric="cos"` + normalized embeddings for clarity and stable “cosine similarity” score semantics.
+   - `dtype="f32"` for parity and to minimize surprise across platforms.
+   - Persist all HNSW/build parameters in metadata to keep upgrades debuggable and future-proof.
+
+3. **Serving mode**
+   - Daemon should prefer `Index.restore(..., view=True)` (memory-mapped) when supported, to reduce RSS and leverage the OS page cache across processes.
+   - Ensure atomic swap semantics so in-flight views keep working while new queries load the new file.
+
+4. **Migration / compatibility**
+   - Use “read old, write new” migration (Option 1).
+   - Keep FAISS reading as an optional extra only (not a hard dependency) during the transition.
+   - Deprecation window: keep FAISS-reading support for **one release** after USearch becomes the default, then remove.
 
 ## Rollout Plan (Recommended)
 
 Phase 1: Abstraction + USearch behind a flag
 - Add vector backend selection and USearch implementation.
-- Keep FAISS as the default to minimize immediate change.
+- Keep FAISS as the default until Phase 2 to minimize immediate change.
 - Add a CI lane (or local doc) to run tests with `TLDR_VECTOR_BACKEND=usearch`.
 
 Phase 2: Make USearch default
@@ -388,4 +405,3 @@ Phase 2: Make USearch default
 Phase 3: Remove FAISS (optional)
 - Remove FAISS extra + legacy reading code.
 - Remove FAISS-specific docs/tests.
-
