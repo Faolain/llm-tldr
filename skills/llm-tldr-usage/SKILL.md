@@ -1,163 +1,229 @@
 ---
 name: llm-tldr-usage
-description: Use when Codex needs to operate llm-tldr (tldr CLI) to index, search, or analyze a codebase. Covers warm/semantic/context/search/impact/slice workflows, daemon usage, .tldrignore handling, index isolation with --cache-root and --index, and index management via tldr index list/info/rm.
+description: Use when Codex needs to run llm-tldr CLI to index, search, or analyze codebases. Covers semantic search, impact/slice workflows, daemon usage, .tldrignore handling, and index isolation with --cache-root and --index (including dependency indexes).
 ---
 
-# Llm Tldr Usage
+# SKILL: Codebase Context Extraction (llm-tldr)
 
-## Overview
-Use this skill to drive llm-tldr CLI workflows for indexing and querying codebases. Prefer index mode with `--cache-root=git` to keep all `.tldr` data under the repo root and avoid scattered caches.
+## Purpose
+Use this tool to obtain minimal, high-signal context required for reasoning about an existing codebase without loading full source files. Prefer index mode (`--cache-root=git`) so all caches live under the repo root and dependency indexes stay isolated.
 
-## Quick Start
-1. Index the current repo (structural caches):
-```bash
-tldr warm --cache-root=git .
-```
-2. Build semantic embeddings (one-time per index):
-```bash
-tldr semantic index --cache-root=git .
-```
-3. Ask a behavioral question:
-```bash
-tldr semantic search "describe how auth tokens are validated" --cache-root=git --path .
-```
-4. Pull focused context for an edit:
-```bash
-tldr context login --cache-root=git --project .
-```
+## When to Use
+Use this tool when:
+- Context size is a limiting factor
+- The codebase is unfamiliar
+- You need callers, data flow, or change impact
 
-## Choose The Right Path
-- Index the current repo and search it.
-- Index a dependency with an isolated index id.
-- Manage existing indexes under a shared cache root.
+Avoid this tool when:
+- Working on small, self-contained files
+- Writing new code without dependencies
 
-## Index A Repo (Default Case)
-- Build indexes:
+## Installation and Setup
+
 ```bash
-tldr warm --cache-root=git /path/to/repo
-```
-- Build semantic embeddings:
-```bash
-tldr semantic index --cache-root=git /path/to/repo
-```
-- Search semantically:
-```bash
-tldr semantic search "retry logic for network calls" --cache-root=git --path /path/to/repo
-```
-- Use structural tools when you need precise code shape:
-```bash
-tldr structure src/ --lang python --cache-root=git /path/to/repo
+pip install llm-tldr
+cd /path/to/project
+
+tldr warm --cache-root=git .        # Build structural caches
+
+tldr semantic index --cache-root=git .  # Build semantic embeddings
 ```
 
-## Index A Dependency (Isolated)
-Use an explicit index id so dependency data does not mix with the main repo.
+## Essential Commands
 
-1. Pick an index id format that is stable and versioned, for example:
-`dep:<name>@<version>:site`
-2. Create or rebuild the dependency index:
+### Structure Overview
 ```bash
-tldr warm --cache-root=git --index dep:requests@2.31.0:site /path/to/site-packages/requests
-```
-3. Query the dependency directly:
-```bash
-tldr semantic search "Session.request implementation" --cache-root=git --index dep:requests@2.31.0:site --path /path/to/site-packages/requests
+tldr tree src/                       # File structure
+tldr structure src/ --lang python    # Functions/classes overview
 ```
 
-If the dependency path or version is unknown, run the dependency indexer skill helper first:
+### Function Context
 ```bash
-python skills/llm-tldr-dep-indexer/scripts/ensure_dep_index.py python requests
+tldr context <function> --project .  # Function summary with dependencies
+tldr extract <file>                  # Complete file analysis
 ```
-Use the returned `index_id` and `scan_root` for subsequent `tldr` commands.
 
-## Example: Repo + Dependency Under One Cache Root
-With `--cache-root=git`, all indexes created inside a repo live under the repo-root `.tldr/` regardless of where you run the command.
+### Impact Analysis
+```bash
+tldr impact <function> .             # Who calls this? (breaks if changed)
+tldr calls .                         # Build full call graph
+tldr arch .                          # Detect architecture layers
+tldr dead .                          # Find unreachable code
+```
 
-Dependency index (stored under repo root):
+### Finding Code by Intent
+```bash
+tldr semantic search "validate auth tokens" --path .    # Natural language search
+tldr semantic search "error retry logic" --path .       # Finds behavior, not keywords
+```
+
+### Debugging
+```bash
+tldr slice <file> <func> <line>      # What affects this line?
+tldr dfg <file> <function>           # Trace data flow
+tldr cfg <file> <function>           # Control flow graph
+tldr diagnostics <file>              # Type check + lint
+```
+
+## Index Isolation and Dependency Indexes
+Use `--cache-root=git` inside a repo to store all indexes under the repo-root `.tldr/` regardless of where you run the command. Add `--index <id>` to isolate a dependency or alternate corpus.
+
+### Dependency index (stored under repo root)
 ```bash
 # Build the dependency index
-uv run tldr --cache-root=git --index dep:requests \
+tldr --cache-root=git --index dep:requests \
   semantic index .venv/lib/python3.12/site-packages/requests --lang python
 
 # Query it
-uv run tldr --cache-root=git --index dep:requests \
+tldr --cache-root=git --index dep:requests \
   semantic search "HTTPAdapter.send implementation" \
   --path .venv/lib/python3.12/site-packages/requests
 ```
 
-Repo index (same cache root, different index id):
+### Repo index (same cache root, different index id)
 ```bash
 # Build the repo index
-uv run tldr --cache-root=git --index repo:llm-tldr \
+tldr --cache-root=git --index repo:llm-tldr \
   semantic index . --lang python
 
 # Query it
-uv run tldr --cache-root=git --index repo:llm-tldr \
+tldr --cache-root=git --index repo:llm-tldr \
   semantic search "daemon status handling" --path .
 ```
 
-Where they live on disk:
+### Where they live on disk
 ```text
 <repo>/.tldr/indexes/<hash-of-dep:requests>/
 <repo>/.tldr/indexes/<hash-of-repo:llm-tldr>/
 ```
 
-Can they both be searched? Yes, but one at a time in the current CLI. You switch scopes by changing `--index`.
+Can they both be searched? Yes, but one at a time in the current CLI. Switch scopes by changing `--index`.
 
-## Index Management (List, Inspect, Delete)
+### Dependency index helper (preferred)
+Use the included dependency indexing skill to resolve the correct installed version and create or reuse a versioned index:
+```bash
+python skills/llm-tldr-dep-indexer/scripts/ensure_dep_index.py python requests
+```
+Use the returned `index_id` and `scan_root` for subsequent `tldr` commands.
+
+## Index Management
 Use these to keep a clean cache and verify what exists.
 
-- List indexes:
 ```bash
 tldr index list --cache-root=git
-```
-- Inspect one index:
-```bash
 tldr index info --cache-root=git dep:requests@2.31.0:site
-```
-- Remove an index:
-```bash
 tldr index rm --cache-root=git dep:requests@2.31.0:site
 ```
 
-## Query Toolkit
-Pick the smallest tool that answers the question.
+## Default Agent Workflow
 
-- Quick file tree: `tldr tree <path>`
-- Surface API structure: `tldr structure <path> --lang <lang>`
-- Text search: `tldr search "pattern" <path>`
-- Function context: `tldr context <func> --project <path>`
-- Callers: `tldr impact <func> <path>`
-- Program slice: `tldr slice <file> <func> <line>`
-- Semantic search: `tldr semantic search "natural language query" --path <path>`
+1. Get structure: `tldr tree` / `tldr structure`
+2. Narrow context: `tldr context <function>`
+3. Validate impact before changes: `tldr impact <function>`
 
-Always include `--cache-root=git` (and `--index` if used) so queries hit the intended index.
+## How It Works
 
-## Daemon Workflow
-Use the daemon when running many queries in a session.
+llm-tldr builds 5 analysis layers:
 
-```bash
-tldr daemon start --cache-root=git --project /path/to/repo
+1. AST (L1): Structure - functions/classes
+2. Call Graph (L2): Dependencies - who calls what
+3. Control Flow (L3): Logic paths - complexity metrics
+4. Data Flow (L4): Value tracking - where data goes
+5. Program Dependence (L5): Line-level impact - minimal slices
+
+The semantic layer combines all 5 layers into searchable embeddings, enabling natural language search by what code does rather than what it says.
+
+## Configuration
+
+### Exclude Files (.tldrignore)
+
+Create `.tldrignore` in project root (gitignore syntax):
+
+```gitignore
+node_modules/
+.venv/
+__pycache__/
+dist/
+build/
+*.egg-info/
 ```
-Notify the daemon on file changes to keep caches fresh:
-```bash
-tldr daemon notify /path/to/repo/src/auth.py --cache-root=git --project /path/to/repo
+
+In index mode, `.tldrignore` is index-scoped, so each isolated index can have its own ignore rules.
+
+### Daemon Settings (.tldr/config.json)
+
+```json
+{
+  "semantic": {
+    "enabled": true,
+    "auto_reindex_threshold": 20
+  }
+}
 ```
 
-## Ignore Files And Scope
-- Prefer `.tldrignore` for persistent exclusions.
-- Use `--ignore` for ad-hoc exclusions and `--no-ignore` to override.
+### Monorepo Support
 
-```bash
-tldr --ignore "fixtures/" --ignore "*.generated.ts" tree .
+For monorepos, create `.claude/workspace.json`:
+```json
+{
+  "active_packages": ["packages/core", "packages/api"],
+  "exclude_patterns": ["**/fixtures/**"]
+}
 ```
 
-## Notes And Gotchas
-- `--index` requires `--cache-root`. Use `--cache-root=git` inside a git repo.
-- When `--cache-root=git` is not available, pass a concrete path instead.
-- Without `--index`, llm-tldr derives an index id from the scan root relative to the cache root.
-- `.tldrignore` is index-scoped in index mode, so each isolated index can have its own ignore rules.
+## MCP Integration
 
-## References
-Load these repo docs when you need full CLI detail or copy-ready examples:
-- `README.md`
-- `docs/TLDR.md`
+**For Claude Code** (`.mcp.json` in project root, or `~/.claude.json` for user-scope):
+```json
+{
+  "mcpServers": {
+    "tldr": {
+      "command": "tldr-mcp",
+      "args": ["--project", "."]
+    }
+  }
+}
+```
+
+**For Claude Desktop** (`~/Library/Application Support/Claude/claude_desktop_config.json`):
+```json
+{
+  "mcpServers": {
+    "tldr": {
+      "command": "tldr-mcp",
+      "args": ["--project", "/absolute/path/to/project"]
+    }
+  }
+}
+```
+
+## Language Support
+
+Python, TypeScript, JavaScript, Go, Rust, Java, C, C++, Ruby, PHP, C#, Kotlin, Scala, Swift, Lua, Elixir (16 languages total). Language auto-detected or specify with `--lang`.
+
+## Troubleshooting
+
+**Daemon not responding?**
+```bash
+tldr daemon status
+tldr daemon stop && tldr daemon start
+```
+
+**Index out of date?**
+```bash
+tldr warm --cache-root=git .  # Full rebuild
+```
+
+**Semantic search not finding relevant code?**
+```bash
+tldr semantic index --cache-root=git .
+```
+
+**Not sure which indexes exist?**
+```bash
+tldr index list --cache-root=git
+```
+
+## Principle
+
+Rule of thumb: If raw code does not change your decision, do not include it in context.

@@ -217,6 +217,23 @@ python skills/llm-tldr-dep-indexer/scripts/ensure_dep_index.py python requests
 
 ---
 
+This repo also includes a usage skill at `skills/llm-tldr-usage/`.
+
+It supports:
+- Indexing and querying repos with `tldr warm`, `tldr semantic`, `tldr context`, `tldr slice`, and `tldr impact`
+- Isolated indexes with `--cache-root=git` and `--index`
+- Index management via `tldr index list/info/rm`
+- Daemon workflows and `.tldrignore` usage
+
+Quick example:
+```bash
+tldr warm --cache-root=git .
+tldr semantic index --cache-root=git .
+tldr semantic search "token validation flow" --cache-root=git --path .
+```
+
+---
+
 ## Real Example: Why This Matters
 
 **Scenario:** Debug why `user` is null on line 42.
