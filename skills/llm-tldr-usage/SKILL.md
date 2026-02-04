@@ -124,6 +124,38 @@ tldrf index rm --cache-root=git dep:requests@2.31.0:site
 2. Narrow context: `tldrf context <function>`
 3. Validate impact before changes: `tldrf impact <function>`
 
+## Workflow Templates
+
+### Refactoring a module
+```bash
+tldrf impact <target_function> .           # Find all callers
+tldrf context <target_function> --project . # Understand the function
+tldrf slice <file> <func> <line>           # Trace specific dependencies
+tldrf dead .                               # Verify no orphaned code after refactor
+```
+
+### Understanding unfamiliar code
+```bash
+tldrf arch .                               # See high-level layers
+tldrf structure src/ --lang python         # List functions/classes
+tldrf semantic search "what does X do" --path .  # Find by intent
+```
+
+### Planning a migration (e.g., swapping a dependency)
+```bash
+tldrf impact <old_api_function> .          # Find all touchpoints
+tldrf context <key_type> --project .       # Understand data structures
+tldrf calls . --filter <module>            # Map internal dependencies
+tldrf dead .                               # Find unused code to remove
+```
+
+### Debugging a specific line
+```bash
+tldrf slice <file> <func> <line>           # What affects this line?
+tldrf dfg <file> <function>                # Trace data flow through function
+tldrf cfg <file> <function>                # See control flow paths
+```
+
 ## How It Works
 
 llm-tldr builds 5 analysis layers:
