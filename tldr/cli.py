@@ -635,6 +635,7 @@ def main():
         analyze_dead_code,
         analyze_impact,
         impact_analysis,
+        architecture_analysis,
     )
     from .dirty_flag import is_dirty, get_dirty_files, clear_dirty
     from .patch import patch_call_graph
@@ -1232,20 +1233,27 @@ def main():
                 default=".",
             )
             index_ctx = _get_index_ctx(scan_root, allow_create=False)
+            index_paths = index_ctx.paths if index_ctx else None
             ignore_spec = get_ignore_spec(scan_root, index_ctx)
             lang = resolve_language(
                 args.lang,
                 scan_root,
-                index_paths=getattr(index_ctx, "paths", None),
+                index_paths=index_paths,
                 ignore_spec=ignore_spec,
             )
             workspace_root = _workspace_root(scan_root, index_ctx)
-            result = analyze_architecture(
+            # Use cached graph (which contains all languages) instead of rebuilding
+            # with a single language. This ensures architecture analysis works correctly
+            # for multi-language projects.
+            graph = _get_or_build_graph(
                 scan_root,
-                language=lang,
+                lang,
+                build_project_call_graph,
+                index_paths=index_paths,
+                workspace_root=workspace_root,
                 ignore_spec=ignore_spec,
-                workspace_root=str(workspace_root) if workspace_root is not None else None,
             )
+            result = architecture_analysis(graph)
             print(json.dumps(result, indent=2))
 
         elif args.command == "imports":
