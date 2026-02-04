@@ -8,7 +8,8 @@ Replace the hard-wired FAISS dependency in `tldr/semantic.py` with a pluggable v
 
 - **Cross-platform installation** (FAISS is a common pain point)
 - **Flexibility** to swap ANN backends without touching core semantic logic
-- **Performance** via USearch's memory-mapped serving for daemon/MCP workloads
+- **Robustness under concurrent rebuilds** via versioned index files + atomic metadata commits (+ rebuild lock)
+- **Performance** (optional) via USearch memory-mapped serving for long-lived daemon/MCP workloads
 
 ## CLI Reality Check (important)
 
@@ -17,6 +18,50 @@ Replace the hard-wired FAISS dependency in `tldr/semantic.py` with a pluggable v
 - Semantic commands are subcommands: `tldrf semantic index …` and `tldrf semantic search …` (there is no `tldrf semantic <query>` today).
 
 **Plan decision:** Update acceptance criteria + docs to match the current CLI shape. A `tldrf warm --include-semantic` flag is a reasonable follow-up, but not required for swapping the vector backend.
+
+## Phase 0: Decisions (lock these in first)
+
+These choices affect filenames, atomicity, daemon behavior, and cross-platform support. Make them explicit before coding.
+
+### 0.1 File + serving policy (chosen)
+
+**Chosen policy: Option C (versioned filenames + metadata pointer)**:
+
+- Rebuild writes a new index file with a **unique** name, e.g.:
+  - USearch: `index.<build_id>.usearch`
+  - FAISS (legacy/optional): `index.<build_id>.faiss`
+- `semantic/metadata.json` stores the **active** `vector_store.index_file`.
+- Search always loads the index file referenced by metadata (metadata is the **commit point**).
+
+Rationale:
+- Lock-free reads + atomic swaps require the index file to be immutable while referenced.
+- A stable filename (`index.usearch`) combined with “index first, metadata last” creates a window where readers can observe **new index + old units/metadata**, which is correctness-breaking.
+
+**Serving mode**:
+- Default load behavior: `view=True` on non-Windows *daemon* loads, `view=False` everywhere else.
+  - Windows: force `view=False` (mmapped files block rename/delete semantics in common cases).
+- Keep this policy documented and easy to override via a single knob later (e.g. env/config), but pick a default now.
+
+**Garbage collection**:
+- Keep the last **N** versions per backend (recommend `N=2`) under the rebuild lock.
+- GC is best-effort:
+  - On Windows: if deletion fails (mapped/open), leave the file and try next rebuild.
+  - On Unix: deletion is safe even if old versions are memory-mapped (existing mappings remain valid).
+
+### 0.2 Rebuild locking (required)
+
+**Requirement:** serialized rebuilds per semantic index.
+
+- Use a per-index lock file under the semantic cache dir:
+  - Legacy mode: `.tldr/cache/semantic/.lock`
+  - Index-mode: `<cache_root>/indexes/<key>/cache/semantic/.lock`
+- Rebuild acquires an **exclusive** lock for the entire window:
+  - build embeddings → write versioned index → write metadata (commit) → optional GC
+- Reads remain lock-free and rely on the metadata commit point.
+
+Implementation detail:
+- Prefer a small, cross-platform lock dependency (e.g. `filelock`) over rolling our own Windows locking.
+- Daemon-triggered rebuild should use a **non-blocking**/short-timeout lock acquisition and skip if already locked.
 
 ## Immediate Next Steps (rolling)
 
@@ -27,6 +72,8 @@ Replace the hard-wired FAISS dependency in `tldr/semantic.py` with a pluggable v
 - [ ] Add `--vector-backend` CLI flag and `TLDR_VECTOR_BACKEND` env var
 - [ ] Update `IndexPaths` to support both `.faiss` and `.usearch` files
 - [ ] Extend `metadata.json` schema with `vector_store` block
+- [ ] Implement rebuild lock + atomic “metadata commit point” behavior (Phase 1, not optional)
+- [ ] Update daemon background semantic reindex to actually rebuild (see below)
 - [ ] Add/update tests for USearch backend
 - [ ] Update documentation to remove FAISS-specific references
 - [ ] Run full test suite: `uv run pytest`
@@ -142,23 +189,28 @@ While testing the tldrf workflow above, we discovered and fixed bugs in the CLI:
 - USearch keys must be integers; generate stable IDs via `np.arange(len(units), dtype=np.uint64)` and map IDs back to `units[]`.
 - USearch `search()` return shape differs for 1D vs 2D queries (Matches vs BatchMatches). Backend must normalize query shape and return only valid results (no sentinel IDs), possibly fewer than `k`.
 - Keep optional dependencies optional: importing `tldr.semantic` should not immediately import `usearch` or `faiss` (use a backend factory + lazy imports).
-- Atomic updates should treat `metadata.json` as the commit point: replace index file first, then replace metadata last.
-- Windows + memory-mapped `view=True` can break in-place replacement (sharing/locking). Prefer versioned index filenames + metadata pointer (`vector_store.index_file`), or disable `view=True` on Windows.
-- OpenMP environment hacks in `semantic.py` are FAISS-specific; can be removed once FAISS is dropped.
+- Atomic updates must treat `metadata.json` as the commit point. This is only safe with **versioned index filenames** referenced from metadata (see Phase 0.1).
+- Windows + memory-mapped `view=True` breaks in-place replacement and file deletion semantics. Force `view=False` on Windows by default.
+- OpenMP environment hacks in `semantic.py` are FAISS-specific; move them behind the FAISS backend and apply only immediately before importing FAISS.
 
 ## Phases (suggested delivery)
 
-### Phase 1: Abstraction + USearch as default
+### Phase 1: Abstraction + USearch as default (and safe-by-default rebuilds)
 - Add `tldr/vector_store/` package with protocol + USearch backend
 - Add a backend factory + lazy imports (so core code can run without optional deps installed)
 - Make USearch the default backend for new semantic builds
 - Keep FAISS behind an optional extra for legacy index reading (and optional explicit builds)
 - Wire `--vector-backend` CLI flag and `TLDR_VECTOR_BACKEND` env var for **index build selection**
-- Persist backend, index filename, and score transform in `semantic/metadata.json`
+- Persist backend, index filename (versioned), and score transform in `semantic/metadata.json`
+- Implement serialized rebuild locking + atomic metadata commit ordering (Phase 0.2 + Phase 0.1)
+- Make OpenMP env hacks FAISS-only (no global env constraints when using USearch)
 
 ### Phase 2: Harden rebuild + daemon/MCP safety
-- Implement atomic write helper and write ordering (index first, metadata last)
-- Decide and document the `view=True` strategy on Windows (recommended: versioned index filenames + metadata pointer)
+- Update daemon background rebuild to pass `--rebuild` (today it can no-op) and propagate backend selection
+- Implement version GC policy (keep last N; best-effort delete on Windows)
+- Add consistent errors/messages for:
+  - legacy `.faiss` present but FAISS extra not installed
+  - backend mismatch (CLI override vs metadata; do not silently “pick one”)
 - Update docs/CI and regenerate `uv.lock` after dependency changes
 
 ### Phase 3: Remove FAISS (optional)
@@ -188,6 +240,11 @@ While testing the tldrf workflow above, we discovered and fixed bugs in the CLI:
 
 6. Docs updated to remove FAISS-specific instructions.
 
+7. Concurrent rebuild safety:
+   - Serialized rebuilds via per-index lock file
+   - Atomic metadata commit point with versioned index filenames (no mixed “index vs units” reads)
+   - Daemon background rebuild passes `--rebuild` and does not corrupt indexes under concurrent reads
+
 ## Non-Goals
 
 - Hosted/remote vector DB integration (Pinecone, Weaviate, etc.)
@@ -210,10 +267,11 @@ tldr/vector_store/
 | File | Changes |
 |------|---------|
 | `tldr/semantic.py` | Replace direct FAISS calls with vector store abstraction |
-| `tldr/indexing/index.py` | Add `semantic_usearch` path to `IndexPaths` |
-| `tldr/indexing/management.py` | Update artifact listing for new backend |
+| `tldr/daemon/core.py` | Ensure background semantic reindex uses `--rebuild` + backend selection |
+| `tldr/indexing/index.py` | Extend `IndexPaths` for `.usearch` + versioned filenames (+ semantic lock path helper) |
+| `tldr/indexing/management.py` | Include `.usearch` artifacts (and versions) in listing + GC surfaces |
 | `tldr/cli.py` | Add `--vector-backend` flag |
-| `pyproject.toml` | Add `usearch`; move `faiss-cpu` to `[faiss]` extra (legacy/optional) |
+| `pyproject.toml` | Add `usearch` + `filelock`; move `faiss-cpu` to `[faiss]` extra (legacy/optional) |
 | `uv.lock` | Regenerate to reflect dependency changes |
 | `tests/test_semantic_index_isolated.py` | Parametrize for backend or switch to USearch |
 
@@ -224,6 +282,14 @@ tldr/vector_store/
 | `docs/TLDR.md` | "FAISS index" → "vector index (USearch)", and update CLI examples to `tldrf semantic index/search` |
 | `specs/001-feat-isolated-index.md` | Generalize `index.faiss` references |
 | `implementations/001-feat-isolated-index.md` | Generalize FAISS references |
+
+## Dependencies & Packaging
+
+- Add `usearch` as a core dependency (semantic search should work on a base install).
+  - Pin a minimum version that supports `Index.search(..., exact=...)` and `Index.restore(..., view=...)` as used in the backend (e.g. `usearch>=2.23.0`).
+- Add `filelock` as a core dependency for cross-platform rebuild locking.
+- Move `faiss-cpu` to an optional extra, e.g. `llm-tldr[faiss]`, for legacy `.faiss` index reading during the transition window.
+- Update install/docs to reflect: base install supports semantic search (USearch); `.[faiss]` is only for legacy FAISS index compatibility.
 
 ## Backend Selection & Precedence
 
@@ -241,6 +307,23 @@ Backend selection precedence:
   - Treat as legacy FAISS **only** if `index.faiss` exists (and `faiss` is installed).
   - Otherwise error with rebuild instructions.
 - If a user explicitly passes `--vector-backend` during search and it conflicts with metadata: raise a clear mismatch error with rebuild instructions (prefer correctness over surprising behavior).
+- Do not add a `--force-backend-mismatch` escape hatch (rebuild is the correct fix).
+
+### Daemon background rebuild (must match CLI selection rules)
+
+Current daemon behavior: `tldr/daemon/core.py:_trigger_background_reindex()` spawns:
+
+```py
+python -m tldr.cli semantic index <project>
+```
+
+It does **not** pass `--rebuild`, so it frequently no-ops when a semantic index already exists.
+
+Plan changes:
+- Pass `--rebuild` (or the equivalent “force rebuild” flag).
+- Backend selection:
+  - Simple: daemon inherits `TLDR_VECTOR_BACKEND`.
+  - Better: allow daemon config `semantic.vector_backend` (in `.tldr/config.json` / `.claude/settings.json`) and pass `--vector-backend`.
 
 ## Vector Store Protocol
 
@@ -295,12 +378,16 @@ class VectorIndex(Protocol):
   "units": [ ... ],
   "vector_store": {
     "backend": "usearch",
-    "index_file": "index.usearch",
-    "metric": "cos",
-    "dtype": "f32",
-    "score_semantics": "cosine_similarity",
-    "score_transform": "one_minus_distance",
     "backend_version": "2.23.0",
+    "build_id": "<build_id>",
+    "index_file": "index.<build_id>.usearch",
+    "metric_intent": "cosine_similarity",
+    "backend_metric": "cos",
+    "dtype": "f32",
+    "embeddings_normalized": true,
+    "score_semantics": "cosine_similarity",
+    "distance_semantics": "cosine_distance",
+    "score_transform": "one_minus_distance",
     "build_params": {
       "connectivity": 16,
       "expansion_add": 128,
@@ -311,6 +398,10 @@ class VectorIndex(Protocol):
 }
 ```
 
+Notes:
+- `metric_intent` is always semantic intent (`cosine_similarity`); `backend_metric` is backend-specific (`cos` for USearch, `ip` for FAISS-on-normalized-vectors).
+- `score_semantics` should remain `cosine_similarity` across backends. For FAISS legacy indexes, use `score_transform: "identity"` and omit/leave `distance_semantics` null.
+
 ### `indexes/<index_key>/meta.json`
 ```json
 {
@@ -319,25 +410,26 @@ class VectorIndex(Protocol):
     "dim": 1024,
     "lang": null,
     "vector_backend": "usearch",
-    "index_file": "index.usearch",
-    "metric": "cos",
-    "dtype": "f32"
+    "build_id": "<build_id>",
+    "index_file": "index.<build_id>.usearch",
+    "metric_intent": "cosine_similarity",
+    "backend_metric": "cos",
+    "dtype": "f32",
+    "embeddings_normalized": true
   }
 }
 ```
 
 ## Atomic Writes & `view=True`
 
-- Treat `semantic/metadata.json` as the commit point.
-  1. Write the index file to a temp path and `os.replace()` it into place.
-  2. Write `metadata.json` to a temp path and `os.replace()` it into place (metadata last).
+Treat `semantic/metadata.json` as the commit point. With Phase 0’s versioned filenames, readers never observe mixed “index vs units” state.
 
-### Recommended safe rebuild strategy (especially for Windows)
+### Rebuild algorithm (required)
 
-- Write new index files with versioned names (e.g. `index.usearch.<build_id>`), never replacing an open mmapped file.
-- Store the active filename in `vector_store.index_file`.
-- Search loads the index file named in metadata; rebuild is just “write new file, then swap metadata”.
-- Optionally GC old versions later.
+1. Acquire the per-index rebuild lock (`semantic/.lock`).
+2. Write the new index to a temp file in the semantic dir, then `os.replace()` it into a **new versioned filename** (never replace the active index file).
+3. Write `metadata.json.tmp` pointing at the new `index_file`, then `os.replace()` → `metadata.json` (**commit point**).
+4. Optional: GC old index versions (keep last N) under the same lock.
 
 ## USearch Default Configuration
 
@@ -363,12 +455,17 @@ USEARCH_DEFAULTS = {
    - Query-shape handling: `(dim,)` vs `(1, dim)` should both work
 
 2. **Integration tests**:
-   - Parametrize existing semantic tests for both backends (or USearch-only)
+   - Parametrize existing semantic tests for whichever backend is installed (or USearch-only after default swap)
    - For approximate mode, assert inclusion in top-k instead of strict rank ordering
    - Legacy `.faiss` index reading (if faiss installed)
    - Error message when `.faiss` exists but faiss not installed
 
-3. **CI configuration**:
+3. **Important test fixture correction**
+   - Current `tests/test_semantic_index_isolated.py` uses a DummyModel that returns all-zero embeddings.
+   - Cosine distance/similarity with zero vectors is a footgun; update dummy embeddings to be **non-zero** and (optionally) normalized.
+   - Update skips to `pytest.importorskip("usearch")` (or backend-parametrized skips) so tests pass without FAISS installed.
+
+4. **CI configuration**:
    - Default lane: USearch
    - Optional lane: `TLDR_VECTOR_BACKEND=faiss` (during transition)
 
@@ -380,7 +477,7 @@ When a user has a legacy `.faiss` index:
 Error: Semantic index requires rebuild.
 
 Found:    .tldr/cache/semantic/index.faiss (legacy FAISS format)
-Expected: .tldr/cache/semantic/<index from metadata> (typically index.usearch)
+Expected: .tldr/cache/semantic/index.<build_id>.usearch + updated metadata (USearch format)
 
 To rebuild:
   tldrf semantic index --rebuild .
@@ -389,3 +486,8 @@ Or install FAISS support to read legacy index:
   uv pip install -e ".[faiss]"        # in-repo
   uv pip install "llm-tldr[faiss]"    # installed package
 ```
+
+## Optional Enhancements
+
+- Add `tldrf semantic info` to print backend/version, dim/count, active index filename, metric + score semantics, and whether `view=True` is in use.
+- Add a lightweight regression fixture (synthetic embeddings) to sanity-check top-k stability under defaults (and deterministic behavior under `exact=True`).
