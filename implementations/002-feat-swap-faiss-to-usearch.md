@@ -42,16 +42,27 @@ Rationale:
   - Windows: force `view=False` (mmapped files block rename/delete semantics in common cases).
 - Keep this policy documented and easy to override via a single knob later (e.g. env/config), but pick a default now.
 
+**Build IDs**:
+- `build_id` is used in filenames and metadata; it must be filesystem-safe and stable.
+- Recommended format: `<utc timestamp>-<8 hex>`, e.g. `20260205T031512Z-7f3a9c2d`.
+  - Generation: `datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + secrets.token_hex(4)`
+  - Allowed characters: `[A-Za-z0-9_-]+` only (avoid `:` for Windows).
+
 **Garbage collection**:
-- Keep the last **N** versions per backend under the rebuild lock (default `N=2`, **require `N>=2`**).
-  - Invariant: always keep the **active** index + the **immediately previous** active index (prevents readers that observed old metadata from failing to open the referenced file).
+- Keep the last **N** versions per backend under the rebuild lock (default `N=3`, **require `N>=2`**).
+  - Invariant: always keep the **active** index + the **previous active** index (prevents slow readers that observed old metadata from failing to open the referenced file).
+  - GC must preserve the “previous active” file even if it’s older than the retention window.
 - GC is best-effort:
   - On Windows: if deletion fails (mapped/open), leave the file and try next rebuild.
   - On Unix: deletion is safe even if old versions are memory-mapped (existing mappings remain valid).
 - Legacy `index.faiss` (fixed filename) is a GC candidate once metadata points to a non-FAISS backend (best-effort delete under the rebuild lock).
-- Under the rebuild lock, also delete stale build detritus:
-  - `metadata.json.tmp`, `index.*.tmp`, etc. older than 24 hours.
-  - This prevents partial-build artifacts from accumulating after crashes.
+- Under the rebuild lock, also delete stale build detritus and orphans:
+  - Temp files: `metadata.json.tmp`, `index.*.tmp`, etc. older than 24 hours.
+  - Orphaned versioned index files: delete unreferenced `index.*.(usearch|faiss)` older than 24 hours that are not:
+    - the active `vector_store.index_file`, nor
+    - the recorded `vector_store.previous_index_file`, nor
+    - within the retained last-N set for that backend (by mtime).
+  - This prevents partial-build artifacts and “crash between index write and metadata swap” orphans from accumulating.
 
 ### 0.2 Rebuild locking (required)
 
@@ -66,7 +77,11 @@ Rationale:
 
 Implementation detail:
 - Prefer a small, cross-platform lock dependency (e.g. `filelock`) over rolling our own Windows locking.
-- Daemon-triggered rebuild should use a **non-blocking**/short-timeout lock acquisition and skip if already locked.
+- Daemon-triggered rebuild must avoid spawning subprocesses that then block on the same lock:
+  - The daemon should attempt to acquire the semantic rebuild lock **itself** with a short timeout (recommended: `0` seconds).
+  - If the lock is held, log “semantic rebuild already in progress” and return without spawning.
+  - If acquired, release immediately and then spawn the rebuild subprocess (or rebuild in-process).
+    - Rationale: avoids a pile-up of blocked subprocesses under rebuild storms.
 
 ### 0.3 Behavioral decisions (required)
 
@@ -81,6 +96,7 @@ The vector-backend swap is safe to implement without changing rebuild behavior, 
 
 Up-to-date definition (conservative: “if unsure, rebuild”):
 - Metadata must be readable and must reference an index file that exists.
+- No invalidation marker is present (e.g. `semantic/.dirty`).
 - `metadata.project_signature` must match the current project signature (below).
 - `metadata` must match the requested build settings (model/lang/backend/metric intent/dim).
 
@@ -107,7 +123,7 @@ Daemon-triggered rebuilds must preserve a user’s semantic settings (model/lang
 
 Notes:
 - Config overrides metadata only when explicitly requested (e.g. an explicit daemon setting or a forced rebuild mode).
-- When the daemon calls `build_semantic_index()` directly, pass `model`, `lang`, and `vector_backend` explicitly (do not rely on defaults).
+- When the daemon calls `build_semantic_index()` directly, pass `model`, `lang`, and `vector_backend` (i.e. `vector_store.backend`) explicitly (do not rely on defaults).
 - When the daemon spawns the CLI subprocess, include `--model`, `--lang`, and `--vector-backend` flags (and preserve `--cache-root`, `--index`, and ignore flags).
 
 #### 0.3.3 Serve-mode plumbing + caching (recommended)
@@ -118,8 +134,10 @@ The plan calls for `view=True` on non-Windows daemon loads, but that needs expli
   - CLI search uses `view=False` by default.
   - Daemon search passes `view=True` on non-Windows.
 - Add a simple in-process cache for daemon/MCP workloads:
-  - Keep `(backend, build_id, index_object)` in memory.
-  - On each query, re-read metadata and reload only if `build_id` changes.
+  - Cache `(backend, build_id, index_object, units_list, metadata_summary)` in memory.
+  - On each query:
+    - `stat()` `semantic/metadata.json` (mtime + size) and only re-read+parse when it changes.
+    - Reload the index + units only when `build_id` changes.
 
 ## Immediate Next Steps (rolling)
 
@@ -131,6 +149,8 @@ The plan calls for `view=True` on non-Windows daemon loads, but that needs expli
 - [ ] Add `--vector-backend` CLI flag and `TLDR_VECTOR_BACKEND` env var (index builds only)
 - [ ] Refactor semantic `IndexPaths` + invalidation for versioned index filenames (Phase 0.1)
 - [ ] Extend `metadata.json` schema with `vector_store` block
+- [ ] Add semantic `schema_version/created_at/tldr_version` fields (Phase 0.1 / Metadata Schema Changes)
+- [ ] Define `build_id` generation rules and ensure filenames are filesystem-safe (Phase 0.1)
 - [ ] Implement rebuild lock + atomic “metadata commit point” behavior (Phase 1, not optional)
 - [ ] Update daemon semantic rebuild to propagate `--model/--lang/--vector-backend` (Phase 0.3.2)
 - [ ] Add daemon → semantic plumbing for `view=True` loads + in-process index cache (Phase 0.3.3)
@@ -347,7 +367,7 @@ tldr/vector_store/
 ### Documentation updates
 | File | Changes |
 |------|---------|
-| `README.md` | Remove `faiss-cpu` mention, reconcile semantic cache paths (e.g. `.tldr/cache/semantic/index.*`), update CLI examples to `tldrf` |
+| `README.md` | Remove `faiss-cpu` mention; document semantic cache layout as `.tldr/cache/semantic/index.<build_id>.usearch` + `.tldr/cache/semantic/metadata.json` (and index-mode under `.tldr/indexes/<key>/cache/semantic/…`); update CLI examples to `tldrf` |
 | `docs/TLDR.md` | "FAISS index" → "vector index (USearch)", and update CLI examples to `tldrf semantic index/search` |
 | `specs/001-feat-isolated-index.md` | Generalize `index.faiss` references |
 | `implementations/001-feat-isolated-index.md` | Generalize FAISS references |
@@ -355,7 +375,7 @@ tldr/vector_store/
 ## Dependencies & Packaging
 
 - Add `usearch` as a core dependency (semantic search should work on a base install).
-  - Pin a minimum version that supports `Index.search(..., exact=...)` and `Index.restore(..., view=...)` as used in the backend (e.g. `usearch>=2.23.0`).
+  - Pin a minimum version that supports `Index.restore(..., view=...)` for memory-mapped serving and `usearch.index.search(..., exact=True)` for deterministic brute-force parity tests/utilities (e.g. `usearch>=2.23.0`).
 - Add `filelock` as a core dependency for cross-platform rebuild locking.
 - Move `faiss-cpu` to an optional extra, e.g. `llm-tldr[faiss]`, for legacy `.faiss` index reading during the transition window.
 - Update install/docs to reflect: base install supports semantic search (USearch); `.[faiss]` is only for legacy FAISS index compatibility.
@@ -391,6 +411,7 @@ It does not pass semantic settings (`--model`, `--lang`, `--vector-backend`), so
 Plan changes:
 - Propagate semantic settings from the existing `semantic/metadata.json` where possible (Phase 0.3.2).
 - Add staleness checks so repeated daemon triggers are cheap and can safely no-op (Phase 0.3.1).
+- Avoid rebuild subprocess pile-ups: the daemon tries to acquire the semantic rebuild lock before spawning; if locked, skip spawn (Phase 0.2).
 - Only pass `--rebuild` when the daemon is configured to force refresh (otherwise rely on the staleness check).
 
 ## IndexPaths, invalidation, and management (required for versioned files)
@@ -405,11 +426,14 @@ Plan changes:
 - Add helpers (names illustrative):
   - `resolve_active_semantic_index_path(semantic_dir, metadata) -> Path`
   - `list_semantic_index_versions(semantic_dir) -> list[Path]` (for GC + tooling)
-- Update `_invalidate_index_caches()` to remove **all** semantic artifacts (under the rebuild lock):
-  - `semantic/metadata.json`
-  - `semantic/index.*.usearch`
-  - `semantic/index.*.faiss`
-  - legacy `semantic/index.faiss` (if present)
+- Make `_invalidate_index_caches()` lock-aware:
+  - Acquire the semantic rebuild lock before deleting semantic artifacts.
+  - If the lock cannot be acquired quickly, skip deletion and mark semantic as “dirty” by touching `semantic/.dirty` so the next rebuild cleans up under the lock.
+  - When deleting, remove **all** semantic artifacts:
+    - `semantic/metadata.json`
+    - `semantic/index.*.usearch`
+    - `semantic/index.*.faiss`
+    - legacy `semantic/index.faiss` (if present)
 - Update `tldr/indexing/management.py` outputs to include:
   - active semantic backend + build_id
   - resolved active semantic index file (from metadata)
@@ -444,7 +468,7 @@ class VectorIndex(Protocol):
     def load(cls, path: Path, *, view: bool = False) -> "VectorIndex": ...
 
     def search(
-        self, query: np.ndarray, k: int, *, exact: bool = False
+        self, query: np.ndarray, k: int
     ) -> tuple[np.ndarray, np.ndarray]:
         """
         Returns (ids, scores) where scores are higher-is-better.
@@ -462,6 +486,9 @@ class VectorIndex(Protocol):
 ### `semantic/metadata.json`
 ```json
 {
+  "schema_version": 2,
+  "created_at": "<iso8601>",
+  "tldr_version": "<package_version_or_git_sha>",
   "model": "...",
   "lang": null,
   "dimension": 1024,
@@ -473,9 +500,11 @@ class VectorIndex(Protocol):
   "units": [ ... ],
   "vector_store": {
     "backend": "usearch",
+    "format": "usearch-hnsw-v1",
     "backend_version": "2.23.0",
     "build_id": "<build_id>",
     "index_file": "index.<build_id>.usearch",
+    "previous_index_file": "index.<previous_build_id>.usearch",
     "metric_intent": "cosine_similarity",
     "backend_metric": "cos",
     "dtype": "f32",
@@ -497,6 +526,8 @@ Notes:
 - `metric_intent` is always semantic intent (`cosine_similarity`); `backend_metric` is backend-specific (`cos` for USearch, `ip` for FAISS-on-normalized-vectors).
 - `score_semantics` should remain `cosine_similarity` across backends. For FAISS legacy indexes, use `score_transform: "identity"` and omit/leave `distance_semantics` null.
 - `project_signature` is used to cheaply decide whether `tldrf semantic index` can no-op (Phase 0.3.1).
+- `vector_store.previous_index_file` is used by GC to preserve the immediately previous active index across swaps (may be `null`/missing on the first build).
+- `schema_version`: treat missing/unversioned legacy metadata as v1; write new metadata as v2.
 
 ### `indexes/<index_key>/meta.json`
 ```json
@@ -505,13 +536,15 @@ Notes:
     "model": "...",
     "dim": 1024,
     "lang": null,
-    "vector_backend": "usearch",
-    "build_id": "<build_id>",
-    "index_file": "index.<build_id>.usearch",
-    "metric_intent": "cosine_similarity",
-    "backend_metric": "cos",
-    "dtype": "f32",
-    "embeddings_normalized": true
+    "vector_store": {
+      "backend": "usearch",
+      "build_id": "<build_id>",
+      "index_file": "index.<build_id>.usearch",
+      "metric_intent": "cosine_similarity",
+      "backend_metric": "cos",
+      "dtype": "f32",
+      "embeddings_normalized": true
+    }
   }
 }
 ```
@@ -520,12 +553,20 @@ Notes:
 
 Treat `semantic/metadata.json` as the commit point. With Phase 0’s versioned filenames, readers never observe mixed “index vs units” state.
 
+USearch load behavior (serve mode):
+- Prefer `Index.restore(path, view=...)` for loading.
+- On load, validate:
+  - metadata dimension matches the embedding model’s expected dimension, and
+  - loaded index dimension matches `metadata.dimension`.
+- If validation fails, hard error with rebuild instructions (do not attempt to “search anyway”).
+
 ### Rebuild algorithm (required)
 
 1. Acquire the per-index rebuild lock (`semantic/.lock`).
 2. Write the new index to a temp file in the semantic dir, then `os.replace()` it into a **new versioned filename** (never replace the active index file).
-3. Write `metadata.json.tmp` pointing at the new `index_file`, then `os.replace()` → `metadata.json` (**commit point**).
-4. Optional: GC old index versions (keep last N) under the same lock.
+3. Write `metadata.json.tmp` pointing at the new `index_file` and recording the previous active index as `vector_store.previous_index_file`, then `os.replace()` → `metadata.json` (**commit point**).
+4. Optional: GC old index versions and orphans (keep last N, preserve active + previous active) under the same lock.
+5. Clear `semantic/.dirty` if present.
 
 ## USearch Default Configuration
 
@@ -547,7 +588,8 @@ USEARCH_DEFAULTS = {
    - Round-trip: build → save → load → search
    - Score directionality (descending order)
    - Dimension validation
-   - Determinism: use `exact=True` for unit tests (ANN ordering can be unstable)
+   - ANN stability: avoid strict rank assertions; assert membership (`expected_id in top_k`) and score monotonicity.
+   - Deterministic brute-force test: call `usearch.index.search(..., exact=True)` directly over an in-memory matrix (not `Index.search`) to validate parity utilities.
    - Query-shape handling: `(dim,)` vs `(1, dim)` should both work
 
 2. **Integration tests**:
@@ -587,5 +629,5 @@ Or install FAISS support to read legacy index:
 ## Optional Enhancements
 
 - Add `tldrf semantic info` to print backend/version, dim/count, active index filename, metric + score semantics, and whether `view=True` is in use.
-- Add a lightweight regression fixture (synthetic embeddings) to sanity-check top-k stability under defaults (and deterministic behavior under `exact=True`).
+- Add a lightweight regression fixture (synthetic embeddings) to sanity-check top-k stability under defaults, plus a brute-force parity check via `usearch.index.search(..., exact=True)`.
 - Optional: cache per-unit embeddings keyed by a stable fingerprint so rebuilds can reuse unchanged vectors (incremental compute without in-place index mutation complexity).
