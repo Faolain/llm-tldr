@@ -192,7 +192,7 @@ tldrf dead .                               # Find unused code to remove
 
 ### Debugging a specific line
 ```bash
-tldrf slice <file> <func> <line>           # What affects this line?
+tldrf slice <file> <func> <line>           # What affects this line? 
 tldrf dfg <file> <function>                # Trace data flow through function
 tldrf cfg <file> <function>                # See control flow paths
 ```
