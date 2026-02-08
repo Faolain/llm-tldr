@@ -107,7 +107,16 @@ tldrf warm /path/to/project
 tldrf semantic "database connection pooling" .
 ```
 
-Embedding dependencies (`sentence-transformers`, `faiss-cpu`) are included with `pip install llm-tldr`. The index is cached in `.tldr/cache/semantic.faiss`.
+Embedding dependencies (`sentence-transformers`, `faiss-cpu`) are included with `pip install llm-tldr`. The semantic index is cached under your `cache_root` in `.tldr/` (see below).
+
+### Where TLDR Stores Things
+
+TLDR stores two different kinds of artifacts:
+
+- **Index artifacts (on disk):** analysis caches, embeddings, and per-index status files live under `CACHE_ROOT/.tldr/`. Typical local usage (`tldrf warm .`) creates `./.tldr/indexes/<index_key>/...`. Legacy mode (no `--cache-root/--index`) uses `./.tldr/cache/...`.
+- **Daemon runtime artifacts (on disk):** the daemon's socket/pid/lock/port files live under `TLDR_DAEMON_DIR`. Default is `/tmp/tldr` on macOS/Linux and the system temp dir on Windows. Example files: `tldr-<hash>.sock`, `tldr-<hash>.pid`, `tldr-<hash>.lock`.
+
+If you want daemon runtime artifacts somewhere else (for example, to avoid a shared `/tmp`), set `TLDR_DAEMON_DIR` to a **short** path. Unix domain sockets have path-length limits, so very long repo-local paths can fail.
 
 ### Keeping the Index Fresh
 

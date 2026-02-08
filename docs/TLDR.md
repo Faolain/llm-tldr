@@ -146,9 +146,9 @@ tldr impact login .          # 100ms, not 30s
 tldr cfg src/auth.py login   # <10ms if cached
 ```
 
-**Per-project isolation:** Each project gets its own daemon via deterministic socket names:
+**Per-project isolation:** Each project/index gets its own daemon runtime socket under `TLDR_DAEMON_DIR`:
 ```bash
-/tmp/tldr-{md5(project_path)[:8]}.sock
+$TLDR_DAEMON_DIR/tldr-<hash>.sock
 ```
 
 No cross-contamination. Work on 5 projects simultaneously without conflicts.
@@ -156,7 +156,7 @@ No cross-contamination. Work on 5 projects simultaneously without conflicts.
 **Auto-lifecycle management:**
 - Starts on first query
 - Auto-shuts down after 5 minutes idle
-- Restarts on next query (loads from `.tldr/cache/`)
+- Restarts on next query (loads from the on-disk index cache under `.tldr/`)
 
 ---
 
@@ -501,7 +501,7 @@ Daemon: Reads from in-memory index → Returns result
 Time: 50ms
 
 You: (nothing for 5 minutes)
-Daemon: Auto-shuts down, writes state to .tldr/cache/
+Daemon: Auto-shuts down, writes state to the on-disk index cache under .tldr/
 ```
 
 ### Daemon Lifecycle
@@ -520,15 +520,20 @@ Daemon: Auto-shuts down, writes state to .tldr/cache/
 # Project A
 cd ~/myproject
 tldr context main
-# → Daemon socket: /tmp/tldr-a3f2c8d1.sock
+# → Daemon socket: /tmp/tldr/tldr-a3f2c8d1.sock
 
 # Project B (different terminal)
 cd ~/otherproject
 tldr context main
-# → Daemon socket: /tmp/tldr-b9e4d7f3.sock
+# → Daemon socket: /tmp/tldr/tldr-b9e4d7f3.sock
 ```
 
-Socket path = `md5(absolute_path)[:8]`, so projects never interfere.
+By default, daemon runtime artifacts (pid/sock/lock) live under `TLDR_DAEMON_DIR` (default: `/tmp/tldr` on macOS/Linux).
+
+Index artifacts (analysis caches, semantic index, per-index status) live under `CACHE_ROOT/.tldr/` (often `./.tldr/` when running in a repo).
+
+The daemon runtime `<hash>` is derived deterministically from the daemon identity:
+legacy mode uses the scan root path; index mode uses `cache_root + index_key` (derived from the index id), so projects/indexes never interfere.
 
 ### Daemon Commands
 
@@ -541,7 +546,7 @@ tldr daemon status --project .   # Check health
 # Example output
 $ tldr daemon status --project .
 Daemon running (PID: 42315)
-Socket: /tmp/tldr-a3f2c8d1.sock
+Socket: /tmp/tldr/tldr-a3f2c8d1.sock
 Uptime: 127 seconds
 Files indexed: 342
 Cache hits: 89.3%
@@ -958,21 +963,24 @@ These are older measurements on different projects, kept for reference:
 
 ## Cache Structure
 
-TLDR stores all indexes in `.tldr/cache/`:
+In index mode, TLDR stores indexes under `.tldr/indexes/<index_key>/cache/` (under `cache_root`). Legacy mode uses `.tldr/cache/`.
 
 ```
 .tldr/
-├── daemon.pid               # Running daemon PID
-├── status                   # "ready" | "indexing" | "stale"
-└── cache/
-    ├── call_graph.json      # Forward call edges
-    ├── file_hashes.json     # Content hashes (dirty detection)
-    ├── parse_cache/         # Cached AST results per file
-    │   ├── src_auth.py.json
-    │   └── src_db.py.json
-    └── semantic/            # Embedding-based search
-        ├── index.faiss      # FAISS vector index
-        └── metadata.json    # Function metadata for results
+└── indexes/
+    └── <index_key>/
+        ├── status                   # Per-index daemon status (ready/indexing/stale)
+        ├── meta.json
+        ├── .tldrignore
+        └── cache/
+            ├── call_graph.json      # Forward call edges
+            ├── file_hashes.json     # Content hashes (dirty detection)
+            ├── parse_cache/         # Cached AST results per file
+            │   ├── src_auth.py.json
+            │   └── src_db.py.json
+            └── semantic/            # Embedding-based search
+                ├── index.faiss      # Vector index
+                └── metadata.json    # Function metadata for results
 ```
 
 ### Incremental Updates

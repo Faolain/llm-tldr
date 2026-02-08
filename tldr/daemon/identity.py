@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import sys
 import tempfile
 from dataclasses import dataclass
@@ -88,23 +89,40 @@ def resolve_daemon_identity_from_config(config: IndexConfig) -> DaemonIdentity:
 
 
 def get_lock_path(identity: DaemonIdentity) -> Path:
-    tmp_dir = tempfile.gettempdir()
-    return Path(tmp_dir) / f"tldr-{identity.hash}.lock"
+    runtime_dir = _get_daemon_runtime_dir()
+    return runtime_dir / f"tldr-{identity.hash}.lock"
 
 
 def get_pid_path(identity: DaemonIdentity) -> Path:
-    tmp_dir = tempfile.gettempdir()
-    return Path(tmp_dir) / f"tldr-{identity.hash}.pid"
+    runtime_dir = _get_daemon_runtime_dir()
+    return runtime_dir / f"tldr-{identity.hash}.pid"
 
 
 def get_socket_path(identity: DaemonIdentity) -> Path:
-    tmp_dir = tempfile.gettempdir()
-    return Path(tmp_dir) / f"tldr-{identity.hash}.sock"
+    runtime_dir = _get_daemon_runtime_dir()
+    return runtime_dir / f"tldr-{identity.hash}.sock"
 
 
 def get_port_path(identity: DaemonIdentity) -> Path:
-    tmp_dir = tempfile.gettempdir()
-    return Path(tmp_dir) / f"tldr-{identity.hash}.port"
+    runtime_dir = _get_daemon_runtime_dir()
+    return runtime_dir / f"tldr-{identity.hash}.port"
+
+
+def _get_daemon_runtime_dir() -> Path:
+    """
+    Pick a stable directory for daemon runtime artifacts (pid/lock/sock/port).
+
+    Why:
+    - tempfile.gettempdir() can vary with TMPDIR across processes.
+    - Unix domain socket paths have strict length limits; a short base dir helps.
+    """
+    override = os.environ.get("TLDR_DAEMON_DIR")
+    if override:
+        return Path(override).expanduser().resolve()
+    if sys.platform == "win32":
+        return Path(tempfile.gettempdir()).resolve()
+    # Use a short, stable location by default on Unix/macOS.
+    return Path("/tmp/tldr")
 
 
 def read_port_file(identity: DaemonIdentity) -> int | None:

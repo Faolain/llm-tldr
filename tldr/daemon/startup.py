@@ -11,6 +11,7 @@ import logging
 import os
 import socket
 import sys
+import tempfile
 import time
 
 from pathlib import Path
@@ -95,6 +96,7 @@ def _try_acquire_pidfile_lock(pid_path: Path) -> Optional[IO]:
         File handle if lock acquired (caller must keep it open!), None if locked by another process.
     """
     try:
+        pid_path.parent.mkdir(parents=True, exist_ok=True)
         # Open in append mode to create if not exists, don't truncate
         pidfile = open(pid_path, "a+")
 
@@ -144,8 +146,13 @@ def _is_socket_connectable(identity: DaemonIdentity, timeout: float = 1.0) -> bo
     depend on response format - just whether a daemon is listening.
     """
     addr, port = get_connection_info(identity)
-    if port is None and not Path(addr).exists():
-        return False
+    legacy_addr: str | None = None
+    if port is None:
+        addr_path = Path(addr)
+        legacy_path = Path(tempfile.gettempdir()) / addr_path.name
+        legacy_addr = str(legacy_path)
+        if not addr_path.exists() and not legacy_path.exists():
+            return False
 
     try:
         if port is not None:
@@ -153,9 +160,16 @@ def _is_socket_connectable(identity: DaemonIdentity, timeout: float = 1.0) -> bo
             sock.settimeout(timeout)
             sock.connect((addr, port))
         else:
-            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            sock.settimeout(timeout)
-            sock.connect(addr)
+            try:
+                sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                sock.settimeout(timeout)
+                sock.connect(addr)
+            except (FileNotFoundError, ConnectionRefusedError, OSError):
+                if not legacy_addr:
+                    return False
+                sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                sock.settimeout(timeout)
+                sock.connect(legacy_addr)
         sock.close()
         return True
     except (socket.error, OSError):
@@ -219,6 +233,12 @@ def _is_daemon_alive(identity: DaemonIdentity, retries: int = 3, delay: float = 
                 pass
         pidfile.close()
 
+        # If the PID lock indicates "not running", double-check socket connectivity.
+        # This covers cases where the daemon is alive but PID files are in a different
+        # runtime directory (e.g. TMPDIR drift or older versions' locations).
+        if _is_socket_connectable(identity, timeout=0.2):
+            return True
+
         if attempt < retries - 1:
             time.sleep(delay)
 
@@ -247,8 +267,14 @@ def _create_client_socket(identity: DaemonIdentity) -> socket.socket:
         client.connect((addr, port))
     else:
         # Unix socket for Linux/macOS
-        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        client.connect(addr)
+        try:
+            client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            client.connect(addr)
+        except (FileNotFoundError, ConnectionRefusedError, OSError):
+            # Back-compat: try legacy tempdir location.
+            legacy_addr = str(Path(tempfile.gettempdir()) / Path(addr).name)
+            client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            client.connect(legacy_addr)
 
     return client
 
@@ -300,6 +326,23 @@ def start_daemon(
         print("Daemon already running")
         return
 
+    # If a daemon is already accepting connections (e.g. from a different runtime dir),
+    # don't start a second daemon. Release our PID lock and return.
+    if _is_socket_connectable(identity, timeout=0.2):
+        if sys.platform == "win32":
+            try:
+                msvcrt.locking(pidfile.fileno(), msvcrt.LK_UNLCK, 1)
+            except Exception:
+                pass
+        else:
+            try:
+                fcntl.flock(pidfile.fileno(), fcntl.LOCK_UN)
+            except Exception:
+                pass
+        pidfile.close()
+        print("Daemon already running")
+        return
+
     # We have the lock - we're the only one starting a daemon
     if index_ctx is None:
         from ..tldrignore import ensure_tldrignore
@@ -332,6 +375,7 @@ def start_daemon(
             lock_path = _get_lock_path(identity)
             # Ensure lock file exists
             if not lock_path.exists():
+                lock_path.parent.mkdir(parents=True, exist_ok=True)
                 lock_path.touch()
 
             try:
@@ -424,6 +468,20 @@ def start_daemon(
             if pid == 0:
                 # Child process - we inherit the lock
                 os.setsid()
+                # Detach stdio so the daemon doesn't inherit a dead pipe from the
+                # launcher (common in non-interactive runners). Some libraries
+                # used by semantic search emit progress to stdout/stderr and can
+                # raise BrokenPipeError otherwise.
+                try:
+                    devnull = os.open(os.devnull, os.O_RDWR)
+                    os.dup2(devnull, 0)
+                    os.dup2(devnull, 1)
+                    os.dup2(devnull, 2)
+                    if devnull > 2:
+                        os.close(devnull)
+                except Exception:
+                    # Best-effort; daemon can still run with inherited FDs.
+                    pass
                 # Write our PID to the locked file
                 _write_pid_to_locked_file(pidfile, os.getpid())
                 daemon._pidfile = pidfile  # Keep reference to hold lock

@@ -30,7 +30,13 @@ Add FastAPI and Express only after Phase 1 produces results worth validating cro
 
 ## Benchmark Contract: What We Count
 
-For every strategy we benchmark, we define a deterministic `payload(query) -> str` that represents the **tool output** provided to the LLM. We measure:
+For every strategy we benchmark, we define a deterministic `payload(query) -> str` that represents the **tool output** provided to the LLM.
+
+Two important clarifications (so "token efficiency" matches real agent workflows):
+- A **strategy** may be a *multi-step* workflow (e.g., `impact` then a few targeted extracts). In that case `payload(query)` is the concatenation of step outputs, and we record per-step and total metrics.
+- Payloads should be **LLM-consumable**. If a command returns only IDs/line numbers (e.g., slices), the strategy must specify how we materialize the corresponding code lines into the payload (deterministically, without an LLM).
+
+We measure:
 - `payload_tokens`: `tldr.stats.count_tokens(payload)`
 - `payload_bytes`: `len(payload.encode("utf-8"))`
 - `wall_time_s`: end-to-end time to produce the payload (including subprocess/tool time)
@@ -168,6 +174,7 @@ If grep can do these things equally well, TLDR's value proposition collapses. If
 For a set of structural analysis tasks against Django, compare:
 - **TLDR's structured tool output** (deterministic, AST-based) vs **ground truth**
 - **Grep's best approximation** (pattern matching + heuristic extraction) vs **ground truth**
+- For each strategy, also record `payload_tokens`/`payload_bytes`/`wall_time_s` so we can report **quality-per-token** for refactoring workflows (`impact`), debugging workflows (`slice`/`dfg`), and refactor prioritization (`cfg`).
 
 ### Task Categories
 
@@ -299,7 +306,7 @@ The debugging and understanding question. Trace a variable back to its origin th
 ### Evaluation Procedure
 
 ```
-1. Clone django/django at pinned tag 5.1
+1. Clone django/django at a pinned **tag** (example: `5.1.13`) and record the exact `repo_git_sha` in the output.
 2. tldrf warm <django_path>
 3. For each structural query:
    a. Run the TLDR tool (impact/slice/cfg/dfg) and capture structured output
@@ -364,7 +371,55 @@ Test whether TLDR's semantic search finds files that grep can't (and vice versa)
 
 ### Token Efficiency
 
-For queries where both systems find the right code, measure how many tokens each needs. Compare grep excerpts (`rg -C 3`), grep full-file reads, and TLDR structured context. The key test: fixed-budget recall at 500/1000/2000/5000/10000 tokens — what fraction of ground-truth code is captured under each budget? Zero LLM cost.
+Phase 1 tells us whether TLDR's structural analysis is accurate. This phase answers the user's actual question: **how token-efficient is TLDR vs an "LLM with grep"** for workflows like refactoring (impact), impact analysis, slice-based debugging, and data-flow tracing.
+
+The **deterministic** part of this phase is **zero LLM cost**: we compare deterministic payloads against ground truth.
+
+#### Important: "LLM Can Do Whatever It Wants" vs Deterministic Baselines
+
+The deterministic strategies below are a **reproducible proxy** for a competent "LLM with ripgrep" workflow. They are necessary for stable curves and regression testing.
+
+However, they are not the full story if we want to claim: "a normal LLM agent, using its usual ripgrep/file-reading workflow, is less token-efficient than the same agent when instructed to use TLDR".
+
+To cover that, add an *agent-in-the-loop* A/B run:
+- Same tasks, same repo, same budgets/timeouts
+- **Condition A (vanilla):** the agent runs with its normal tools (shell/file read, `rg`/`grep`, etc). TLDR exists in the environment but the agent is **not instructed** about it in any way (prompt does not mention `tldrf`).
+- **Condition B (tldr-instructed):** the agent has `tldrf` available and is explicitly instructed to prefer TLDR primitives (`impact`, `slice`, `dfg`, `cfg`, `context`) over raw reading.
+- Optional **Condition C (hybrid):** `tldrf` is available but not required; the agent chooses freely.
+- The agent chooses commands adaptively until it produces an answer/patch.
+- Run multiple trials per task (e.g., 3) and report mean/p50/p95, since tool choice sequences can vary stochastically.
+
+For each condition, record:
+- **Tokens used:** sum of tokens in all tool outputs returned to the model (`count_tokens(stdout/stderr/file_reads)`), plus prompt tokens (constant within a condition; report separately).
+- If the model/API reports usage, also record **model input/output tokens** (so we can separate "retrieval/context cost" from "generation cost").
+- **Time spent:** total wall-clock time from start to final answer/patch, plus sum of tool wall-times (so we can separate "tool time" vs "model time" if available).
+- **Misses:** for tasks with a ground-truth set of functions/lines (e.g., impact callers, slice lines), record missed items (`expected - found`), false positives (`found - expected`), and derived precision/recall/F1.
+
+This agent run is not required for day-to-day CI regression, but it is the most credible external-facing comparison.
+
+#### What We Compare (Strategies)
+
+For each query category, benchmark at least these strategies:
+- **Grep: match-only**: `rg -n` hits (lowest tokens, high noise)
+- **Grep: match+context**: `rg -n -B <N> -A <M>` per hit, concatenated until token budget
+- **Grep: function/window read**: deterministic window extraction (e.g., full function for impact, `±K` lines for slice/debug), concatenated until token budget
+- **TLDR: structured-only**: raw TLDR JSON output (e.g., `impact`, `cfg`, `dfg`, `slice`)
+- **TLDR: structured+materialized code**: when TLDR returns selectors (like slice line numbers), materialize the referenced code lines into the payload (with line numbers) so the payload is actually usable for a refactor/debug step
+
+All strategies must state:
+- which commands are run (and with what flags)
+- how outputs are ordered and concatenated (to avoid cherry-picking)
+- how results are truncated under a token budget (deterministic)
+
+#### Fixed-Budget Curves (The Core Metric)
+
+Compute fixed-budget curves at budgets `500/1000/2000/5000/10000` tokens:
+- **Impact:** caller recall/precision/F1 under budget, plus `tokens_per_true_caller` and `tokens_per_correct_caller`
+- **Slice:** slice recall/precision under budget and noise ratio (how many irrelevant lines were included)
+- **Data-flow:** origin accuracy and flow completeness under budget
+- **Complexity:** accuracy/MAE under budget (usually cheap; this becomes a regression guardrail for output bloat)
+
+This turns the benchmark into a **Pareto comparison**: for each category, does TLDR achieve higher quality at the same or lower token cost than grep?
 
 ### Downstream Quality (LLM-as-Judge)
 
@@ -394,8 +449,8 @@ bench_results/
 ### Running
 
 ```bash
-# Setup: clone Django at a pinned tag
-git clone --depth 1 --branch 5.1 https://github.com/django/django.git /tmp/django
+# Setup: clone Django at a pinned tag (NOT a moving branch)
+git clone --depth 1 --branch 5.1.13 https://github.com/django/django.git /tmp/django
 
 # Phase 0 (no LLM cost): perf microbench + index build time
 uv run python scripts/bench_perf_daemon_vs_cli.py --repo /tmp/django --iterations 10

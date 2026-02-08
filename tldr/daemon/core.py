@@ -1344,6 +1344,7 @@ class TLDRDaemon:
             # Unix socket for Linux/macOS
             # Try to bind without deleting existing socket - if bind fails,
             # another daemon is running. This prevents race conditions.
+            self.socket_path.parent.mkdir(parents=True, exist_ok=True)
             sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             # Don't use SO_REUSEADDR for Unix sockets - it allows multiple binds
             try:
