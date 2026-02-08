@@ -90,15 +90,51 @@ def _ensure_stub_modules(stub_root: Path) -> bool:
 
 def _build_subprocess_env(tmp_path: Path) -> dict | None:
     stub_root = tmp_path / "daemon_stubs"
-    if not _ensure_stub_modules(stub_root):
-        return None
+    needs_stub = _ensure_stub_modules(stub_root)
 
     env = os.environ.copy()
-    pythonpath = env.get("PYTHONPATH")
-    env["PYTHONPATH"] = (
-        f"{stub_root}{os.pathsep}{pythonpath}" if pythonpath else str(stub_root)
-    )
+    if needs_stub:
+        pythonpath = env.get("PYTHONPATH")
+        env["PYTHONPATH"] = (
+            f"{stub_root}{os.pathsep}{pythonpath}" if pythonpath else str(stub_root)
+        )
+
+    # Make daemon runtime artifacts per-test (prevents collisions in parallel CI).
+    # On macOS, pytest tmp dirs can be too long for Unix socket path limits, so we
+    # prefer a short symlink under /tmp pointing at a per-test tmp_path directory.
+    runtime_target = tmp_path / "daemon_runtime"
+    runtime_target.mkdir(parents=True, exist_ok=True)
+
+    if sys.platform != "win32":
+        suffix = os.urandom(4).hex()
+        runtime_link = Path("/tmp") / f"tldr-rt-{suffix}"
+        try:
+            runtime_link.unlink(missing_ok=True)
+        except OSError:
+            pass
+        try:
+            runtime_link.symlink_to(runtime_target, target_is_directory=True)
+            env["TLDR_DAEMON_DIR"] = str(runtime_link)
+            env["TLDR_TEST_DAEMON_DIR_LINK"] = str(runtime_link)
+        except OSError:
+            env["TLDR_DAEMON_DIR"] = str(runtime_target)
+    else:
+        env["TLDR_DAEMON_DIR"] = str(runtime_target)
+
     return env
+
+
+def _push_env_var(name: str, value: str) -> callable:
+    prev = os.environ.get(name)
+    os.environ[name] = value
+
+    def _restore() -> None:
+        if prev is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = prev
+
+    return _restore
 
 
 def _start_daemon_process(
@@ -233,6 +269,7 @@ def test_daemon_index_mode_isolated_sockets(tmp_path: Path):
     index_b = "dep:b"
 
     env = _build_subprocess_env(tmp_path)
+    restore = _push_env_var("TLDR_DAEMON_DIR", env["TLDR_DAEMON_DIR"]) if env else (lambda: None)
     proc_a = _start_daemon_process(project, cache_root, index_a, env=env)
     proc_b = _start_daemon_process(project, cache_root, index_b, env=env)
 
@@ -258,6 +295,14 @@ def test_daemon_index_mode_isolated_sockets(tmp_path: Path):
     finally:
         _stop_daemon(identity_a, proc_a)
         _stop_daemon(identity_b, proc_b)
+        restore()
+        if env is not None:
+            link = env.get("TLDR_TEST_DAEMON_DIR_LINK")
+            if link:
+                try:
+                    Path(link).unlink(missing_ok=True)
+                except OSError:
+                    pass
 
 
 def test_daemon_impact_reads_call_graph_from_cache(tmp_path: Path):
@@ -275,6 +320,7 @@ def test_daemon_impact_reads_call_graph_from_cache(tmp_path: Path):
     (cache_dir / "call_graph.json").write_text(json.dumps(call_graph))
 
     env = _build_subprocess_env(tmp_path)
+    restore = _push_env_var("TLDR_DAEMON_DIR", env["TLDR_DAEMON_DIR"]) if env else (lambda: None)
     proc = _start_daemon_process_legacy(project, env=env)
     identity = resolve_daemon_identity(project)
 
@@ -287,6 +333,14 @@ def test_daemon_impact_reads_call_graph_from_cache(tmp_path: Path):
         ]
     finally:
         _stop_daemon(identity, proc)
+        restore()
+        if env is not None:
+            link = env.get("TLDR_TEST_DAEMON_DIR_LINK")
+            if link:
+                try:
+                    Path(link).unlink(missing_ok=True)
+                except OSError:
+                    pass
 
 
 def test_daemon_index_mode_impact_reads_call_graph_from_cache(tmp_path: Path):
@@ -310,6 +364,7 @@ def test_daemon_index_mode_impact_reads_call_graph_from_cache(tmp_path: Path):
     paths.call_graph.write_text(json.dumps(call_graph))
 
     env = _build_subprocess_env(tmp_path)
+    restore = _push_env_var("TLDR_DAEMON_DIR", env["TLDR_DAEMON_DIR"]) if env else (lambda: None)
     proc = _start_daemon_process(project, cache_root, index_id, env=env)
     identity = resolve_daemon_identity(
         project, cache_root=cache_root, index_id=index_id
@@ -324,3 +379,11 @@ def test_daemon_index_mode_impact_reads_call_graph_from_cache(tmp_path: Path):
         ]
     finally:
         _stop_daemon(identity, proc)
+        restore()
+        if env is not None:
+            link = env.get("TLDR_TEST_DAEMON_DIR_LINK")
+            if link:
+                try:
+                    Path(link).unlink(missing_ok=True)
+                except OSError:
+                    pass

@@ -99,9 +99,12 @@ def _daemon_running(cache_root: Path, index_key: str, meta: dict | None) -> bool
         index_id=index_id,
         index_key=index_key,
     )
-    if not get_pid_path(identity).exists():
+    try:
+        if not get_pid_path(identity).exists():
+            return False
+        return is_daemon_alive(identity)
+    except Exception:
         return False
-    return is_daemon_alive(identity)
 
 
 def _clear_port_file(cache_root: Path, index_key: str, meta: dict | None) -> None:

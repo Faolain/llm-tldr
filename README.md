@@ -114,9 +114,9 @@ Embedding dependencies (`sentence-transformers`, `faiss-cpu`) are included with 
 TLDR stores two different kinds of artifacts:
 
 - **Index artifacts (on disk):** analysis caches, embeddings, and per-index status files live under `CACHE_ROOT/.tldr/`. Typical local usage (`tldrf warm .`) creates `./.tldr/indexes/<index_key>/...`. Legacy mode (no `--cache-root/--index`) uses `./.tldr/cache/...`.
-- **Daemon runtime artifacts (on disk):** the daemon's socket/pid/lock/port files live under `TLDR_DAEMON_DIR`. Default is `/tmp/tldr` on macOS/Linux and the system temp dir on Windows. Example files: `tldr-<hash>.sock`, `tldr-<hash>.pid`, `tldr-<hash>.lock`.
+- **Daemon runtime artifacts (on disk):** the daemon's socket/pid/lock/port files live under `TLDR_DAEMON_DIR`. Default is per-user and short on macOS/Linux: `$XDG_RUNTIME_DIR/tldr` (if set and usable) or `/tmp/tldr-$UID`. On Windows it uses the system temp dir. Example files: `tldr-<hash>.sock`, `tldr-<hash>.pid`, `tldr-<hash>.lock`.
 
-If you want daemon runtime artifacts somewhere else (for example, to avoid a shared `/tmp`), set `TLDR_DAEMON_DIR` to a **short** path. Unix domain sockets have path-length limits, so very long repo-local paths can fail.
+If you want daemon runtime artifacts somewhere else (for example, for strict CI isolation), set `TLDR_DAEMON_DIR` to a **short** path you own. Unix domain sockets have path-length limits, so very long repo-local paths can fail.
 
 ### Keeping the Index Fresh
 

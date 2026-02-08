@@ -38,6 +38,24 @@ else:
 logger = logging.getLogger(__name__)
 
 
+def _legacy_unix_socket_candidates(addr: str) -> list[str]:
+    """Return candidate socket paths for upgrade/back-compat on Unix."""
+    addr_path = Path(addr)
+    candidates: list[str] = [str(addr_path)]
+
+    # Back-compat #1: TMPDIR-based tempdir location used by older clients/daemons.
+    legacy_tmpdir = Path(tempfile.gettempdir()) / addr_path.name
+    if str(legacy_tmpdir) not in candidates:
+        candidates.append(str(legacy_tmpdir))
+
+    # Back-compat #2: historical shared runtime dir (/tmp/tldr) used by older versions.
+    legacy_shared = Path("/tmp/tldr") / addr_path.name
+    if str(legacy_shared) not in candidates:
+        candidates.append(str(legacy_shared))
+
+    return candidates
+
+
 def _resolve_identity(
     project: Path,
     *,
@@ -117,18 +135,23 @@ def _try_acquire_pidfile_lock(pid_path: Path) -> Optional[IO]:
             except (IOError, BlockingIOError):
                 pidfile.close()
                 return None
-    except PermissionError:
-        # Windows: file locked by another process prevents open
-        logger.debug(f"PID file locked by another process: {pid_path}")
-        return None
+    except PermissionError as e:
+        # Distinguish permission problems from "daemon already running".
+        raise RuntimeError(
+            f"Cannot access TLDR daemon runtime artifacts under {pid_path.parent}: {e}. "
+            "If this path is owned by another user or not writable, set TLDR_DAEMON_DIR "
+            "to a short directory you own (e.g. /tmp/tldr-$UID)."
+        ) from e
     except FileNotFoundError:
-        # File doesn't exist - no daemon running, but we can't create it here
-        # Return a special sentinel to distinguish from "locked"
-        logger.debug(f"PID file not found: {pid_path}")
-        return None
+        raise RuntimeError(
+            f"Cannot create TLDR daemon PID file under {pid_path.parent}: {pid_path}. "
+            "Set TLDR_DAEMON_DIR to a short directory you own."
+        )
     except Exception as e:
-        logger.debug(f"Failed to open PID file: {e}")
-        return None
+        raise RuntimeError(
+            f"Failed to open or lock TLDR daemon PID file at {pid_path}: {e}. "
+            "Set TLDR_DAEMON_DIR to a short directory you own."
+        ) from e
 
 
 def _write_pid_to_locked_file(pidfile: IO, pid: int) -> None:
@@ -146,31 +169,36 @@ def _is_socket_connectable(identity: DaemonIdentity, timeout: float = 1.0) -> bo
     depend on response format - just whether a daemon is listening.
     """
     addr, port = get_connection_info(identity)
-    legacy_addr: str | None = None
+    unix_candidates: list[str] | None = None
     if port is None:
-        addr_path = Path(addr)
-        legacy_path = Path(tempfile.gettempdir()) / addr_path.name
-        legacy_addr = str(legacy_path)
-        if not addr_path.exists() and not legacy_path.exists():
+        unix_candidates = _legacy_unix_socket_candidates(addr)
+        if not any(Path(p).exists() for p in unix_candidates):
             return False
 
     try:
         if port is not None:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(timeout)
-            sock.connect((addr, port))
-        else:
             try:
-                sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
                 sock.settimeout(timeout)
-                sock.connect(addr)
-            except (FileNotFoundError, ConnectionRefusedError, OSError):
-                if not legacy_addr:
-                    return False
+                sock.connect((addr, port))
+            finally:
+                sock.close()
+        else:
+            assert unix_candidates is not None
+            last_err: OSError | None = None
+            for candidate in unix_candidates:
                 sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-                sock.settimeout(timeout)
-                sock.connect(legacy_addr)
-        sock.close()
+                try:
+                    sock.settimeout(timeout)
+                    sock.connect(candidate)
+                    return True
+                except (FileNotFoundError, ConnectionRefusedError, OSError) as e:
+                    last_err = e
+                    continue
+                finally:
+                    sock.close()
+            if last_err is not None:
+                return False
         return True
     except (socket.error, OSError):
         return False
@@ -267,14 +295,21 @@ def _create_client_socket(identity: DaemonIdentity) -> socket.socket:
         client.connect((addr, port))
     else:
         # Unix socket for Linux/macOS
-        try:
+        last_err: OSError | None = None
+        for candidate in _legacy_unix_socket_candidates(addr):
             client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            client.connect(addr)
-        except (FileNotFoundError, ConnectionRefusedError, OSError):
-            # Back-compat: try legacy tempdir location.
-            legacy_addr = str(Path(tempfile.gettempdir()) / Path(addr).name)
-            client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            client.connect(legacy_addr)
+            try:
+                client.connect(candidate)
+                return client
+            except (FileNotFoundError, ConnectionRefusedError, OSError) as e:
+                last_err = e
+                try:
+                    client.close()
+                except Exception:
+                    pass
+                continue
+        if last_err is not None:
+            raise last_err
 
     return client
 

@@ -193,7 +193,7 @@ Ignore Patterns:
 
 Daemon:
     TLDR runs a per-project daemon for fast repeated queries.
-    - Socket: /tmp/tldr-{hash}.sock (hash from project path)
+    - Socket: $TLDR_DAEMON_DIR/tldr-{hash}.sock (default: $XDG_RUNTIME_DIR/tldr or /tmp/tldr-$UID on macOS/Linux)
     - Auto-shutdown: 30 minutes idle
     - Memory: ~50-100MB base, +500MB-1GB with semantic search
 

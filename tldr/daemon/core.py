@@ -1235,9 +1235,9 @@ class TLDRDaemon:
         return get_pid_path(self.identity)
 
     def write_pid_file(self):
-        """Write daemon PID to .tldr/daemon.pid (and /tmp if not already done).
+        """Write daemon PID to .tldr/daemon.pid (legacy) and the runtime PID file.
 
-        If _pidfile is set, startup.py already wrote and locked /tmp/tldr-{hash}.pid.
+        If _pidfile is set, startup.py already wrote and locked the runtime PID file.
         We only write to .tldr/daemon.pid for backwards compatibility.
         """
         pid = str(os.getpid())
@@ -1249,7 +1249,7 @@ class TLDRDaemon:
             pid_file = self.tldr_dir / "daemon.pid"
             pid_file.write_text(pid)
 
-        # Only write to /tmp if startup.py didn't already (legacy path)
+        # Only write to the runtime PID file if startup.py didn't already.
         if self._pidfile is None:
             tmp_pid_file = self._get_tmp_pid_path()
             tmp_pid_file.write_text(pid)
@@ -1272,7 +1272,7 @@ class TLDRDaemon:
                 except OSError:
                     pass
 
-        # Close and remove /tmp/tldr-{hash}.pid
+        # Close the locked runtime PID file (releases the flock).
         # If _pidfile is set, closing it releases the flock
         if self._pidfile is not None:
             try:
@@ -1282,7 +1282,7 @@ class TLDRDaemon:
             self._pidfile = None
             logger.info("Released PID file lock")
 
-        # Also try to remove the /tmp file (in case it exists)
+        # Also try to remove the runtime PID file (in case it exists).
         tmp_pid_file = self._get_tmp_pid_path()
         if tmp_pid_file.exists():
             try:

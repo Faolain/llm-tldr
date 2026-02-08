@@ -520,15 +520,15 @@ Daemon: Auto-shuts down, writes state to the on-disk index cache under .tldr/
 # Project A
 cd ~/myproject
 tldr context main
-# → Daemon socket: /tmp/tldr/tldr-a3f2c8d1.sock
+# → Daemon socket: /tmp/tldr-$UID/tldr-a3f2c8d1.sock
 
 # Project B (different terminal)
 cd ~/otherproject
 tldr context main
-# → Daemon socket: /tmp/tldr/tldr-b9e4d7f3.sock
+# → Daemon socket: /tmp/tldr-$UID/tldr-b9e4d7f3.sock
 ```
 
-By default, daemon runtime artifacts (pid/sock/lock) live under `TLDR_DAEMON_DIR` (default: `/tmp/tldr` on macOS/Linux).
+By default, daemon runtime artifacts (pid/sock/lock) live under `TLDR_DAEMON_DIR` (default: `$XDG_RUNTIME_DIR/tldr` if set and usable, otherwise `/tmp/tldr-$UID` on macOS/Linux).
 
 Index artifacts (analysis caches, semantic index, per-index status) live under `CACHE_ROOT/.tldr/` (often `./.tldr/` when running in a repo).
 
@@ -546,7 +546,7 @@ tldr daemon status --project .   # Check health
 # Example output
 $ tldr daemon status --project .
 Daemon running (PID: 42315)
-Socket: /tmp/tldr/tldr-a3f2c8d1.sock
+Socket: /tmp/tldr-$UID/tldr-a3f2c8d1.sock
 Uptime: 127 seconds
 Files indexed: 342
 Cache hits: 89.3%
