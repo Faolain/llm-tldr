@@ -598,6 +598,20 @@ def query_daemon(
     Returns:
         Response dict from daemon
     """
+    def _recv_json_line(sock: socket.socket) -> dict:
+        buf = b""
+        while True:
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+            buf += chunk
+            if b"\n" in buf:
+                break
+        line = buf.split(b"\n", 1)[0].strip()
+        if not line:
+            return {"status": "error", "message": "Empty response from daemon"}
+        return json.loads(line.decode())
+
     project = Path(project_path).resolve()
     identity = _resolve_identity(
         project,
@@ -608,8 +622,7 @@ def query_daemon(
     client = _create_client_socket(identity)
     try:
         client.sendall(json.dumps(command).encode() + b"\n")
-        response = client.recv(65536)
-        return json.loads(response.decode())
+        return _recv_json_line(client)
     finally:
         client.close()
 

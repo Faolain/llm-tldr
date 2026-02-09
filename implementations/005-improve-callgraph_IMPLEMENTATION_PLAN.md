@@ -264,6 +264,24 @@ Fallback switch criteria (to justify implementing tsserver):
   - full build: ~0.51s (`graph_source=ts-resolved`, `edge_count=9`)
   - rebuild after touching 1 file: ~0.45s (currently a full rebuild for TS).
   - Peerbit root full build baseline: ~91s (see Phase 4 harness output).
+- 2026-02-09: Implemented **TS-resolved incremental patching** for dirty TS files:
+  - New patcher: `tldr/patch.py:patch_typescript_resolved_dirty_files()` recomputes outbound edges for dirty `.ts/.tsx` files via the existing TS compiler API resolver (allowlist mode), then patches the cached graph in-place.
+  - Wired into cache flow: `tldr/cli.py` now prefers the incremental patch when the cached `graph_source` is `ts-resolved` / `ts-resolved-multi`, falling back to full rebuild if the resolver is disabled/unavailable.
+  - Bench support: `scripts/bench_ts_callgraph.py` now reports `incremental_patch_after_touch` for the fixture.
+- 2026-02-09: Updated local fixture benchmark (after incremental patch landed):
+  - full build: ~0.57s
+  - incremental patch (1-file): ~0.45s
+  - full rebuild after touch: ~0.46s
+  - Note: on the small fixture, program creation dominates so patch vs rebuild is similar; the expected win is on multi-tsconfig monorepos where patch only rebuilds the touched file’s nearest tsconfig (instead of *all* tsconfigs).
+- 2026-02-09: Added warm-daemon query bench plumbing:
+  - Fixed daemon impact handling to use `tldr.analysis.impact_analysis` over cached call graphs (`tldr/daemon/core.py`).
+  - `scripts/bench_ts_callgraph.py --peerbit-root … --peerbit-daemon` measures daemon `warm` + 5 `impact` query latencies.
+- 2026-02-09: Fixed daemon client framing: `tldr/daemon/startup.py:query_daemon()` now reads until newline (responses can exceed a single `recv()`), unblocking large `impact` responses and accurate daemon benchmarks.
+- 2026-02-09: Peerbit warm-daemon timings (local):
+  - `warm` (TS graph build + cache write): ~118s, `edge_count=3855` (`graph_source=ts-resolved-multi`)
+  - 5 fixed `impact` queries (warm daemon, `depth=1`, with file filters): ~3.8-5.1ms/query
+- 2026-02-09: Peerbit incremental TS rebuild (single file, local):
+  - Patching outbound edges for `packages/clients/peerbit/src/peer.ts`: ~1.3s (vs ~118s full multi-tsconfig build).
 
 **Deliverables**
 - Benchmarks for fixture build and incremental edits.

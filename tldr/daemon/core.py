@@ -492,30 +492,120 @@ class TLDRDaemon:
             return {"status": "error", "message": str(e)}
 
     def _handle_impact(self, command: dict) -> dict:
-        """Handle impact command - find callers of a function."""
+        """Handle impact command.
+
+        Back-compat note: historically the daemon supported a legacy call graph
+        cache shape with edges like:
+          {"caller": "main", "callee": "helper", "file": "main.py", "line": 12}
+        Tests (and some users) still rely on returning a direct `callers` list
+        from that format. For newer call graph caches (from/to shape), we also
+        include an `impact_analysis` tree under `result`.
+        """
         func_name = command.get("func")
         if not func_name:
             return {"status": "error", "message": "Missing required parameter: func"}
 
         try:
             self._ensure_call_graph_loaded()
-            call_graph = self.indexes.get("call_graph", {})
-
-            # Find all callers of the function
-            callers = []
+            call_graph = self.indexes.get("call_graph", {}) or {}
             edges = call_graph.get("edges", [])
-            for edge in edges:
-                if edge.get("callee") == func_name:
-                    callers.append({
-                        "caller": edge.get("caller"),
-                        "file": edge.get("file"),
-                        "line": edge.get("line"),
-                    })
 
-            return {"status": "ok", "callers": callers}
+            # Legacy caller/callee shape: return direct callers list.
+            if isinstance(edges, list) and edges and isinstance(edges[0], dict) and "callee" in edges[0]:
+                callers = []
+                for edge in edges:
+                    if not isinstance(edge, dict):
+                        continue
+                    if edge.get("callee") == func_name:
+                        callers.append(
+                            {
+                                "caller": edge.get("caller"),
+                                "file": edge.get("file"),
+                                "line": edge.get("line"),
+                            }
+                        )
+                return {"status": "ok", "callers": callers}
+
+            # Newer from/to shape: return callers list, and include impact tree.
+            callers = []
+            if isinstance(edges, list):
+                for edge in edges:
+                    if not isinstance(edge, dict):
+                        continue
+                    if edge.get("to_func") == func_name:
+                        callers.append(
+                            {
+                                "caller": edge.get("from_func"),
+                                "file": edge.get("from_file"),
+                                "line": edge.get("line"),
+                            }
+                        )
+
+            from tldr.analysis import impact_analysis
+
+            graph_obj = self.indexes.get("call_graph_obj")
+            if graph_obj is None:
+                graph_obj = self._project_call_graph_from_cache(call_graph)
+                self.indexes["call_graph_obj"] = graph_obj
+
+            depth = command.get("depth", 3)
+            try:
+                depth_i = int(depth)
+            except Exception:
+                depth_i = 3
+
+            file_filter = command.get("file")
+            result = impact_analysis(
+                graph_obj,
+                func_name,
+                max_depth=depth_i,
+                target_file=file_filter,
+            )
+
+            meta = getattr(graph_obj, "meta", None)
+            if isinstance(meta, dict):
+                meta = dict(meta)
+                meta.pop("ts_trace", None)
+                ts_meta = meta.get("ts_meta")
+                if isinstance(ts_meta, dict):
+                    ts_meta = dict(ts_meta)
+                    ts_meta.pop("skipped", None)
+                    meta["ts_meta"] = ts_meta
+
+            return {"status": "ok", "callers": callers, "result": result, "meta": meta}
         except Exception as e:
             logger.exception("Impact analysis failed")
             return {"status": "error", "message": str(e)}
+
+    def _project_call_graph_from_cache(self, cache_data: dict) -> Any:
+        """Convert cached call graph JSON into a ProjectCallGraph instance."""
+        from tldr.cross_file_calls import ProjectCallGraph
+
+        graph = ProjectCallGraph()
+        meta = cache_data.get("meta")
+        if isinstance(meta, dict):
+            graph.meta = dict(meta)
+
+        edges = cache_data.get("edges", [])
+        if not isinstance(edges, list):
+            return graph
+
+        for e in edges:
+            if isinstance(e, dict):
+                ff = e.get("from_file")
+                ffn = e.get("from_func")
+                tf = e.get("to_file")
+                tfn = e.get("to_func")
+                if all(isinstance(x, str) for x in (ff, ffn, tf, tfn)):
+                    graph.add_edge(ff, ffn, tf, tfn)
+                continue
+
+            if isinstance(e, (list, tuple)) and len(e) == 4:
+                ff, ffn, tf, tfn = e
+                if all(isinstance(x, str) for x in (ff, ffn, tf, tfn)):
+                    graph.add_edge(ff, ffn, tf, tfn)
+
+        return graph
 
     def _ensure_call_graph_loaded(self):
         """Load call graph if not already loaded."""
@@ -530,13 +620,18 @@ class TLDRDaemon:
         if call_graph_path.exists():
             try:
                 self.indexes["call_graph"] = json.loads(call_graph_path.read_text())
+                self.indexes["call_graph_obj"] = self._project_call_graph_from_cache(
+                    self.indexes["call_graph"]
+                )
                 logger.info(f"Loaded call graph from {call_graph_path}")
             except Exception as e:
                 logger.error(f"Failed to load call graph: {e}")
                 self.indexes["call_graph"] = {"edges": [], "nodes": {}}
+                self.indexes["call_graph_obj"] = self._project_call_graph_from_cache(self.indexes["call_graph"])
         else:
             logger.warning(f"No call graph found at {call_graph_path}")
             self.indexes["call_graph"] = {"edges": [], "nodes": {}}
+            self.indexes["call_graph_obj"] = self._project_call_graph_from_cache(self.indexes["call_graph"])
 
     def _handle_dead(self, command: dict) -> dict:
         """Handle dead code analysis command."""
@@ -717,6 +812,7 @@ class TLDRDaemon:
 
             # Also update in-memory index
             self.indexes["call_graph"] = cache_data
+            self.indexes["call_graph_obj"] = graph
 
             return {"status": "ok", "files": len(files), "edges": len(graph.edges)}
         except Exception as e:

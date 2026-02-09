@@ -823,24 +823,50 @@ def main():
                 # Check for dirty files
                 if is_dirty(project, dirty_path=dirty_path):
                     dirty_files = get_dirty_files(project, dirty_path=dirty_path)
-                    # TypeScript: do a full rebuild when dirty. The current patcher is
-                    # intra-file only and will drop cross-file TS edges.
                     if lang == "typescript":
-                        if workspace_root is not None:
-                            graph = build_fn(
-                                project_path,
-                                language=lang,
-                                ignore_spec=ignore_spec,
-                                workspace_root=workspace_root,
-                                ts_trace=ts_trace,
-                            )
-                        else:
-                            graph = build_fn(
-                                project_path,
-                                language=lang,
-                                ignore_spec=ignore_spec,
-                                ts_trace=ts_trace,
-                            )
+                        # TypeScript: prefer a TS-resolved incremental patch when the
+                        # cached graph was built in ts-resolved mode. Fall back to a
+                        # full rebuild if the resolver is disabled/unavailable.
+                        graph_source = (
+                            graph.meta.get("graph_source")
+                            if isinstance(getattr(graph, "meta", None), dict)
+                            else None
+                        )
+                        resolver_mode = os.environ.get("TLDR_TS_RESOLVER", "auto").strip().lower()
+                        patched = False
+                        if resolver_mode != "syntax" and graph_source in ("ts-resolved", "ts-resolved-multi"):
+                            try:
+                                from .patch import patch_typescript_resolved_dirty_files
+
+                                patch_typescript_resolved_dirty_files(
+                                    graph,
+                                    project,
+                                    dirty_files,
+                                    trace=False,
+                                    timeout_s=60,
+                                )
+                                patched = True
+                            except Exception:
+                                patched = False
+
+                        if not patched:
+                            # Conservative fallback: full rebuild to avoid silently
+                            # degrading cross-file TS edges.
+                            if workspace_root is not None:
+                                graph = build_fn(
+                                    project_path,
+                                    language=lang,
+                                    ignore_spec=ignore_spec,
+                                    workspace_root=workspace_root,
+                                    ts_trace=ts_trace,
+                                )
+                            else:
+                                graph = build_fn(
+                                    project_path,
+                                    language=lang,
+                                    ignore_spec=ignore_spec,
+                                    ts_trace=ts_trace,
+                                )
                     else:
                         # Patch incrementally for each dirty file
                         for rel_file in dirty_files:

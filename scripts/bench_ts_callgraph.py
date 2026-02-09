@@ -5,11 +5,14 @@ import json
 import shutil
 import tempfile
 import time
+from contextlib import redirect_stderr, redirect_stdout
+from io import StringIO
 from pathlib import Path
 from typing import Any
 
 from tldr.analysis import impact_analysis
 from tldr.cross_file_calls import build_project_call_graph
+from tldr.patch import patch_typescript_resolved_dirty_files
 
 
 def _time_it(fn):
@@ -53,6 +56,59 @@ def _bench_impacts(graph, targets: list[tuple[str, str | None]]) -> list[dict[st
     return out
 
 
+def _bench_daemon_peerbit(
+    root: Path,
+    targets: list[tuple[str, str | None]],
+) -> dict[str, Any]:
+    from tldr.daemon import query_daemon, start_daemon
+
+    # Ensure daemon is running, but keep benchmark output JSON-only.
+    with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+        start_daemon(root, foreground=False)
+
+    warm_dt, warm_res = _time_it(
+        lambda: query_daemon(
+            root,
+            {
+                "cmd": "warm",
+                "language": "typescript",
+            },
+        )
+    )
+
+    impacts: list[dict[str, Any]] = []
+    for sym, file_filter in targets:
+        cmd: dict[str, Any] = {
+            "cmd": "impact",
+            "func": sym,
+            "depth": 1,
+        }
+        if file_filter is not None:
+            cmd["file"] = file_filter
+
+        dt, res = _time_it(lambda: query_daemon(root, cmd))
+        ok = bool(res.get("status") == "ok")
+        result = res.get("result")
+        if isinstance(result, dict) and "error" in result:
+            ok = False
+
+        impacts.append(
+            {
+                "symbol": sym,
+                "file_filter": file_filter,
+                "impact_s": round(dt, 6),
+                "ok": ok,
+            }
+        )
+
+    return {
+        "warm_s": round(warm_dt, 2),
+        "warm_status": warm_res.get("status"),
+        "warm_edges": warm_res.get("edges"),
+        "impacts": impacts,
+    }
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Quick TS callgraph benchmarks (manual).")
     ap.add_argument(
@@ -64,6 +120,11 @@ def main() -> int:
         "--peerbit-root",
         default=None,
         help="Optional Peerbit repo root to benchmark (builds can be slow).",
+    )
+    ap.add_argument(
+        "--peerbit-daemon",
+        action="store_true",
+        help="Benchmark warm + 5 impact queries via the TLDR daemon (Peerbit only).",
     )
     ap.add_argument(
         "--ts-trace",
@@ -95,10 +156,29 @@ def main() -> int:
             ],
         )
 
-        # "Incremental" rebuild benchmark (today: TS uses full rebuild when dirty; this
-        # still gives us a consistent measurement point).
+        # True incremental patch benchmark: recompute edges just for the touched file
+        # (TypeScript-resolved mode) and patch the existing graph in place.
         touched = fixture_tmp / "packages" / "a" / "src" / "foo.ts"
         touched.write_text(touched.read_text() + "\n// bench_touch\n")
+
+        patch_dt = None
+        patch_meta: dict[str, Any] | None = None
+        patch_err: str | None = None
+        try:
+            patch_dt, patch_meta = _time_it(
+                lambda: patch_typescript_resolved_dirty_files(
+                    graph,
+                    fixture_tmp,
+                    ["packages/a/src/foo.ts"],
+                    trace=False,
+                    timeout_s=60,
+                )
+            )
+        except Exception as exc:
+            patch_err = str(exc)
+
+        # "Incremental" rebuild benchmark (today: TS uses full rebuild when dirty; this
+        # still gives us a consistent measurement point).
         fixture_rebuild = _bench_build(fixture_tmp, ts_trace=bool(args.ts_trace))
         fixture_rebuild.pop("graph")
 
@@ -108,6 +188,11 @@ def main() -> int:
                     "fixture": {
                         "build": {k: v for k, v in fixture_build.items() if k != "graph"},
                         "impacts": fixture_impacts,
+                        "incremental_patch_after_touch": {
+                            "patch_s": round(patch_dt, 4) if isinstance(patch_dt, (int, float)) else None,
+                            "meta": patch_meta,
+                            "error": patch_err,
+                        },
                         "rebuild_after_touch": fixture_rebuild,
                     }
                 },
@@ -117,33 +202,35 @@ def main() -> int:
 
     if args.peerbit_root:
         peerbit_root = Path(args.peerbit_root).resolve()
-        peerbit_build = _bench_build(peerbit_root, ts_trace=bool(args.ts_trace))
-        peerbit_graph = peerbit_build.pop("graph")
-        peerbit_impacts = _bench_impacts(
-            peerbit_graph,
-            [
-                ("Peerbit.dial", "packages/clients/peerbit/src/peer.ts"),
-                ("createLibp2pExtended", "packages/clients/peerbit/src/libp2p.ts"),
-                ("Handler.open", "packages/programs/program/program/src/handler.ts"),
-                ("getKeypairFromPrivateKey", "packages/utils/crypto/src/from.ts"),
-                ("LevelStore.open", "packages/utils/any-store/any-store/src/level.ts"),
-            ],
-        )
-        print(
-            json.dumps(
-                {
-                    "peerbit": {
-                        "build": peerbit_build,
-                        "impacts": peerbit_impacts,
-                    }
-                },
-                indent=2,
+        peerbit_targets = [
+            ("Peerbit.dial", "packages/clients/peerbit/src/peer.ts"),
+            ("createLibp2pExtended", "packages/clients/peerbit/src/libp2p.ts"),
+            ("Handler.open", "packages/programs/program/program/src/handler.ts"),
+            ("getKeypairFromPrivateKey", "packages/utils/crypto/src/from.ts"),
+            ("LevelStore.open", "packages/utils/any-store/any-store/src/level.ts"),
+        ]
+
+        if args.peerbit_daemon:
+            res = _bench_daemon_peerbit(peerbit_root, peerbit_targets)
+            print(json.dumps({"peerbit_daemon": res}, indent=2))
+        else:
+            peerbit_build = _bench_build(peerbit_root, ts_trace=bool(args.ts_trace))
+            peerbit_graph = peerbit_build.pop("graph")
+            peerbit_impacts = _bench_impacts(peerbit_graph, peerbit_targets)
+            print(
+                json.dumps(
+                    {
+                        "peerbit": {
+                            "build": peerbit_build,
+                            "impacts": peerbit_impacts,
+                        }
+                    },
+                    indent=2,
+                )
             )
-        )
 
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

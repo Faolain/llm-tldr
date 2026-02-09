@@ -23,7 +23,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from tldr.cross_file_calls import (
     ProjectCallGraph,
@@ -277,3 +277,98 @@ def patch_dirty_files(
             graph = patch_call_graph(graph, str(abs_file), project_root, lang=lang)
 
     return graph
+
+
+def patch_typescript_resolved_dirty_files(
+    graph: ProjectCallGraph,
+    project_root: str | Path,
+    dirty_files: list[str],
+    *,
+    trace: bool = False,
+    timeout_s: int = 60,
+) -> dict[str, Any]:
+    """Patch a TS-resolved call graph for the given dirty files.
+
+    This recomputes *outbound* call edges (caller == dirty file) using the
+    TypeScript compiler API resolver and patches the existing graph in-place.
+
+    Notes:
+    - This is intentionally conservative: it does not attempt to update edges
+      *into* the dirty file from other files (those callsites didn't change).
+    - If the TS resolver cannot run, callers should fall back to a full rebuild.
+    """
+    root = Path(project_root).resolve()
+
+    dirty_rel: set[str] = set()
+    dirty_abs: list[Path] = []
+
+    for item in dirty_files:
+        p = Path(item)
+        if p.is_absolute():
+            abs_path = p
+            try:
+                rel = abs_path.resolve().relative_to(root).as_posix()
+            except Exception:
+                continue
+        else:
+            rel = p.as_posix()
+            abs_path = root / p
+
+        if not rel.endswith((".ts", ".tsx")):
+            continue
+        if not abs_path.exists():
+            continue
+        dirty_rel.add(rel)
+        dirty_abs.append(abs_path.resolve())
+
+    if not dirty_rel:
+        return {
+            "dirty_files_total": len(dirty_files),
+            "patched_files": [],
+            "patched_file_count": 0,
+            "patched_edge_count": 0,
+            "skipped_reason": "no_typescript_files",
+        }
+
+    dirty_abs.sort(key=lambda p: str(p))
+
+    # Import lazily so normal patch workflows don't require node/typescript.
+    from tldr.ts.ts_callgraph import TsResolverError, build_ts_resolved_call_graph_multi_tsconfig
+
+    try:
+        edges, ts_meta = build_ts_resolved_call_graph_multi_tsconfig(
+            root,
+            allow_files=dirty_abs,
+            trace=trace,
+            timeout_s=timeout_s,
+        )
+    except TsResolverError:
+        # Let caller decide fallback strategy.
+        raise
+
+    # Remove all edges whose caller file is dirty.
+    edges_to_remove: set[tuple[str, str, str, str]] = set()
+    for edge in graph.edges:
+        src_file = edge[0].replace("\\", "/")
+        if src_file in dirty_rel:
+            edges_to_remove.add(edge)
+    graph._edges -= edges_to_remove
+
+    # Add recomputed edges.
+    for e in edges:
+        src_file, src_func, dst_file, dst_func = e.to_tuple()
+        graph.add_edge(src_file, src_func, dst_file, dst_func)
+
+    # Minimal incremental meta for debugging and benchmarking.
+    inc_meta = {
+        "patched_files": sorted(dirty_rel),
+        "patched_file_count": len(dirty_rel),
+        "patched_edge_count": len(edges),
+        "ts_projects_ok": ts_meta.get("ok_projects"),
+        "ts_projects_err": ts_meta.get("error_projects"),
+    }
+    graph.meta["ts_incremental"] = inc_meta
+    if int(ts_meta.get("error_projects") or 0) > 0:
+        graph.meta["incomplete"] = True
+
+    return inc_meta

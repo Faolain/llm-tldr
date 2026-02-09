@@ -63,7 +63,7 @@ def install_vendored():
                         text=True
                     )
                 if result.returncode == 0:
-                    print(f"  Installed successfully")
+                    print("  Installed successfully")
                     installed += 1
                 else:
                     print(f"  Failed: {result.stderr}")
