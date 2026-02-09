@@ -92,7 +92,7 @@ include = ["tldr*"]
 exclude = ["tests*"]
 
 [tool.setuptools.package-data]
-tldr = ["py.typed"]
+tldr = ["py.typed", "ts/*.js"]
 
 [tool.black]
 line-length = 88

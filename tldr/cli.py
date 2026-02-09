@@ -336,6 +336,11 @@ Device Selection:
     )
     calls_p.add_argument("path", nargs="?", default=".", help="Project root")
     calls_p.add_argument("--lang", default="auto", help="Language (auto=cached, all=detect)")
+    calls_p.add_argument(
+        "--ts-trace",
+        action="store_true",
+        help="Include TypeScript resolution trace details (when using TS-resolved call graph)",
+    )
 
     # tldr impact <func> [path]
     impact_p = subparsers.add_parser(
@@ -349,6 +354,11 @@ Device Selection:
     impact_p.add_argument("--depth", type=int, default=3, help="Max depth (default: 3)")
     impact_p.add_argument("--file", help="Filter by file containing this string")
     impact_p.add_argument("--lang", default="auto", help="Language (auto=cached, all=detect)")
+    impact_p.add_argument(
+        "--ts-trace",
+        action="store_true",
+        help="Include TypeScript resolution trace details (when using TS-resolved call graph)",
+    )
 
     # tldr dead [path]
     dead_p = subparsers.add_parser(
@@ -724,6 +734,7 @@ def main():
         index_paths=None,
         workspace_root=None,
         ignore_spec=None,
+        ts_trace: bool = False,
     ):
         """Get cached graph with incremental patches, or build fresh.
 
@@ -791,8 +802,8 @@ def main():
                 cache_file = project / ".tldr" / "cache" / "call_graph.json"
                 dirty_path = None
 
-        # Check if we have a cached graph
-        if cache_file.exists():
+        # If TS trace is requested, rebuild to ensure trace data is present and fresh.
+        if not ts_trace and cache_file.exists():
             try:
                 cache_data = json.loads(cache_file.read_text())
                 
@@ -804,24 +815,46 @@ def main():
                 
                 # Reconstruct graph from cache
                 graph = ProjectCallGraph()
+                if isinstance(cache_data.get("meta"), dict):
+                    graph.meta = cache_data.get("meta", {})
                 for e in cache_data.get("edges", []):
                     graph.add_edge(e["from_file"], e["from_func"], e["to_file"], e["to_func"])
 
                 # Check for dirty files
                 if is_dirty(project, dirty_path=dirty_path):
                     dirty_files = get_dirty_files(project, dirty_path=dirty_path)
-                    # Patch incrementally for each dirty file
-                    for rel_file in dirty_files:
-                        abs_file = project / rel_file
-                        if abs_file.exists():
-                            graph = patch_call_graph(graph, str(abs_file), str(project), lang=lang)
+                    # TypeScript: do a full rebuild when dirty. The current patcher is
+                    # intra-file only and will drop cross-file TS edges.
+                    if lang == "typescript":
+                        if workspace_root is not None:
+                            graph = build_fn(
+                                project_path,
+                                language=lang,
+                                ignore_spec=ignore_spec,
+                                workspace_root=workspace_root,
+                                ts_trace=ts_trace,
+                            )
+                        else:
+                            graph = build_fn(
+                                project_path,
+                                language=lang,
+                                ignore_spec=ignore_spec,
+                                ts_trace=ts_trace,
+                            )
+                    else:
+                        # Patch incrementally for each dirty file
+                        for rel_file in dirty_files:
+                            abs_file = project / rel_file
+                            if abs_file.exists():
+                                graph = patch_call_graph(graph, str(abs_file), str(project), lang=lang)
 
                     # Update cache with patched graph
                     cache_data = {
                         "edges": [
                             {"from_file": e[0], "from_func": e[1], "to_file": e[2], "to_func": e[3]}
-                            for e in graph.edges
+                            for e in graph.sorted_edges()
                         ],
+                        "meta": _cacheable_meta(graph.meta),
                         "languages": cache_langs if cache_langs else [lang],
                         "timestamp": time.time(),
                     }
@@ -842,12 +875,14 @@ def main():
                 language=lang,
                 ignore_spec=ignore_spec,
                 workspace_root=workspace_root,
+                ts_trace=ts_trace,
             )
         else:
             graph = build_fn(
                 project_path,
                 language=lang,
                 ignore_spec=ignore_spec,
+                ts_trace=ts_trace,
             )
 
         # Save to cache
@@ -855,8 +890,9 @@ def main():
         cache_data = {
             "edges": [
                 {"from_file": e[0], "from_func": e[1], "to_file": e[2], "to_func": e[3]}
-                for e in graph.edges
+                for e in graph.sorted_edges()
             ],
+            "meta": _cacheable_meta(graph.meta),
             "languages": [lang],
             "timestamp": time.time(),
         }
@@ -866,6 +902,19 @@ def main():
         clear_dirty(project, dirty_path=dirty_path)
 
         return graph
+
+    def _cacheable_meta(meta: dict) -> dict:
+        """Strip large/ephemeral trace payloads from cached call graph metadata."""
+        if not isinstance(meta, dict):
+            return {}
+        out = dict(meta)
+        out.pop("ts_trace", None)
+        ts_meta = out.get("ts_meta")
+        if isinstance(ts_meta, dict):
+            ts_meta = dict(ts_meta)
+            ts_meta.pop("skipped", None)
+            out["ts_meta"] = ts_meta
+        return out
 
     # Helper to load ignore patterns from .tldrignore + CLI --ignore flags + .gitignore
     def get_ignore_spec(project_path: str | Path, index_ctx=None):
@@ -1169,6 +1218,7 @@ def main():
                 index_paths=index_paths,
                 workspace_root=workspace_root,
                 ignore_spec=ignore_spec,
+                ts_trace=getattr(args, "ts_trace", False),
             )
             result = {
                 "edges": [
@@ -1178,10 +1228,21 @@ def main():
                         "to_file": e[2],
                         "to_func": e[3],
                     }
-                    for e in graph.edges
+                    for e in graph.sorted_edges()
                 ],
                 "count": len(graph.edges),
             }
+            if getattr(graph, "meta", None):
+                result["meta"] = _cacheable_meta(graph.meta)
+                if getattr(args, "ts_trace", False) and "ts_trace" in graph.meta:
+                    trace = graph.meta.get("ts_trace") or []
+                    trace_count = graph.meta.get("ts_trace_count")
+                    if not isinstance(trace_count, int):
+                        trace_count = len(trace)
+                    result["trace"] = {
+                        "skipped_count": trace_count,
+                        "skipped_sample": trace[:50],
+                    }
             print(json.dumps(result, indent=2))
 
         elif args.command == "impact":
@@ -1212,6 +1273,7 @@ def main():
                 index_paths=index_paths,
                 workspace_root=workspace_root,
                 ignore_spec=ignore_spec,
+                ts_trace=getattr(args, "ts_trace", False),
             )
             result = impact_analysis(
                 graph,
@@ -1219,6 +1281,17 @@ def main():
                 max_depth=args.depth,
                 target_file=args.file,
             )
+            if getattr(graph, "meta", None):
+                result["meta"] = _cacheable_meta(graph.meta)
+                if getattr(args, "ts_trace", False) and "ts_trace" in graph.meta:
+                    trace = graph.meta.get("ts_trace") or []
+                    trace_count = graph.meta.get("ts_trace_count")
+                    if not isinstance(trace_count, int):
+                        trace_count = len(trace)
+                    result["trace"] = {
+                        "skipped_count": trace_count,
+                        "skipped_sample": trace[:50],
+                    }
             print(json.dumps(result, indent=2))
 
         elif args.command == "dead":

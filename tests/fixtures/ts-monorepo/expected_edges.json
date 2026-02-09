@@ -1,0 +1,38 @@
+[
+  {
+    "caller": { "file": "packages/b/src/main.ts", "symbol": "main" },
+    "callee": { "file": "packages/a/src/foo.ts", "symbol": "foo" }
+  },
+  {
+    "caller": { "file": "packages/b/src/main.ts", "symbol": "main" },
+    "callee": { "file": "packages/a/src/foo.ts", "symbol": "FooDefault" }
+  },
+  {
+    "caller": { "file": "packages/b/src/main.ts", "symbol": "main" },
+    "callee": { "file": "packages/a/src/arrow.ts", "symbol": "createCache" }
+  },
+  {
+    "caller": { "file": "packages/b/src/main.ts", "symbol": "main" },
+    "callee": { "file": "packages/a/src/arrow.ts", "symbol": "createLibp2pExtended" }
+  },
+  {
+    "caller": { "file": "packages/b/src/main.ts", "symbol": "main" },
+    "callee": { "file": "packages/a/src/dispatch.ts", "symbol": "dispatch" }
+  },
+  {
+    "caller": { "file": "packages/b/src/main.ts", "symbol": "main" },
+    "callee": { "file": "packages/a/src/handlers.ts", "symbol": "callSupported" }
+  },
+  {
+    "caller": { "file": "packages/a/src/dispatch.ts", "symbol": "dispatch" },
+    "callee": { "file": "packages/a/src/dispatch.ts", "symbol": "C.m" }
+  },
+  {
+    "caller": { "file": "packages/a/src/handlers.ts", "symbol": "callSupported" },
+    "callee": { "file": "packages/a/src/handlers.ts", "symbol": "onFoo" }
+  },
+  {
+    "caller": { "file": "packages/a/src/typed.ts", "symbol": "callTypedFn" },
+    "callee": { "file": "packages/a/src/typed.ts", "symbol": "typedFn" }
+  }
+]

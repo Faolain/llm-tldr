@@ -18,7 +18,7 @@ import ast
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from tldr.workspace import WorkspaceConfig, load_workspace_config, filter_paths
 
@@ -139,6 +139,7 @@ class ProjectCallGraph:
     """Cross-file call graph with edges as (src_file, src_func, dst_file, dst_func)."""
 
     _edges: set[tuple[str, str, str, str]] = field(default_factory=set)
+    meta: dict[str, Any] = field(default_factory=dict)
 
     def add_edge(self, src_file: str, src_func: str, dst_file: str, dst_func: str):
         """Add a call edge from src_file:src_func to dst_file:dst_func."""
@@ -148,6 +149,10 @@ class ProjectCallGraph:
     def edges(self) -> set[tuple[str, str, str, str]]:
         """Return all edges as a set of tuples."""
         return self._edges
+
+    def sorted_edges(self) -> list[tuple[str, str, str, str]]:
+        """Return edges in a stable, deterministic order."""
+        return sorted(self._edges)
 
     def __contains__(self, edge: tuple[str, str, str, str]) -> bool:
         """Check if an edge exists in the graph."""
@@ -3305,6 +3310,7 @@ def build_project_call_graph(
     use_workspace_config: bool = True,
     ignore_spec=None,
     workspace_root: Optional[Path] = None,
+    ts_trace: bool = False,
 ) -> ProjectCallGraph:
     """
     Build a complete project-wide call graph.
@@ -3360,6 +3366,7 @@ def build_project_call_graph(
             workspace_config,
             ignore_spec=ignore_spec,
             workspace_root=workspace_root,
+            ts_trace=ts_trace,
         )
     elif language == "go":
         _build_go_call_graph(
@@ -3499,15 +3506,129 @@ def _build_typescript_call_graph(
     workspace_config: Optional[WorkspaceConfig] = None,
     ignore_spec=None,
     workspace_root: Optional[Path] = None,
+    ts_trace: bool = False,
 ):
-    """Build call graph for TypeScript files."""
-    for ts_file in scan_project(
+    """Build call graph for TypeScript files.
+
+    Prefers TypeScript compiler-grade resolution (Node helper + TS compiler API)
+    when available, and falls back to syntax-only tree-sitter heuristics.
+    """
+    ts_files = scan_project(
         root,
         "typescript",
         workspace_config,
         ignore_spec=ignore_spec,
         workspace_root=workspace_root,
-    ):
+    )
+
+    resolver_mode = os.environ.get("TLDR_TS_RESOLVER", "auto").strip().lower()
+    trace_enabled = ts_trace or os.environ.get("TLDR_TS_TRACE", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+    if resolver_mode != "syntax":
+        try:
+            from tldr.ts.ts_callgraph import (
+                TsResolverError,
+                build_ts_resolved_call_graph,
+                build_ts_resolved_call_graph_multi_tsconfig,
+            )
+
+            try:
+                resolved_edges, ts_meta = build_ts_resolved_call_graph(
+                    root,
+                    allow_files=ts_files,
+                    trace=trace_enabled,
+                )
+
+                for edge in resolved_edges:
+                    src_file, src_func, dst_file, dst_func = edge.to_tuple()
+                    graph.add_edge(src_file, src_func, dst_file, dst_func)
+
+                graph.meta.update(
+                    {
+                        "graph_source": "ts-resolved",
+                        "ts_meta": ts_meta,
+                    }
+                )
+                if trace_enabled and isinstance(ts_meta.get("skipped"), list):
+                    graph.meta["ts_trace"] = ts_meta.get("skipped")
+                    graph.meta["ts_trace_count"] = ts_meta.get("skipped_count")
+                    graph.meta["ts_trace_truncated"] = ts_meta.get("skipped_truncated")
+                    graph.meta["ts_trace_limit"] = ts_meta.get("skipped_limit")
+
+                return
+            except TsResolverError as exc:
+                # If the chosen tsconfig doesn't actually include the scanned workspace
+                # files (common in TS monorepos), fall back to a multi-tsconfig build.
+                fallback_codes = {
+                    "tsconfig_no_workspace_inputs",
+                    "tsconfig_missing",
+                    "tsconfig_ambiguous",
+                }
+                if (exc.code or "") in fallback_codes:
+                    try:
+                        resolved_edges, ts_meta = build_ts_resolved_call_graph_multi_tsconfig(
+                            root,
+                            allow_files=ts_files,
+                            trace=trace_enabled,
+                        )
+
+                        for edge in resolved_edges:
+                            src_file, src_func, dst_file, dst_func = edge.to_tuple()
+                            graph.add_edge(src_file, src_func, dst_file, dst_func)
+
+                        graph.meta.update(
+                            {
+                                "graph_source": "ts-resolved-multi",
+                                "ts_meta": ts_meta,
+                                "ts_projects": ts_meta.get("ts_projects"),
+                                "ts_fallback_from": {
+                                    "code": exc.code or "resolver_error",
+                                    "message": str(exc),
+                                },
+                            }
+                        )
+                        if trace_enabled and isinstance(ts_meta.get("skipped"), list):
+                            graph.meta["ts_trace"] = ts_meta.get("skipped")
+                            graph.meta["ts_trace_count"] = ts_meta.get("skipped_count")
+                            graph.meta["ts_trace_truncated"] = ts_meta.get("skipped_truncated")
+                            graph.meta["ts_trace_limit"] = ts_meta.get("skipped_limit")
+                        if int(ts_meta.get("error_projects") or 0) > 0:
+                            graph.meta["incomplete"] = True
+
+                        return
+                    except TsResolverError as exc2:
+                        graph.meta.setdefault("ts_resolution_errors", []).append(
+                            {"code": exc.code or "resolver_error", "message": str(exc)}
+                        )
+                        graph.meta.setdefault("ts_resolution_errors", []).append(
+                            {"code": exc2.code or "resolver_error", "message": str(exc2)}
+                        )
+                        graph.meta["incomplete"] = True
+                else:
+                    graph.meta.setdefault("ts_resolution_errors", []).append(
+                        {"code": exc.code or "resolver_error", "message": str(exc)}
+                    )
+                    graph.meta["incomplete"] = True
+        except TsResolverError as exc:
+            graph.meta.setdefault("ts_resolution_errors", []).append(
+                {"code": exc.code or "resolver_error", "message": str(exc)}
+            )
+            graph.meta["incomplete"] = True
+        except Exception as exc:
+            graph.meta.setdefault("ts_resolution_errors", []).append(
+                {"code": "resolver_crash", "message": str(exc)}
+            )
+            graph.meta["incomplete"] = True
+
+    # Syntax-only fallback.
+    graph.meta.setdefault("graph_source", "ts-syntax-only")
+
+    for ts_file in ts_files:
         ts_path = Path(ts_file)
         rel_path = str(ts_path.relative_to(root))
 

@@ -649,11 +649,21 @@ class TLDRDaemon:
                 ignore_spec=self._ignore_spec,
                 workspace_root=self._workspace_root,
             )
+            meta = getattr(graph, "meta", None)
+            if isinstance(meta, dict):
+                meta = dict(meta)
+                meta.pop("ts_trace", None)
+                ts_meta = meta.get("ts_meta")
+                if isinstance(ts_meta, dict):
+                    ts_meta = dict(ts_meta)
+                    ts_meta.pop("skipped", None)
+                    meta["ts_meta"] = ts_meta
             result = {
                 "edges": [
                     {"from_file": e[0], "from_func": e[1], "to_file": e[2], "to_func": e[3]}
-                    for e in graph.edges
+                    for e in graph.sorted_edges()
                 ],
+                "meta": meta,
                 "count": len(graph.edges),
             }
             return {"status": "ok", "result": result}
@@ -680,6 +690,15 @@ class TLDRDaemon:
                 ignore_spec=self._ignore_spec,
                 workspace_root=self._workspace_root,
             )
+            meta = getattr(graph, "meta", None)
+            if isinstance(meta, dict):
+                meta = dict(meta)
+                meta.pop("ts_trace", None)
+                ts_meta = meta.get("ts_meta")
+                if isinstance(ts_meta, dict):
+                    ts_meta = dict(ts_meta)
+                    ts_meta.pop("skipped", None)
+                    meta["ts_meta"] = ts_meta
 
             # Create cache directory and save
             cache_dir = self.cache_dir
@@ -688,8 +707,9 @@ class TLDRDaemon:
             cache_data = {
                 "edges": [
                     {"from_file": e[0], "from_func": e[1], "to_file": e[2], "to_func": e[3]}
-                    for e in graph.edges
+                    for e in graph.sorted_edges()
                 ],
+                "meta": meta,
                 "languages": [language],
                 "timestamp": time.time(),
             }

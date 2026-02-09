@@ -1,0 +1,135 @@
+{
+  "repo": "peerbit",
+  "updated": "2026-02-09",
+  "notes": [
+    "Curated cross-file call edges for validating llm-tldr's TS-resolved callgraph on the Peerbit monorepo.",
+    "All paths are repo-root relative. Symbols are the callgraph symbol ids (e.g. Class.method)."
+  ],
+  "edges": [
+    {
+      "caller": { "file": "packages/clients/peerbit/src/peer.ts", "symbol": "Peerbit.bootstrap" },
+      "callee": { "file": "packages/clients/peerbit/src/bootstrap.ts", "symbol": "resolveBootstrapAddresses" }
+    },
+    {
+      "caller": { "file": "packages/clients/peerbit/src/peer.ts", "symbol": "Peerbit.bootstrap" },
+      "callee": { "file": "packages/clients/peerbit/src/peer.ts", "symbol": "Peerbit.dial" }
+    },
+    {
+      "caller": { "file": "packages/clients/peerbit/src/peer.ts", "symbol": "Peerbit.create" },
+      "callee": { "file": "packages/clients/peerbit/src/libp2p.ts", "symbol": "createLibp2pExtended" }
+    },
+    {
+      "caller": { "file": "packages/clients/peerbit/src/peer.ts", "symbol": "Peerbit.create" },
+      "callee": { "file": "packages/clients/peerbit/src/peer.ts", "symbol": "createCache" }
+    },
+    {
+      "caller": { "file": "packages/clients/peerbit/src/peer.ts", "symbol": "Peerbit.create" },
+      "callee": { "file": "packages/clients/peerbit/src/peer.ts", "symbol": "isLibp2pInstance" }
+    },
+    {
+      "caller": { "file": "packages/clients/peerbit/src/peer.ts", "symbol": "Peerbit.create" },
+      "callee": { "file": "packages/utils/any-store/any-store/src/level.ts", "symbol": "LevelStore.open" }
+    },
+    {
+      "caller": { "file": "packages/clients/peerbit/src/peer.ts", "symbol": "Peerbit.create" },
+      "callee": { "file": "packages/utils/any-store/any-store/src/store.ts", "symbol": "createStore" }
+    },
+    {
+      "caller": { "file": "packages/clients/peerbit/src/peer.ts", "symbol": "Peerbit.create" },
+      "callee": { "file": "packages/utils/crypto/src/from.ts", "symbol": "getKeypairFromPrivateKey" }
+    },
+    {
+      "caller": { "file": "packages/clients/peerbit/src/peer.ts", "symbol": "Peerbit.create" },
+      "callee": { "file": "packages/utils/keychain/src/crypto.ts", "symbol": "DefaultCryptoKeychain.exportById" }
+    },
+    {
+      "caller": { "file": "packages/clients/peerbit/src/peer.ts", "symbol": "Peerbit.create" },
+      "callee": { "file": "packages/utils/keychain/src/libp2p.ts", "symbol": "keychain" }
+    },
+    {
+      "caller": { "file": "packages/clients/peerbit/src/peer.ts", "symbol": "Peerbit.dial" },
+      "callee": { "file": "packages/utils/crypto/src/ed25519.ts", "symbol": "Ed25519PublicKey.fromPeerId" }
+    },
+    {
+      "caller": { "file": "packages/clients/peerbit/src/peer.ts", "symbol": "Peerbit.dial" },
+      "callee": { "file": "packages/utils/crypto/src/key.ts", "symbol": "PublicSignKey.hashcode" }
+    },
+    {
+      "caller": { "file": "packages/clients/peerbit/src/peer.ts", "symbol": "Peerbit.hangUp" },
+      "callee": { "file": "packages/utils/crypto/src/key.ts", "symbol": "PublicSignKey.toPeerId" }
+    },
+    {
+      "caller": { "file": "packages/clients/peerbit/src/peer.ts", "symbol": "createCache" },
+      "callee": { "file": "packages/utils/any-store/any-store/src/level.ts", "symbol": "LevelStore.clear" }
+    },
+    {
+      "caller": { "file": "packages/clients/peerbit/src/peer.ts", "symbol": "createCache" },
+      "callee": { "file": "packages/utils/any-store/any-store/src/level.ts", "symbol": "LevelStore.open" }
+    },
+    {
+      "caller": { "file": "packages/clients/peerbit/src/peer.ts", "symbol": "createCache" },
+      "callee": { "file": "packages/utils/any-store/any-store/src/store.ts", "symbol": "createStore" }
+    },
+    {
+      "caller": { "file": "packages/clients/peerbit/src/libp2p.ts", "symbol": "createLibp2pExtended" },
+      "callee": { "file": "packages/clients/peerbit/src/transports.ts", "symbol": "listen" }
+    },
+    {
+      "caller": { "file": "packages/clients/peerbit/src/libp2p.ts", "symbol": "createLibp2pExtended" },
+      "callee": { "file": "packages/clients/peerbit/src/transports.ts", "symbol": "relay" }
+    },
+    {
+      "caller": { "file": "packages/clients/peerbit/src/libp2p.ts", "symbol": "createLibp2pExtended" },
+      "callee": { "file": "packages/clients/peerbit/src/transports.ts", "symbol": "transports" }
+    },
+    {
+      "caller": { "file": "packages/programs/program/program/src/handler.ts", "symbol": "Handler.open" },
+      "callee": { "file": "packages/programs/program/program/src/handler.ts", "symbol": "addParent" }
+    },
+    {
+      "caller": { "file": "packages/programs/program/program/src/handler.ts", "symbol": "Handler.open" },
+      "callee": { "file": "packages/programs/program/program/src/handler.ts", "symbol": "fn" }
+    },
+    {
+      "caller": { "file": "packages/programs/program/program/src/handler.ts", "symbol": "Handler.open" },
+      "callee": { "file": "packages/programs/program/program/src/handler.ts", "symbol": "resolveAddress" }
+    },
+    {
+      "caller": { "file": "packages/programs/program/program/src/handler.ts", "symbol": "fn" },
+      "callee": { "file": "packages/programs/program/program/src/handler.ts", "symbol": "Handler._onProgamClose" }
+    },
+    {
+      "caller": { "file": "packages/programs/program/program/src/handler.ts", "symbol": "fn" },
+      "callee": { "file": "packages/programs/program/program/src/handler.ts", "symbol": "Handler.checkProcessExisting" }
+    },
+    {
+      "caller": { "file": "packages/programs/program/program/src/program.ts", "symbol": "Program.beforeOpen" },
+      "callee": { "file": "packages/programs/program/program/src/handler.ts", "symbol": "addParent" }
+    },
+    {
+      "caller": { "file": "packages/programs/program/program/src/program.ts", "symbol": "Program.beforeOpen" },
+      "callee": { "file": "packages/programs/program/program/src/program.ts", "symbol": "getAllParentAddresses" }
+    },
+    {
+      "caller": { "file": "packages/programs/program/program/src/program.ts", "symbol": "getAllParentAddresses" },
+      "callee": { "file": "packages/programs/program/program/src/program.ts", "symbol": "getAllParent" }
+    },
+    {
+      "caller": { "file": "packages/programs/program/program/src/program.ts", "symbol": "getAllParent" },
+      "callee": { "file": "packages/programs/program/program/src/program.ts", "symbol": "getAllParent" }
+    },
+    {
+      "caller": { "file": "packages/programs/program/program/src/program.ts", "symbol": "Program.afterOpen" },
+      "callee": { "file": "packages/programs/program/program/src/program.ts", "symbol": "Program._emitJoinNetworkEvents" }
+    },
+    {
+      "caller": { "file": "packages/programs/program/program/src/program.ts", "symbol": "Program._emitJoinNetworkEvents" },
+      "callee": { "file": "packages/programs/program/program/src/program.ts", "symbol": "Program.getAllTopicsIncludingThis" }
+    },
+    {
+      "caller": { "file": "packages/programs/program/program/src/program.ts", "symbol": "Program.open" },
+      "callee": { "file": "packages/programs/program/program/src/program.ts", "symbol": "Program.load" }
+    }
+  ]
+}
+
