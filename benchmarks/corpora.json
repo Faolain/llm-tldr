@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "corpora": [
+    {
+      "id": "peerbit",
+      "git_url": "https://github.com/dao-xyz/peerbit.git",
+      "language": "typescript",
+      "pinned_ref": "07ba5722536a5a5053b778ed92fc362c66f8164b",
+      "pinned_sha": "07ba5722536a5a5053b778ed92fc362c66f8164b",
+      "package_manager": "pnpm",
+      "notes": [
+        "Peerbit is used as a real-world TS monorepo for TS-resolved callgraph quality, daemon warm latency, and incremental patch benchmarks.",
+        "Curated edges currently live at scripts/peerbit_curated_edges.json (may be mirrored into benchmarks/ts/ later)."
+      ]
+    },
+    {
+      "id": "nextjs",
+      "git_url": "https://github.com/vercel/next.js.git",
+      "language": "typescript",
+      "pinned_ref": "v16.1.6",
+      "pinned_sha": "adf8c612adddd103647c90ff0f511ea35c57076e",
+      "package_manager": "pnpm",
+      "notes": [
+        "Pinned to the latest stable tag as of 2026-02-09 (v16.1.6).",
+        "This corpus should get its own curated edge set (benchmarks/ts/nextjs_curated_edges.json) for repeatable quality scoring."
+      ]
+    }
+  ]
+}
+
