@@ -530,6 +530,13 @@ Next step options:
 **Acceptance**
 - Curves are reproducible and show a measurable “quality-per-token” gap on at least one category where grep is structurally disadvantaged (slice/dfg, or TS impact across monorepo indirection).
 
+### Review (Phase 6): Best Practices Surfaced
+
+- Treat Phase 6 as “selector-first”: TLDR’s advantage under tight budgets is primarily the structured selector outputs (`tldr_structured`) rather than large materialized code payloads.
+- Data flow: on the current Django DFG suite, `tldr_structured` is already enough to achieve high flow completeness at very low tokens; `tldr_structured_plus_code` mostly adds noise/tokens without improving the core correctness metrics (see `benchmark/runs/20260210-214935Z-token-efficiency-structural-django-multistep.json`).
+- Slice: `tldr_structured` stays high-precision/low-noise but can miss some lines; `tldr_structured_plus_code` can recover recall, but at tight budgets it converges toward grep-window precision/noise (i.e., you “buy continuity” by spending the noise advantage away) (same report).
+- Phase 6 scoring should continue to separate selector correctness from materialization overhead (`selector_tokens` vs `code_tokens`) so improvements to readability/continuity don’t hide selector wins.
+
 ## Phase 7: Downstream Quality (LLM-as-Judge) (Future)
 
 **Goals**
@@ -893,6 +900,22 @@ Next step options:
   - Scope: use GEPA (reflective evolutionary, Pareto-style prompt tuning) to optimize prompt + context-format knobs (e.g. slice/DFG window sizes/ordering + instructions), not just wording.
   - Objectives: improve judge win-rate / score means while reducing context tokens (Pareto frontier over quality vs cost).
   - Guardrails: train/holdout task split; keep judge prompt fixed (or use multiple judges); report only holdout deltas to avoid overfitting/judge-hacking.
+
+### Review (Phase 7): Best Practices For TLDR vs `rg`
+
+- Use a two-step workflow by default: “structured selector” first (callers/lines), then targeted code materialization for continuity and grounding. This matches how Phase 7 open-ended slice packing improved (target window + extra windows + related defs) and aligns with Phase 6 multi-step scoring.
+- Token budget guidance from judge-mode runs:
+  - `budget_tokens=2000` is a good default for open-ended debugging/explanations: overall win_rate_tldr_over_rg = `0.694` (slice category `0.595`) in `benchmark/runs/20260210-205924Z-llm-ab-run-judge-open-ended-t3.json`.
+  - `budget_tokens=1000` is a workable “tight budget” for slice explanations: slice-only win_rate_tldr_over_rg = `0.548` in `benchmark/runs/20260210-211226Z-llm-ab-run-judge-slice-1000-t3.json`.
+  - `budget_tokens=500` is still a hard regime for slice explanations: slice-only win_rate_tldr_over_rg = `0.429` in `benchmark/runs/20260210-212621Z-llm-ab-run-judge-slice-500-t3.json`. Best practice here is “selector-only + follow-up” instead of forcing a contiguous explanation context.
+- TLDR is particularly suited for:
+  - impact/callers through indirection (where grep windows miss non-textual relationships)
+  - spending limited tokens on the “right” remote dependencies/definitions (rather than paying for contiguous context everywhere)
+  - large repos where `rg` returns too much and you need structural narrowing
+- Prefer `rg` for:
+  - exhaustive string search (including docs/config)
+  - module-level/top-level code outside functions
+  - small match sets where grep output is already manageable
 
 ## Phase 8: SWE-bench Validation (Future)
 
