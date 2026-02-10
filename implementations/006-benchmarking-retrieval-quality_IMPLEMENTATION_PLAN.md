@@ -591,7 +591,7 @@ Next step options:
     - answers: `benchmark/llm/20260210-005817Z-llm-ab-answers-codex.jsonl`
   - key results:
     - overall: TLDR `f1_mean=0.865` vs rg `0.598`; win_rate_tldr_over_rg `0.683` (ties count as `0.5`)
-    - slice (10 tasks): TLDR `f1_mean=0.919` vs rg `0.477`; win_rate_tldr_over_rg `0.800` (vs `0.400` in `benchmark/runs/20260209-173450Z-llm-ab-run-structured.json`)
+    - slice (10 tasks): TLDR `f1_mean=0.919` vs rg `0.477`; slice win-rate (ties count as `0.5`) `0.800` (vs `0.400` in `benchmark/runs/20260209-173450Z-llm-ab-run-structured.json`)
   - Note: Phase 7 uses structural payloads (impact/slice/dfg); embedding model only affects retrieval benchmarks (Phase 5/6 retrieval).
 
 - 2026-02-10: Stabilized Phase 7 numbers by rerunning the same prompt packet with `--trials 3` (Codex):
@@ -599,7 +599,7 @@ Next step options:
   - answers: `benchmark/llm/20260210-030111Z-llm-ab-answers-codex.jsonl`
   - key results:
     - overall: TLDR `f1_mean=0.865` vs rg `0.619`; win_rate_tldr_over_rg `0.683` (ties count as `0.5`)
-    - slice (10 tasks): TLDR `f1_mean=0.919` vs rg `0.471`; win_rate_tldr_over_rg `0.800` (stable vs the `--trials 1` rerun above)
+    - slice (10 tasks): TLDR `f1_mean=0.919` vs rg `0.471`; slice win-rate (ties count as `0.5`) `0.800` (stable vs the `--trials 1` rerun above)
     - latency (p50/p95): TLDR `2.19s/4.39s` vs rg `4.26s/12.23s`
 
 - 2026-02-10: Fixed `--provider claude_sdk` Phase 7 extraction and turn-budgeting:
@@ -614,7 +614,7 @@ Next step options:
   - answers: `benchmark/llm/20260210-040732Z-llm-ab-answers-claude.jsonl`
   - key results:
     - overall: TLDR `f1_mean=0.865` vs rg `0.655`; win_rate_tldr_over_rg `0.700` (ties count as `0.5`)
-    - slice (10 tasks): TLDR `f1_mean=0.919` vs rg `0.406`; win_rate_tldr_over_rg `1.000`
+    - slice (10 tasks): TLDR `f1_mean=0.919` vs rg `0.406`; slice win-rate (ties count as `0.5`) `1.000`
     - latency (p50/p95): TLDR `5.26s/7.22s` vs rg `6.59s/12.41s`
 
   Comparison (same prompt packet `20260210-005817Z-llm-ab-django.jsonl`, `--trials 3`):
