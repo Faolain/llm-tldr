@@ -7,11 +7,13 @@
 
 ## Next Steps (Recommended Order)
 
-1. Phase 7: lock open-ended slice context packing + validate on the full open-ended judge suite.
-Latest slice-only judge win_rate_tldr_over_rg = `0.548` at `budget_tokens=2000` (7 slice tasks, `--trials 3`; report: `benchmark/runs/20260210-190944Z-llm-ab-run-judge.json`).
-Next: rerun the full open-ended judge suite to refresh headline numbers, then rerun slice-only at tighter budgets (`1000`/`500`) to test the “advantage under tight budgets” claim.
+1. Phase 7: validate open-ended judge suite + lock a policy for tight budgets.
+Latest full open-ended judge win_rate_tldr_over_rg = `0.694` at `budget_tokens=2000` (18 tasks, `--trials 3`; report: `benchmark/runs/20260210-205924Z-llm-ab-run-judge-open-ended-t3.json`).
+Slice category win_rate_tldr_over_rg = `0.595` on the same run.
+Tight-budget slice-only (7 slice tasks, `--trials 3`): `budget_tokens=1000` -> `0.548` (report: `benchmark/runs/20260210-211226Z-llm-ab-run-judge-slice-1000-t3.json`); `budget_tokens=500` -> `0.429` (report: `benchmark/runs/20260210-212621Z-llm-ab-run-judge-slice-500-t3.json`).
+Next: decide whether to keep iterating the `budget_tokens=500` packing policy (or treat it as the stopping signal), then proceed to Phase 6/8.
 
-2. Phase 6: multi-step scoring refinement.
+2. Phase 6: multi-step scoring refinement (in progress).
 Update Phase 6 to score/attribute tokens like a real workflow: small structured selector output + targeted code materialization (aligned with how we’re packing open-ended context anyway).
 
 3. Phase 8: SWE-bench localization.
@@ -19,8 +21,8 @@ Once Phase 7/6 are stable, start Phase 8 (SWE-bench Lite localization). This is 
 
 ### Goals (Slice)
 
-- Near-term: parity on slice (win_rate ≥ 0.5) under the same token budget (achieved on slice-only open-ended subset at `budget_tokens=2000`: `0.548` in `benchmark/runs/20260210-190944Z-llm-ab-run-judge.json`).
-- More meaningful: parity at `budget_tokens=2000`, and advantage at tighter budgets (`500`/`1000`) where `rg` can’t afford enough contiguous context, while TLDR can “spend” tokens on the right remote dependencies.
+- Near-term: parity on slice (win_rate ≥ 0.5) under the same token budget (achieved at `budget_tokens=2000` on the full open-ended suite: slice win_rate_tldr_over_rg = `0.595` in `benchmark/runs/20260210-205924Z-llm-ab-run-judge-open-ended-t3.json`).
+- More meaningful: advantage at tighter budgets (`500`/`1000`) where `rg` can’t afford enough contiguous context, while TLDR can “spend” tokens on the right remote dependencies. Current signal: slice-only `budget_tokens=1000` is `0.548` (`benchmark/runs/20260210-211226Z-llm-ab-run-judge-slice-1000-t3.json`), while `budget_tokens=500` is `0.429` (`benchmark/runs/20260210-212621Z-llm-ab-run-judge-slice-500-t3.json`).
 - Stopping signal: if “large contiguous window around `target_line` + extra slice-line windows” still can’t get near parity, either slice isn’t the right tool for open-ended explanations (use it as a selector, but rely on contiguous context), or the underlying slice/PDG needs more control-dependence coverage for explanation-style tasks.
 
 ## Decisions & Assumptions (locked for this plan)
@@ -496,6 +498,9 @@ Next step options:
 - 2026-02-10: Reran Phase 6 structural-mode after the Python slicing/CFG/PDG fixes:
   - Report: `benchmark/runs/20260210-005546Z-token-efficiency-structural-django.json`
   - Slice (TLDR structured): precision_mean=1.0, recall_mean=0.884, noise_ratio_mean=0.884 with payload_tokens_mean ~40 (vs `grep_window` noise_ratio_mean ~8-12 at payload_tokens_mean ~200+).
+- 2026-02-10: Started Phase 6 multi-step scoring refinement (selector + targeted code materialization):
+  - `scripts/bench_token_efficiency.py`: `tldr_structured_plus_code` for `slice` and `data_flow` now materializes **merged code windows** (radius=3) and records token attribution (`selector_tokens` vs `code_tokens`) plus chosen `windows`.
+  - Added helper tests: `tests/test_bench_token_efficiency_helpers.py`.
 
 **Deliverables**
 - A runner that materializes deterministic payloads for each strategy and scores quality under budgets.
@@ -788,6 +793,26 @@ Next step options:
     - `OE16`: 0.833
     - `OE17`: 0.333
   Next step: rerun the full open-ended suite to refresh headline numbers using this packing (then evaluate tighter budgets for slice-only).
+
+- 2026-02-10: Reran the full open-ended judge-mode suite (`budget_tokens=2000`) using `benchmark/llm/20260210-190631Z-llm-ab-django.jsonl`:
+  - quick signal (`--trials 1`): `benchmark/runs/20260210-204649Z-llm-ab-run-judge-open-ended-t1.json` (win_rate_tldr_over_rg = `0.528`)
+  - stable estimate (`--trials 3`): `benchmark/runs/20260210-205924Z-llm-ab-run-judge-open-ended-t3.json`
+    - overall win_rate_tldr_over_rg = `0.694`
+    - by category win_rate_tldr_over_rg:
+      - impact: `0.778`
+      - slice: `0.595` (parity achieved on the full suite)
+      - data_flow: `0.733`
+    - judge_bad_json: `0`, answer_errors_total: `0`, judge_errors_total: `0`
+
+- 2026-02-10: Ran slice-only open-ended judge-mode at tighter budgets (`--trials 3`, 7 slice tasks):
+  - `budget_tokens=1000`:
+    - prompts report: `benchmark/runs/20260210-205027Z-llm-ab-prompts-django-open-ended-1000.json`
+    - prompts: `benchmark/llm/20260210-205027Z-llm-ab-django-open-ended-1000.jsonl` (filtered to `benchmark/llm/20260210-205027Z-llm-ab-django-open-ended-1000-slice.jsonl`)
+    - report: `benchmark/runs/20260210-211226Z-llm-ab-run-judge-slice-1000-t3.json` (win_rate_tldr_over_rg = `0.548`)
+  - `budget_tokens=500`:
+    - prompts report: `benchmark/runs/20260210-205043Z-llm-ab-prompts-django-open-ended-500.json`
+    - prompts: `benchmark/llm/20260210-205043Z-llm-ab-django-open-ended-500.jsonl` (filtered to `benchmark/llm/20260210-205043Z-llm-ab-django-open-ended-500-slice.jsonl`)
+    - report: `benchmark/runs/20260210-212621Z-llm-ab-run-judge-slice-500-t3.json` (win_rate_tldr_over_rg = `0.429`)
 
 - 2026-02-10: Expanded Phase 7 task suites beyond structural-only:
   - Added a deterministic retrieval-type suite: `benchmarks/llm/retrieval_tasks.json` (expected file paths from `benchmarks/retrieval/django_queries.json`).

@@ -89,3 +89,17 @@ def test_select_window_within_span_respects_span_bounds():
     assert win["end"] == 4
     assert included == {1, 2, 3, 4}
     assert payload.startswith("# x.py:1-4")
+
+
+def test_windows_around_lines_merge_and_render():
+    mod = _load_mod()
+    windows_around = mod["_windows_around_lines"]
+    render_windows = mod["_render_windows_payload"]
+
+    lines = [f"line{i}" for i in range(1, 11)]
+    windows = windows_around(line_nos=[5, 7], radius=1, lo=1, hi=10, max_line=len(lines))
+    assert windows == [(4, 8)]
+
+    payload, included = render_windows("x.py", lines=lines, windows=windows)
+    assert payload.startswith("# x.py:4-8")
+    assert included == {4, 5, 6, 7, 8}

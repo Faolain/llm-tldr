@@ -358,6 +358,47 @@ def _extract_lines_for_numbers(file_rel: str, *, lines: list[str], line_nos: lis
     return "\n\n".join(pieces), set(sorted_lines)
 
 
+def _render_windows_payload(
+    file_rel: str,
+    *,
+    lines: list[str],
+    windows: list[tuple[int, int]],
+) -> tuple[str, set[int]]:
+    pieces: list[str] = []
+    included: set[int] = set()
+    for start, end in windows:
+        start = max(1, int(start))
+        end = min(len(lines), int(end))
+        if end < start:
+            continue
+        pieces.append(_render_code_block(file_rel, start=start, end=end, lines=lines))
+        included |= set(range(start, end + 1))
+    return "\n\n".join(pieces), included
+
+
+def _windows_around_lines(
+    *,
+    line_nos: Iterable[int],
+    radius: int,
+    lo: int,
+    hi: int,
+    max_line: int,
+) -> list[tuple[int, int]]:
+    lo = max(1, int(lo))
+    hi = min(int(hi), int(max_line))
+    if hi < lo:
+        return []
+
+    windows: list[tuple[int, int]] = []
+    for ln in sorted({int(x) for x in line_nos if isinstance(x, int)}):
+        if ln < lo or ln > hi:
+            continue
+        start = max(lo, ln - int(radius))
+        end = min(hi, ln + int(radius))
+        windows.append((start, end))
+    return _merge_windows(windows)
+
+
 def _python_function_span_ast(source: str, *, function: str) -> tuple[int, int] | None:
     """Return (start_line, end_line) for a function/method (best-effort) using AST.
 
@@ -1173,37 +1214,83 @@ def main() -> int:
                         "noise_ratio": (len(included_s) / max(1, len(expected))) if expected else None,
                     }
 
-                    # TLDR structured + code for included slice lines.
-                    selected2: list[int] = []
-                    code_text = ""
-                    # Prefer selecting lines closest to target first under tight budgets.
-                    tldr_by_distance = sorted(tldr_lines, key=lambda x: (abs(int(x) - int(target_line)), x))
+                    # TLDR structured + code: "selector then materialize" approximation.
+                    # We treat the structured selector output as cheap (capped), then spend the remaining
+                    # budget on code windows: a contiguous target window plus small windows around slice
+                    # lines outside that target window (similar to the open-ended prompt packing).
+                    selector_budget = min(200, int(budget))
+                    slice_window_radius = 3
+
+                    # Prefer selecting slice lines closest to target first for the selector list.
+                    tldr_by_distance = sorted(tldr_lines, key=lambda x: (abs(int(x) - int(target_line)), int(x)))
+                    selector_lines: list[int] = []
+                    selector_payload = json.dumps(
+                        {"file": file_rel, "function": function, "target_line": int(target_line), "slice_lines": []},
+                        sort_keys=True,
+                    )
                     for ln in tldr_by_distance:
-                        cand = [*selected2, int(ln)]
-                        code2, included2 = _extract_lines_for_numbers(file_rel, lines=lines, line_nos=cand)
-                        payload2 = json.dumps(
+                        cand = [*selector_lines, int(ln)]
+                        cand_payload = json.dumps(
                             {
                                 "file": file_rel,
                                 "function": function,
                                 "target_line": int(target_line),
-                                "lines": sorted(included2),
+                                "slice_lines": cand,
                             },
                             sort_keys=True,
                         )
-                        if code2:
-                            payload2 += "\n\n" + code2
-                        if int(count_tokens(payload2)) > budget:
-                            continue
-                        selected2 = sorted(included2)
-                        code_text = code2
-                    payload2 = json.dumps(
-                        {"file": file_rel, "function": function, "target_line": int(target_line), "lines": selected2},
-                        sort_keys=True,
-                    )
-                    if code_text:
-                        payload2 += "\n\n" + code_text
+                        if int(count_tokens(cand_payload)) > selector_budget:
+                            break
+                        selector_lines = cand
+                        selector_payload = cand_payload
+
+                    # Materialize code under the remaining budget.
+                    windows: list[tuple[int, int]] = []
+                    code_text = ""
+                    included2: set[int] = set()
+
+                    lo, hi = (1, len(lines))
+                    if span is not None:
+                        lo, hi = span
+                    lo = max(1, int(lo))
+                    hi = min(int(hi), len(lines))
+
+                    # Start with a contiguous target window (if any) under the remaining budget.
+                    # If the selector payload itself exceeds the total budget, skip code entirely.
+                    if int(count_tokens(selector_payload)) < int(budget):
+                        code_budget = max(0, int(budget) - int(count_tokens(selector_payload)))
+                        _tw_payload, tw_included, win2 = _select_window_within_span(
+                            file_rel=file_rel,
+                            lines=lines,
+                            span=span,
+                            target_line=int(target_line),
+                            budget_tokens=code_budget,
+                        )
+                        if win2.get("start") is not None and win2.get("end") is not None and tw_included:
+                            windows = [(int(win2["start"]), int(win2["end"]))]
+                            code_text, included2 = _render_windows_payload(file_rel, lines=lines, windows=windows)
+
+                        # Add small windows around slice lines outside the target window (budget permitting).
+                        extra_line_nos = [int(ln) for ln in selector_lines if int(ln) not in tw_included]
+                        extra_windows = _windows_around_lines(
+                            line_nos=extra_line_nos,
+                            radius=slice_window_radius,
+                            lo=lo,
+                            hi=hi,
+                            max_line=len(lines),
+                        )
+                        for w in extra_windows:
+                            cand_windows = _merge_windows([*windows, w])
+                            cand_code, cand_included = _render_windows_payload(file_rel, lines=lines, windows=cand_windows)
+                            payload2 = selector_payload + ("\n\n" + cand_code if cand_code else "")
+                            if int(count_tokens(payload2)) > int(budget):
+                                continue
+                            windows = cand_windows
+                            code_text = cand_code
+                            included2 = cand_included
+
+                    payload2 = selector_payload + ("\n\n" + code_text if code_text else "")
                     stats2 = _payload_stats(payload2)
-                    included2 = set(selected2)
                     tp2 = len(included2 & expected)
                     fp2 = len(included2 - expected)
                     fn2 = len(expected - included2)
@@ -1217,6 +1304,10 @@ def main() -> int:
                     out["tldr_structured_plus_code"] = {
                         "payload_tokens": stats2["payload_tokens"],
                         "payload_bytes": stats2["payload_bytes"],
+                        "selector_tokens": int(count_tokens(selector_payload)),
+                        "code_tokens": int(count_tokens(code_text)) if code_text else 0,
+                        "selector_slice_lines": len(selector_lines),
+                        "windows": windows,
                         "lines_included": len(included2),
                         "tp": tp2,
                         "fp": fp2,
@@ -1447,30 +1538,79 @@ def main() -> int:
                         "noise_ratio": (len(included_t) / max(1, len(expected_lines))) if expected_lines else None,
                     }
 
-                    # TLDR structured + code for included lines.
-                    selected_lines2: list[int] = []
-                    code_text = ""
-                    for ln in dfg_lines:
-                        cand = [*selected_lines2, int(ln)]
-                        code2, included2 = _extract_lines_for_numbers(file_rel, lines=lines, line_nos=cand)
-                        payload2 = json.dumps(
-                            {"file": file_rel, "function": function, "variable": variable, "lines": sorted(included2)},
-                            sort_keys=True,
-                        )
-                        if code2:
-                            payload2 += "\n\n" + code2
-                        if int(count_tokens(payload2)) > budget:
-                            break
-                        selected_lines2 = sorted(included2)
-                        code_text = code2
-                    payload2 = json.dumps(
-                        {"file": file_rel, "function": function, "variable": variable, "lines": selected_lines2},
+                    # TLDR structured + code: multi-step approximation (cheap selector + window materialization).
+                    selector_budget = min(200, int(budget))
+                    dfg_window_radius = 3
+
+                    selector_lines: list[int] = []
+                    selector_payload = json.dumps(
+                        {"file": file_rel, "function": function, "variable": variable, "dfg_lines": []},
                         sort_keys=True,
                     )
-                    if code_text:
-                        payload2 += "\n\n" + code_text
+                    for ln in dfg_lines:
+                        cand = [*selector_lines, int(ln)]
+                        cand_payload = json.dumps(
+                            {
+                                "file": file_rel,
+                                "function": function,
+                                "variable": variable,
+                                "dfg_lines": cand,
+                            },
+                            sort_keys=True,
+                        )
+                        if int(count_tokens(cand_payload)) > selector_budget:
+                            break
+                        selector_lines = cand
+                        selector_payload = cand_payload
+
+                    windows: list[tuple[int, int]] = []
+                    code_text = ""
+                    included2: set[int] = set()
+
+                    lo, hi = (1, len(lines))
+                    if span is not None:
+                        lo, hi = span
+                    lo = max(1, int(lo))
+                    hi = min(int(hi), len(lines))
+
+                    # Seed with a short function header for grounding (when possible).
+                    header_window: tuple[int, int] | None = None
+                    if span is not None:
+                        header_window = (int(span[0]), min(int(span[1]), int(span[0]) + 2))
+                    else:
+                        header_window = (1, min(len(lines), 3))
+
+                    if int(count_tokens(selector_payload)) < int(budget):
+                        if header_window is not None:
+                            cand_windows = _merge_windows([header_window])
+                            cand_code, cand_included = _render_windows_payload(file_rel, lines=lines, windows=cand_windows)
+                            cand_payload2 = selector_payload + ("\n\n" + cand_code if cand_code else "")
+                            if int(count_tokens(cand_payload2)) <= int(budget):
+                                windows = cand_windows
+                                code_text = cand_code
+                                included2 = cand_included
+
+                        extra_windows = _windows_around_lines(
+                            line_nos=selector_lines,
+                            radius=dfg_window_radius,
+                            lo=lo,
+                            hi=hi,
+                            max_line=len(lines),
+                        )
+                        for w in extra_windows:
+                            cand_windows = _merge_windows([*windows, w])
+                            cand_code, cand_included = _render_windows_payload(
+                                file_rel, lines=lines, windows=cand_windows
+                            )
+                            cand_payload2 = selector_payload + ("\n\n" + cand_code if cand_code else "")
+                            if int(count_tokens(cand_payload2)) > int(budget):
+                                continue
+                            windows = cand_windows
+                            code_text = cand_code
+                            included2 = cand_included
+
+                    payload2 = selector_payload + ("\n\n" + code_text if code_text else "")
                     stats2 = _payload_stats(payload2)
-                    included2 = set(selected_lines2)
                     tp2 = len(included2 & expected_lines)
                     fp2 = len(included2 - expected_lines)
                     fn2 = len(expected_lines - included2)
@@ -1484,6 +1624,10 @@ def main() -> int:
                     out["tldr_structured_plus_code"] = {
                         "payload_tokens": stats2["payload_tokens"],
                         "payload_bytes": stats2["payload_bytes"],
+                        "selector_tokens": int(count_tokens(selector_payload)),
+                        "code_tokens": int(count_tokens(code_text)) if code_text else 0,
+                        "selector_dfg_lines": len(selector_lines),
+                        "windows": windows,
                         "lines_included": len(included2),
                         "origin_present": bool(origin_expected is not None and origin_expected in included2),
                         "flow_completeness": (tp2 / len(expected_lines)) if expected_lines else None,
