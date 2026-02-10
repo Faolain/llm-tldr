@@ -661,7 +661,37 @@ Next step options:
       - rg: `10.72s/11.83s`
       - tldr: `8.97s/16.01s` (p95 noisier at n=3)
     - judge latency p50/p95: `18.51s/21.83s`
-  Next step: run the full 12 open-ended tasks (and ideally `--trials 3`) to stabilize win-rate and per-dimension score distributions.
+  Next step: run the full 12 open-ended tasks (and ideally `--trials 3`) to stabilize win-rate and per-dimension score distributions (see next entry).
+
+  Note: full judge-mode runs can take long enough that they are not reliable to run in a foreground terminal within an agent/tool session. Prefer running in `tmux` and tee logs to a file under `benchmark/logs/`, for example:
+
+  ```bash
+  tmux new-session -d -s bench-judge 'cd <repo-root> && PYTHONUNBUFFERED=1 NO_COLOR=1 CI=1 uv run python scripts/bench_llm_ab_run.py --mode judge --prompts benchmark/llm/<packet>.jsonl --provider codex --model gpt-5.3-codex --codex-reasoning-effort medium --judge-provider claude_sdk --judge-model claude-sonnet-4-5-20250929 --claude-home "$HOME" --enforce-json-schema --timeout-s 180 --judge-timeout-s 180 --trials 3 2>&1 | tee benchmark/logs/bench-judge.log'
+  ```
+
+- 2026-02-10: Ran the full open-ended judge-mode batch (12 tasks x 3 trials; Codex answers, Claude judge):
+  - prompts: `benchmark/llm/20260210-052131Z-llm-ab-django.jsonl`
+  - command shape:
+    - answer model: `--provider codex --model gpt-5.3-codex --codex-reasoning-effort medium`
+    - judge model: `--judge-provider claude_sdk --judge-model claude-sonnet-4-5-20250929 --enforce-json-schema`
+    - `--mode judge --timeout-s 180 --judge-timeout-s 180 --trials 3`
+  - report: `benchmark/runs/20260210-053918Z-llm-ab-run-judge.json`
+  - answers+jury: `benchmark/llm/20260210-053918Z-llm-ab-answers-judge.jsonl` (108 rows; 2 answer rows + 1 judge row per task/trial)
+  - key results:
+    - overall judge win_rate_tldr_over_rg: `0.306`
+    - by category win_rate_tldr_over_rg:
+      - impact: `0.667`
+      - slice: `0.208`
+      - data_flow: `0.042`
+    - judge score means (rg vs TLDR): correctness `4.900` vs `4.433`, groundedness `5.000` vs `4.767`, completeness `4.367` vs `3.533`, clarity `4.733` vs `4.267`, actionability `4.167` vs `3.533`
+    - judge_bad_json: `6` (verdict parse failures; counted as ties)
+    - latency p50/p95 (answer): TLDR `7.87s/11.81s` vs rg `7.68s/13.23s`; judge `15.49s/22.39s`
+  Next step: improve TLDR open-ended slice/data_flow context packaging (currently weaker than rg on this suite), and reduce judge parse failures.
+
+- 2026-02-10: Fixed Phase 7 task/question mismatches:
+  - `benchmarks/llm/tasks.json`: corrected 4 slice task questions (`L22`-`L25`) to match structural `query_id` targets (`B07`-`B10`) instead of outdated `parse_*` / `salted_hmac` text.
+  - `benchmarks/llm/open_ended_tasks.json`: corrected `OE08` to match `query_id=B10` (`configure` in `django/conf/__init__.py` at `target_line=124`).
+  - Note: the judge-mode prompt packet `benchmark/llm/20260210-052131Z-llm-ab-django.jsonl` (and the resulting report `benchmark/runs/20260210-053918Z-llm-ab-run-judge.json`) was generated before this fix, so interpret that run with caution and prefer regenerating prompts + rerunning for comparable numbers.
 
 **Acceptance**
 - Clear win-rate signal on at least one task class (impact/slicing/debugging).
@@ -677,7 +707,7 @@ Next step options:
   - Generate A/B prompt packets as usual (Condition A: rg-derived context, Condition B: TLDR-derived context), but allow free-form answers.
   - Run an answer model to produce responses for each condition.
   - Run a **separate judge model** that sees both answers (blinded as A/B) and a rubric, and emits a structured verdict like `{"winner":"A"|"B"|"tie","scores":{...},"notes":...}`.
-  - Aggregate judge win-rate + score distributions (implemented via `scripts/bench_llm_ab_run.py --mode judge`; pending: run and log a blinded batch).
+  - Aggregate judge win-rate + score distributions (implemented via `scripts/bench_llm_ab_run.py --mode judge`; see Running Log for a full 12-task batch).
 
 - Phase 8 (SWE-bench validation) would be a separate harness to validate TLDR on a standard benchmark dataset:
   - Select a fixed SWE-bench Lite subset relevant to a target corpus (e.g. Django-related instances).

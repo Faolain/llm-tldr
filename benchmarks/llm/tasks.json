@@ -139,25 +139,25 @@
       "id": "L22",
       "category": "slice",
       "query_id": "B07",
-      "question": "Compute the backward slice lines for parse_date at target_line=66 (django/utils/dateparse.py). Output JSON: {\"lines\": [int, ...]} (sorted ascending)."
+      "question": "Compute the backward slice lines for mark_safe at target_line=72 (django/utils/safestring.py). Output JSON: {\"lines\": [int, ...]} (sorted ascending)."
     },
     {
       "id": "L23",
       "category": "slice",
       "query_id": "B08",
-      "question": "Compute the backward slice lines for parse_time at target_line=95 (django/utils/dateparse.py). Output JSON: {\"lines\": [int, ...]} (sorted ascending)."
+      "question": "Compute the backward slice lines for handle_uncaught_exception at target_line=186 (django/core/handlers/exception.py). Output JSON: {\"lines\": [int, ...]} (sorted ascending)."
     },
     {
       "id": "L24",
       "category": "slice",
       "query_id": "B09",
-      "question": "Compute the backward slice lines for parse_datetime at target_line=129 (django/utils/dateparse.py). Output JSON: {\"lines\": [int, ...]} (sorted ascending)."
+      "question": "Compute the backward slice lines for pbkdf2 at target_line=77 (django/utils/crypto.py). Output JSON: {\"lines\": [int, ...]} (sorted ascending)."
     },
     {
       "id": "L25",
       "category": "slice",
       "query_id": "B10",
-      "question": "Compute the backward slice lines for salted_hmac at target_line=45 (django/utils/crypto.py). Output JSON: {\"lines\": [int, ...]} (sorted ascending)."
+      "question": "Compute the backward slice lines for configure at target_line=124 (django/conf/__init__.py). Output JSON: {\"lines\": [int, ...]} (sorted ascending)."
     },
     {
       "id": "L26",

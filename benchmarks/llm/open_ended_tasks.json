@@ -71,7 +71,7 @@
       "category": "slice",
       "query_id": "B10",
       "rubric": "Pick the better answer using only the provided contexts. Prefer answers that are correct, grounded in the context (no claims not supported by context), complete, and clearly explained. Penalize hallucinations and vague hand-waving. Output should be concise and actionable.",
-      "question": "Explain how salted_hmac (django/utils/crypto.py) computes its output at target_line=45. Identify the key inputs and any branching logic that affects the result."
+      "question": "Explain how configure (django/conf/__init__.py) sets the wrapped settings holder at target_line=124. Identify the key inputs and the conditions that can prevent the assignment from happening."
     },
     {
       "id": "OE09",
@@ -107,4 +107,3 @@
     }
   ]
 }
-
