@@ -75,6 +75,17 @@ def _prompt_for_task(*, question: str, context: str, schema_hint: str) -> str:
     )
 
 
+def _prompt_for_open_ended_task(*, question: str, context: str) -> str:
+    return (
+        "You are given TOOL OUTPUT context. Answer the question using ONLY the context.\n\n"
+        f"Question:\n{question}\n\n"
+        "Context:\n<BEGIN_CONTEXT>\n"
+        f"{context}\n"
+        "<END_CONTEXT>\n\n"
+        "Answer in plain text. Do not guess; if the context is insufficient, say what is missing."
+    )
+
+
 def _impact_context_tldr(
     *,
     call_graph: Any,
@@ -94,6 +105,55 @@ def _impact_context_tldr(
             break
         callers = cand
         payload = cand_payload
+    return payload, int(count_tokens(payload)), len(payload.encode("utf-8"))
+
+
+def _impact_context_tldr_plus_code(
+    *,
+    repo_root: Path,
+    call_graph: Any,
+    callee_func: str,
+    callee_file: str,
+    budget_tokens: int,
+) -> tuple[str, int, int]:
+    res = impact_analysis(call_graph, callee_func, max_depth=1, target_file=callee_file)
+    predicted = sorted(bte._flatten_impact_targets(res))
+
+    callers: list[dict[str, str]] = []
+    code_pieces: list[str] = []
+    payload = json.dumps({"callers": []}, sort_keys=True)
+
+    for fp, fn in predicted:
+        cand_callers = [*callers, {"file": fp, "function": fn}]
+        cand_json = json.dumps({"callers": cand_callers}, sort_keys=True)
+        if int(count_tokens(cand_json)) > budget_tokens:
+            break
+
+        # Try to include code for this caller if it fits; otherwise include the caller list only.
+        cand_code_pieces = list(code_pieces)
+        try:
+            abs_fp = repo_root / fp
+            src = abs_fp.read_text(encoding="utf-8", errors="replace")
+            span = bte._python_function_span_ast(src, function=fn)
+            if span is not None:
+                lines = src.splitlines()
+                cand_code_pieces.append(bte._render_code_block(fp, start=span[0], end=span[1], lines=lines))
+        except OSError:
+            pass
+
+        cand_payload = cand_json
+        if cand_code_pieces:
+            cand_payload += "\n\n" + "\n\n".join(cand_code_pieces)
+        if int(count_tokens(cand_payload)) <= budget_tokens:
+            callers = cand_callers
+            code_pieces = cand_code_pieces
+            payload = cand_payload
+            continue
+
+        # Fall back to callers-only (still useful for open-ended tasks).
+        callers = cand_callers
+        payload = cand_json
+
     return payload, int(count_tokens(payload)), len(payload.encode("utf-8"))
 
 
@@ -213,6 +273,57 @@ def _slice_context_tldr(
     return payload, int(count_tokens(payload)), len(payload.encode("utf-8"))
 
 
+def _slice_context_tldr_plus_code(
+    *,
+    repo_root: Path,
+    file_rel: str,
+    function: str,
+    target_line: int,
+    budget_tokens: int,
+) -> tuple[str, int, int]:
+    abs_path = repo_root / file_rel
+    src = abs_path.read_text(encoding="utf-8", errors="replace")
+    lines = src.splitlines()
+    tldr_lines = sorted(
+        {
+            int(x)
+            for x in get_slice(
+                str(abs_path),
+                function,
+                int(target_line),
+                direction="backward",
+                variable=None,
+                language="python",
+            )
+        }
+    )
+
+    selected: list[int] = []
+    code_text = ""
+    by_distance = sorted(tldr_lines, key=lambda x: (abs(int(x) - int(target_line)), x))
+    for ln in by_distance:
+        cand_lines = [*selected, int(ln)]
+        code2, included2 = bte._extract_lines_for_numbers(file_rel, lines=lines, line_nos=cand_lines)
+        payload2 = json.dumps(
+            {"file": file_rel, "function": function, "target_line": int(target_line), "lines": sorted(included2)},
+            sort_keys=True,
+        )
+        if code2:
+            payload2 += "\n\n" + code2
+        if int(count_tokens(payload2)) > budget_tokens:
+            continue
+        selected = sorted(included2)
+        code_text = code2
+
+    payload = json.dumps(
+        {"file": file_rel, "function": function, "target_line": int(target_line), "lines": selected},
+        sort_keys=True,
+    )
+    if code_text:
+        payload += "\n\n" + code_text
+    return payload, int(count_tokens(payload)), len(payload.encode("utf-8"))
+
+
 def _slice_context_rg(
     *,
     repo_root: Path,
@@ -280,6 +391,71 @@ def _data_flow_context_tldr(
         selected = cand
 
     payload = json.dumps({"flow": selected}, sort_keys=True)
+    return payload, int(count_tokens(payload)), len(payload.encode("utf-8"))
+
+
+def _data_flow_context_tldr_plus_code(
+    *,
+    repo_root: Path,
+    file_rel: str,
+    function: str,
+    variable: str,
+    budget_tokens: int,
+) -> tuple[str, int, int]:
+    abs_path = repo_root / file_rel
+    src = abs_path.read_text(encoding="utf-8", errors="replace")
+    lines = src.splitlines()
+
+    dfg = get_dfg_context(str(abs_path), function, language="python")
+
+    events: list[dict[str, Any]] = []
+    edges = dfg.get("edges")
+    if isinstance(edges, list):
+        for e in edges:
+            if not isinstance(e, dict):
+                continue
+            if e.get("var") != variable:
+                continue
+            dl = e.get("def_line")
+            ul = e.get("use_line")
+            if isinstance(dl, int):
+                events.append({"line": dl, "event": "defined"})
+            if isinstance(ul, int):
+                events.append({"line": ul, "event": "used"})
+
+    # Dedup (line,event) deterministically.
+    seen = set()
+    events2: list[dict[str, Any]] = []
+    for ev in sorted(events, key=lambda x: (int(x.get("line") or 0), str(x.get("event") or ""))):
+        key = (ev.get("line"), ev.get("event"))
+        if key in seen:
+            continue
+        seen.add(key)
+        events2.append(ev)
+
+    selected: list[dict[str, Any]] = []
+    code_text = ""
+    for ev in events2:
+        cand = [*selected, ev]
+        line_nos = [int(x.get("line") or 0) for x in cand if isinstance(x.get("line"), int)]
+        code2, _included2 = bte._extract_lines_for_numbers(file_rel, lines=lines, line_nos=line_nos)
+        payload2 = json.dumps(
+            {"file": file_rel, "function": function, "variable": variable, "flow": cand},
+            sort_keys=True,
+        )
+        if code2:
+            payload2 += "\n\n" + code2
+        if int(count_tokens(payload2)) > budget_tokens:
+            continue
+        selected = cand
+        code_text = code2
+
+    payload = json.dumps(
+        {"file": file_rel, "function": function, "variable": variable, "flow": selected},
+        sort_keys=True,
+    )
+    if code_text:
+        payload += "\n\n" + code_text
     return payload, int(count_tokens(payload)), len(payload.encode("utf-8"))
 
 
@@ -403,10 +579,14 @@ def main() -> int:
 
     for t in tasks:
         tid = t.get("id")
+        task_type = t.get("task_type") or "structured"
         category = t.get("category")
         qid = t.get("query_id")
         question = t.get("question")
-        if not all(isinstance(x, str) for x in (tid, category, qid, question)):
+        rubric = t.get("rubric") if task_type == "open_ended" else None
+        if not all(isinstance(x, str) for x in (tid, task_type, category, qid, question)):
+            continue
+        if task_type == "open_ended" and not (isinstance(rubric, str) and rubric.strip()):
             continue
         q = by_id.get(qid)
         if q is None:
@@ -414,6 +594,7 @@ def main() -> int:
 
         budget = int(args.budget_tokens)
         variants: list[dict[str, Any]] = []
+        record_expected: dict[str, Any] | None = None
 
         if category == "impact":
             if call_graph is None:
@@ -433,12 +614,21 @@ def main() -> int:
             )
             schema_hint = "{\"callers\": [{\"file\": \"path\", \"function\": \"name\"}, ...]}"
 
-            ctx_tldr, t_tok, t_bytes = _impact_context_tldr(
-                call_graph=call_graph,
-                callee_func=func,
-                callee_file=file_filter,
-                budget_tokens=budget,
-            )
+            if task_type == "open_ended":
+                ctx_tldr, t_tok, t_bytes = _impact_context_tldr_plus_code(
+                    repo_root=repo_root,
+                    call_graph=call_graph,
+                    callee_func=func,
+                    callee_file=file_filter,
+                    budget_tokens=budget,
+                )
+            else:
+                ctx_tldr, t_tok, t_bytes = _impact_context_tldr(
+                    call_graph=call_graph,
+                    callee_func=func,
+                    callee_file=file_filter,
+                    budget_tokens=budget,
+                )
             ctx_rg, r_tok, r_bytes = _impact_context_rg(
                 repo_root=repo_root,
                 callee_func=func,
@@ -450,18 +640,22 @@ def main() -> int:
                     "context": ctx_tldr,
                     "context_tokens": t_tok,
                     "context_bytes": t_bytes,
-                    "prompt": _prompt_for_task(question=question, context=ctx_tldr, schema_hint=schema_hint),
+                    "prompt": _prompt_for_open_ended_task(question=question, context=ctx_tldr)
+                    if task_type == "open_ended"
+                    else _prompt_for_task(question=question, context=ctx_tldr, schema_hint=schema_hint),
                 },
                 {
                     "source": "rg",
                     "context": ctx_rg,
                     "context_tokens": r_tok,
                     "context_bytes": r_bytes,
-                    "prompt": _prompt_for_task(question=question, context=ctx_rg, schema_hint=schema_hint),
+                    "prompt": _prompt_for_open_ended_task(question=question, context=ctx_rg)
+                    if task_type == "open_ended"
+                    else _prompt_for_task(question=question, context=ctx_rg, schema_hint=schema_hint),
                 },
             ]
 
-            record_expected = {"callers": expected}
+            record_expected = {"callers": expected} if task_type != "open_ended" else None
 
         elif category == "slice":
             file_rel = q.get("file")
@@ -473,13 +667,22 @@ def main() -> int:
             expected = sorted([int(x) for x in expected_lines if isinstance(x, int)])
             schema_hint = "{\"lines\": [int, ...]}"
 
-            ctx_tldr, t_tok, t_bytes = _slice_context_tldr(
-                repo_root=repo_root,
-                file_rel=file_rel,
-                function=function,
-                target_line=int(target_line),
-                budget_tokens=budget,
-            )
+            if task_type == "open_ended":
+                ctx_tldr, t_tok, t_bytes = _slice_context_tldr_plus_code(
+                    repo_root=repo_root,
+                    file_rel=file_rel,
+                    function=function,
+                    target_line=int(target_line),
+                    budget_tokens=budget,
+                )
+            else:
+                ctx_tldr, t_tok, t_bytes = _slice_context_tldr(
+                    repo_root=repo_root,
+                    file_rel=file_rel,
+                    function=function,
+                    target_line=int(target_line),
+                    budget_tokens=budget,
+                )
             ctx_rg, r_tok, r_bytes = _slice_context_rg(
                 repo_root=repo_root,
                 file_rel=file_rel,
@@ -493,17 +696,21 @@ def main() -> int:
                     "context": ctx_tldr,
                     "context_tokens": t_tok,
                     "context_bytes": t_bytes,
-                    "prompt": _prompt_for_task(question=question, context=ctx_tldr, schema_hint=schema_hint),
+                    "prompt": _prompt_for_open_ended_task(question=question, context=ctx_tldr)
+                    if task_type == "open_ended"
+                    else _prompt_for_task(question=question, context=ctx_tldr, schema_hint=schema_hint),
                 },
                 {
                     "source": "rg",
                     "context": ctx_rg,
                     "context_tokens": r_tok,
                     "context_bytes": r_bytes,
-                    "prompt": _prompt_for_task(question=question, context=ctx_rg, schema_hint=schema_hint),
+                    "prompt": _prompt_for_open_ended_task(question=question, context=ctx_rg)
+                    if task_type == "open_ended"
+                    else _prompt_for_task(question=question, context=ctx_rg, schema_hint=schema_hint),
                 },
             ]
-            record_expected = {"lines": expected}
+            record_expected = {"lines": expected} if task_type != "open_ended" else None
 
         elif category == "data_flow":
             file_rel = q.get("file")
@@ -522,13 +729,22 @@ def main() -> int:
             )
             schema_hint = "{\"flow\": [{\"line\": int, \"event\": \"defined\"|\"used\"}, ...]}"
 
-            ctx_tldr, t_tok, t_bytes = _data_flow_context_tldr(
-                repo_root=repo_root,
-                file_rel=file_rel,
-                function=function,
-                variable=variable,
-                budget_tokens=budget,
-            )
+            if task_type == "open_ended":
+                ctx_tldr, t_tok, t_bytes = _data_flow_context_tldr_plus_code(
+                    repo_root=repo_root,
+                    file_rel=file_rel,
+                    function=function,
+                    variable=variable,
+                    budget_tokens=budget,
+                )
+            else:
+                ctx_tldr, t_tok, t_bytes = _data_flow_context_tldr(
+                    repo_root=repo_root,
+                    file_rel=file_rel,
+                    function=function,
+                    variable=variable,
+                    budget_tokens=budget,
+                )
             ctx_rg, r_tok, r_bytes = _data_flow_context_rg(
                 repo_root=repo_root,
                 file_rel=file_rel,
@@ -542,17 +758,21 @@ def main() -> int:
                     "context": ctx_tldr,
                     "context_tokens": t_tok,
                     "context_bytes": t_bytes,
-                    "prompt": _prompt_for_task(question=question, context=ctx_tldr, schema_hint=schema_hint),
+                    "prompt": _prompt_for_open_ended_task(question=question, context=ctx_tldr)
+                    if task_type == "open_ended"
+                    else _prompt_for_task(question=question, context=ctx_tldr, schema_hint=schema_hint),
                 },
                 {
                     "source": "rg",
                     "context": ctx_rg,
                     "context_tokens": r_tok,
                     "context_bytes": r_bytes,
-                    "prompt": _prompt_for_task(question=question, context=ctx_rg, schema_hint=schema_hint),
+                    "prompt": _prompt_for_open_ended_task(question=question, context=ctx_rg)
+                    if task_type == "open_ended"
+                    else _prompt_for_task(question=question, context=ctx_rg, schema_hint=schema_hint),
                 },
             ]
-            record_expected = {"flow": expected}
+            record_expected = {"flow": expected} if task_type != "open_ended" else None
 
         else:
             continue
@@ -564,17 +784,20 @@ def main() -> int:
         for v in variants:
             tok_by_source[v["source"]].append(int(v["context_tokens"]))
 
-        records.append(
-            {
-                "task_id": tid,
-                "category": category,
-                "query_id": qid,
-                "question": question,
-                "budget_tokens": budget,
-                "expected": record_expected,
-                "variants": variants,
-            }
-        )
+        rec: dict[str, Any] = {
+            "task_id": tid,
+            "task_type": task_type,
+            "category": category,
+            "query_id": qid,
+            "question": question,
+            "budget_tokens": budget,
+            "variants": variants,
+        }
+        if rubric is not None:
+            rec["rubric"] = rubric
+        if record_expected is not None:
+            rec["expected"] = record_expected
+        records.append(rec)
 
     # Write JSONL prompts (untracked).
     prompts_path.parent.mkdir(parents=True, exist_ok=True)

@@ -1,0 +1,110 @@
+{
+  "schema_version": 1,
+  "repo": "django",
+  "pinned_ref": "5.1.13",
+  "updated": "2026-02-10",
+  "notes": [
+    "Phase 7 open-ended A/B task suite for Django.",
+    "These tasks are NOT deterministically scorable against a set-valued ground truth.",
+    "They must be evaluated via a judge model that compares the A/B answers (blinded) against a rubric, using only the provided contexts."
+  ],
+  "tasks": [
+    {
+      "id": "OE01",
+      "task_type": "open_ended",
+      "category": "impact",
+      "query_id": "A09",
+      "rubric": "Pick the better answer using only the provided contexts. Prefer answers that are correct, grounded in the context (no claims not supported by context), complete, and clearly explained. Penalize hallucinations and vague hand-waving. Output should be concise and actionable.",
+      "question": "You are debugging a CSRF failure. Explain where _get_failure_view (django/middleware/csrf.py) is called from and what higher-level flow it participates in. Mention the direct caller functions and what they appear to do."
+    },
+    {
+      "id": "OE02",
+      "task_type": "open_ended",
+      "category": "impact",
+      "query_id": "A15",
+      "rubric": "Pick the better answer using only the provided contexts. Prefer answers that are correct, grounded in the context (no claims not supported by context), complete, and clearly explained. Penalize hallucinations and vague hand-waving. Output should be concise and actionable.",
+      "question": "Explain how _does_token_match (django/middleware/csrf.py) is used. List the direct callers and summarize what that suggests about when token comparison happens."
+    },
+    {
+      "id": "OE03",
+      "task_type": "open_ended",
+      "category": "impact",
+      "query_id": "A02",
+      "rubric": "Pick the better answer using only the provided contexts. Prefer answers that are correct, grounded in the context (no claims not supported by context), complete, and clearly explained. Penalize hallucinations and vague hand-waving. Output should be concise and actionable.",
+      "question": "Explain how construct_search (django/contrib/admin/options.py) is invoked. Identify its direct callers and summarize how that shapes admin search behavior."
+    },
+    {
+      "id": "OE04",
+      "task_type": "open_ended",
+      "category": "impact",
+      "query_id": "A01",
+      "rubric": "Pick the better answer using only the provided contexts. Prefer answers that are correct, grounded in the context (no claims not supported by context), complete, and clearly explained. Penalize hallucinations and vague hand-waving. Output should be concise and actionable.",
+      "question": "Explain where _contains_subclass (django/contrib/admin/checks.py) is called and why. List the direct callers and infer what checks are being performed."
+    },
+    {
+      "id": "OE05",
+      "task_type": "open_ended",
+      "category": "slice",
+      "query_id": "B03",
+      "rubric": "Pick the better answer using only the provided contexts. Prefer answers that are correct, grounded in the context (no claims not supported by context), complete, and clearly explained. Penalize hallucinations and vague hand-waving. Output should be concise and actionable.",
+      "question": "Explain the inputs and branches that influence the value returned by get_token (django/middleware/csrf.py) at target_line=114. Identify key variables and conditions."
+    },
+    {
+      "id": "OE06",
+      "task_type": "open_ended",
+      "category": "slice",
+      "query_id": "B04",
+      "rubric": "Pick the better answer using only the provided contexts. Prefer answers that are correct, grounded in the context (no claims not supported by context), complete, and clearly explained. Penalize hallucinations and vague hand-waving. Output should be concise and actionable.",
+      "question": "Explain what influences the return value of response_for_exception (django/core/handlers/exception.py) at target_line=129. Highlight the key inputs and control flow."
+    },
+    {
+      "id": "OE07",
+      "task_type": "open_ended",
+      "category": "slice",
+      "query_id": "B05",
+      "rubric": "Pick the better answer using only the provided contexts. Prefer answers that are correct, grounded in the context (no claims not supported by context), complete, and clearly explained. Penalize hallucinations and vague hand-waving. Output should be concise and actionable.",
+      "question": "Explain how get_valid_filename (django/utils/text.py) transforms its input at target_line=283. What data and conditions influence the output?"
+    },
+    {
+      "id": "OE08",
+      "task_type": "open_ended",
+      "category": "slice",
+      "query_id": "B10",
+      "rubric": "Pick the better answer using only the provided contexts. Prefer answers that are correct, grounded in the context (no claims not supported by context), complete, and clearly explained. Penalize hallucinations and vague hand-waving. Output should be concise and actionable.",
+      "question": "Explain how salted_hmac (django/utils/crypto.py) computes its output at target_line=45. Identify the key inputs and any branching logic that affects the result."
+    },
+    {
+      "id": "OE09",
+      "task_type": "open_ended",
+      "category": "data_flow",
+      "query_id": "D02",
+      "rubric": "Pick the better answer using only the provided contexts. Prefer answers that are correct, grounded in the context (no claims not supported by context), complete, and clearly explained. Penalize hallucinations and vague hand-waving. Output should be concise and actionable.",
+      "question": "Explain the lifecycle of mask in _mask_cipher_secret (django/middleware/csrf.py). Where is it defined and used, and what does it contribute to the result?"
+    },
+    {
+      "id": "OE10",
+      "task_type": "open_ended",
+      "category": "data_flow",
+      "query_id": "D04",
+      "rubric": "Pick the better answer using only the provided contexts. Prefer answers that are correct, grounded in the context (no claims not supported by context), complete, and clearly explained. Penalize hallucinations and vague hand-waving. Output should be concise and actionable.",
+      "question": "Explain how s is transformed within get_valid_filename (django/utils/text.py). Where is it defined and used, and which operations shape its final value?"
+    },
+    {
+      "id": "OE11",
+      "task_type": "open_ended",
+      "category": "data_flow",
+      "query_id": "D05",
+      "rubric": "Pick the better answer using only the provided contexts. Prefer answers that are correct, grounded in the context (no claims not supported by context), complete, and clearly explained. Penalize hallucinations and vague hand-waving. Output should be concise and actionable.",
+      "question": "Explain how filename is defined and used in compress_string (django/utils/text.py). Identify the key operations it participates in."
+    },
+    {
+      "id": "OE12",
+      "task_type": "open_ended",
+      "category": "data_flow",
+      "query_id": "D10",
+      "rubric": "Pick the better answer using only the provided contexts. Prefer answers that are correct, grounded in the context (no claims not supported by context), complete, and clearly explained. Penalize hallucinations and vague hand-waving. Output should be concise and actionable.",
+      "question": "Explain how key is defined and used in salted_hmac (django/utils/crypto.py). How does it affect the HMAC computation?"
+    }
+  ]
+}
+

@@ -199,15 +199,20 @@ Outputs:
 uv run python scripts/bench_llm_ab_prompts.py --corpus django --budget-tokens 2000
 ```
 
-Optional: run the prompt packets against an answer model and score structured outputs (structured scoring vs ground truth; no judge model yet).
+Optional: run the prompt packets against an answer model.
+There are two Phase 7 modes:
+- `--mode structured` (default): deterministically scored against set-valued ground truth embedded in the prompt packet.
+- `--mode judge`: open-ended tasks scored by a separate judge model (blinded A/B).
 
 Task suite + scoring:
 - Tasks live in `benchmarks/llm/tasks.json` (currently 30 tasks) and each task references a structural ground-truth query in `benchmarks/python/django_structural_queries.json` via `query_id`.
-- Categories:
+Categories:
 - `impact`: list direct callers (scored as a set of `(file, function)` tuples)
 - `slice`: compute backward slice lines (scored as a set of line numbers)
 - `data_flow`: trace def/use events (scored as a set of `(line, event)` tuples)
-- `scripts/bench_llm_ab_run.py` uses deterministic scoring (no LLM judge yet): it parses the model JSON output, converts it to a set, and computes precision/recall/F1 against the `expected` set embedded in the JSONL prompt packet.
+- `scripts/bench_llm_ab_run.py` supports:
+- `--mode structured`: deterministic scoring by parsing the model JSON output into a set and computing precision/recall/F1 against the `expected` set embedded in the JSONL prompt packet.
+- `--mode judge`: open-ended scoring by running a separate judge model that compares A vs B (blinded) against a rubric and returns a structured verdict.
 - `overall` metrics (e.g. `f1_mean`) aggregate across all tasks (impact + slice + data_flow).
 - `win_rate_tldr_over_rg` is computed per-task by comparing TLDR vs rg F1 (win=1, loss=0, tie=0.5) and averaging.
 - `--trials N` reruns each task variant N times and reports per-variant `f1_mean` as the mean across trials (plus timing percentiles).
@@ -249,3 +254,27 @@ Notes:
 - `--provider claude_cli` writes state under `~/.claude` / `~/.local/share/claude` (debug, todo/session metadata) even for `--print`. In workspace-restricted sandboxes, use `--claude-home "$HOME"` in a non-sandboxed environment, or expect to re-login if using the default isolated `benchmark/claude-home`.
 - `--max-tokens` / `--temperature` only apply to the legacy `--provider anthropic` path.
 - Use `--limit 3` for a cheap smoke-run before doing the full task set.
+
+Open-ended tasks (judge mode):
+- Tasks live in `benchmarks/llm/open_ended_tasks.json` and include `task_type=open_ended` plus a per-task rubric.
+- Generate prompt packets by pointing `bench_llm_ab_prompts.py` at the open-ended suite:
+
+```bash
+uv run python scripts/bench_llm_ab_prompts.py \
+  --corpus django \
+  --tasks benchmarks/llm/open_ended_tasks.json \
+  --budget-tokens 2000
+```
+
+- Run answer-model A/B and judge-model scoring (blinded) via:
+
+```bash
+uv run python scripts/bench_llm_ab_run.py \
+  --mode judge \
+  --prompts benchmark/llm/<timestamp>-llm-ab-django.jsonl \
+  --provider codex \
+  --model gpt-5.3-codex \
+  --judge-provider claude_sdk \
+  --judge-model sonnet \
+  --enforce-json-schema
+```

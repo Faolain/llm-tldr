@@ -224,6 +224,88 @@ def _json_schema_for_category(category: str) -> dict[str, Any] | None:
     return None
 
 
+def _json_schema_for_judge_verdict() -> dict[str, Any]:
+    score_obj = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "correctness": {"type": "integer", "minimum": 0, "maximum": 5},
+            "groundedness": {"type": "integer", "minimum": 0, "maximum": 5},
+            "completeness": {"type": "integer", "minimum": 0, "maximum": 5},
+            "clarity": {"type": "integer", "minimum": 0, "maximum": 5},
+            "actionability": {"type": "integer", "minimum": 0, "maximum": 5},
+        },
+        "required": ["correctness", "groundedness", "completeness", "clarity", "actionability"],
+    }
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "winner": {"type": "string", "enum": ["A", "B", "tie"]},
+            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+            "scores": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {"A": score_obj, "B": score_obj},
+                "required": ["A", "B"],
+            },
+            "notes": {"type": "string"},
+        },
+        "required": ["winner", "scores", "notes"],
+    }
+
+
+def _judge_prompt(
+    *,
+    question: str,
+    rubric: str,
+    context_a: str,
+    answer_a: str,
+    context_b: str,
+    answer_b: str,
+) -> str:
+    schema_hint = (
+        '{\n'
+        '  "winner": "A" | "B" | "tie",\n'
+        '  "confidence": 0.0-1.0,\n'
+        '  "scores": {\n'
+        '    "A": {"correctness":0-5,"groundedness":0-5,"completeness":0-5,"clarity":0-5,"actionability":0-5},\n'
+        '    "B": {"correctness":0-5,"groundedness":0-5,"completeness":0-5,"clarity":0-5,"actionability":0-5}\n'
+        "  },\n"
+        '  "notes": "short explanation"\n'
+        "}"
+    )
+    return (
+        "You are an impartial judge. Compare two answers (A vs B) to the same question.\n"
+        "Use ONLY the provided contexts when judging correctness/groundedness.\n\n"
+        f"Question:\n{question}\n\n"
+        f"Rubric:\n{rubric}\n\n"
+        "Variant A context:\n<BEGIN_CONTEXT_A>\n"
+        f"{context_a}\n"
+        "<END_CONTEXT_A>\n\n"
+        "Variant A answer:\n<BEGIN_ANSWER_A>\n"
+        f"{answer_a}\n"
+        "<END_ANSWER_A>\n\n"
+        "Variant B context:\n<BEGIN_CONTEXT_B>\n"
+        f"{context_b}\n"
+        "<END_CONTEXT_B>\n\n"
+        "Variant B answer:\n<BEGIN_ANSWER_B>\n"
+        f"{answer_b}\n"
+        "<END_ANSWER_B>\n\n"
+        f"Output JSON format:\n{schema_hint}\n\n"
+        "Return ONLY the JSON verdict (no prose outside JSON)."
+    )
+
+
+def _extract_judge_winner(parsed: Any) -> str | None:
+    if not isinstance(parsed, dict):
+        return None
+    winner = parsed.get("winner")
+    if winner in ("A", "B", "tie"):
+        return str(winner)
+    return None
+
+
 def _anthropic_call(*, model: str, prompt: str, max_tokens: int, temperature: float) -> tuple[str, dict[str, Any]]:
     try:
         from anthropic import Anthropic
@@ -496,14 +578,37 @@ def _claude_agent_sdk_call(
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Phase 7: run A/B prompt packets and score structured answers.")
+    ap = argparse.ArgumentParser(
+        description="Phase 7: run A/B prompt packets and score structured answers or judge open-ended tasks."
+    )
     ap.add_argument("--prompts", required=True, help="Path to JSONL prompt packets (from bench_llm_ab_prompts.py).")
+    ap.add_argument(
+        "--mode",
+        choices=["structured", "judge"],
+        default="structured",
+        help='Scoring mode: "structured" (deterministic PRF vs expected) or "judge" (open-ended tasks).',
+    )
     ap.add_argument("--provider", choices=["codex", "claude_sdk", "claude_cli", "anthropic"], default="codex")
     ap.add_argument("--model", required=True, help="Answer model name (e.g., claude-3-5-sonnet-20241022).")
     ap.add_argument("--max-tokens", type=int, default=800)
     ap.add_argument("--temperature", type=float, default=0.0)
     ap.add_argument("--trials", type=int, default=1, help="Trials per variant per task (default: 1).")
     ap.add_argument("--timeout-s", type=float, default=180.0, help="Per-call timeout in seconds (default: 180).")
+    ap.add_argument(
+        "--judge-provider",
+        choices=["codex", "claude_sdk", "claude_cli", "anthropic"],
+        default=None,
+        help='Judge provider (required for --mode judge). If omitted, judge mode errors out.',
+    )
+    ap.add_argument("--judge-model", default=None, help="Judge model name (required for --mode judge).")
+    ap.add_argument(
+        "--judge-timeout-s",
+        type=float,
+        default=None,
+        help="Per-judge-call timeout in seconds (default: --timeout-s).",
+    )
+    ap.add_argument("--judge-max-tokens", type=int, default=800)
+    ap.add_argument("--judge-temperature", type=float, default=0.0)
     ap.add_argument(
         "--enforce-json-schema",
         action="store_true",
@@ -526,6 +631,17 @@ def main() -> int:
         help="Path used as CODEX_HOME for Codex CLI (isolates session files). Default: benchmark/codex-home.",
     )
     ap.add_argument(
+        "--judge-codex-profile",
+        default=None,
+        help='Codex CLI config profile name for the judge (only used for --judge-provider codex).',
+    )
+    ap.add_argument(
+        "--judge-codex-reasoning-effort",
+        choices=["low", "medium", "high", "xhigh"],
+        default=None,
+        help='Codex reasoning effort override for the judge (only used for --judge-provider codex).',
+    )
+    ap.add_argument(
         "--claude-home",
         default=None,
         help=(
@@ -546,7 +662,8 @@ def main() -> int:
 
     tldr_repo_root = get_repo_root()
     codex_home: Path | None = None
-    if args.provider == "codex":
+    needs_codex = args.provider == "codex" or args.judge_provider == "codex"
+    if needs_codex:
         codex_home = (
             Path(args.codex_home).resolve()
             if args.codex_home
@@ -564,7 +681,8 @@ def main() -> int:
 
     claude_home: Path | None = None
     claude_env: dict[str, str] | None = None
-    if args.provider in ("claude_cli", "claude_sdk"):
+    needs_claude = args.provider in ("claude_cli", "claude_sdk") or args.judge_provider in ("claude_cli", "claude_sdk")
+    if needs_claude:
         claude_home = (
             Path(args.claude_home).resolve()
             if args.claude_home
@@ -591,21 +709,37 @@ def main() -> int:
     ts = now_utc_compact()
     llm_dir = bench_root(tldr_repo_root) / "llm"
     llm_dir.mkdir(parents=True, exist_ok=True)
-    answers_path = Path(args.answers_out).resolve() if args.answers_out else (llm_dir / f"{ts}-llm-ab-answers.jsonl")
+    default_answers_name = (
+        f"{ts}-llm-ab-answers.jsonl" if args.mode == "structured" else f"{ts}-llm-ab-answers-judge.jsonl"
+    )
+    answers_path = Path(args.answers_out).resolve() if args.answers_out else (llm_dir / default_answers_name)
 
     trials = max(1, int(args.trials))
+
+    if args.mode == "judge" and (args.judge_provider is None or args.judge_model is None):
+        raise SystemExit('error: --judge-provider and --judge-model are required for --mode "judge"')
 
     if args.dry_run:
         planned_tasks = 0
         planned_calls = 0
         for rec in records:
             variants = rec.get("variants")
-            if isinstance(variants, list) and variants:
+            if not (isinstance(variants, list) and variants):
+                continue
+            if args.mode == "structured":
+                if _expected_set(rec) is None:
+                    continue
                 planned_tasks += 1
                 planned_calls += int(trials) * len(variants)
+                continue
+            if args.mode == "judge":
+                if rec.get("task_type") != "open_ended":
+                    continue
+                planned_tasks += 1
+                planned_calls += int(trials) * (len(variants) + 1)
 
         report = make_report(
-            phase="phase7_llm_ab_run_structured",
+            phase="phase7_llm_ab_run_structured" if args.mode == "structured" else "phase7_llm_ab_run_judge",
             meta=gather_meta(tldr_repo_root=tldr_repo_root),
             protocol={
                 "schema_version": SCHEMA_VERSION,
@@ -616,11 +750,20 @@ def main() -> int:
                 "temperature": float(args.temperature),
                 "trials": trials,
                 "timeout_s": float(args.timeout_s),
+                "judge_provider": str(args.judge_provider) if args.judge_provider else None,
+                "judge_model": str(args.judge_model) if args.judge_model else None,
+                "judge_timeout_s": float(args.judge_timeout_s) if args.judge_timeout_s is not None else None,
+                "judge_max_tokens": int(args.judge_max_tokens),
+                "judge_temperature": float(args.judge_temperature),
                 "enforce_json_schema": bool(args.enforce_json_schema),
                 "dry_run": True,
                 "limit": int(args.limit) if args.limit is not None else None,
                 "codex_profile": str(args.codex_profile) if args.codex_profile else None,
                 "codex_reasoning_effort": str(args.codex_reasoning_effort) if args.codex_reasoning_effort else None,
+                "judge_codex_profile": str(args.judge_codex_profile) if args.judge_codex_profile else None,
+                "judge_codex_reasoning_effort": str(args.judge_codex_reasoning_effort)
+                if args.judge_codex_reasoning_effort
+                else None,
                 "codex_home": str(codex_home) if codex_home is not None else None,
                 "claude_home": str(claude_home) if claude_home is not None else None,
                 "answers_path": str(answers_path),
@@ -635,9 +778,326 @@ def main() -> int:
         if args.out:
             out_path = Path(args.out)
         else:
-            out_path = bench_runs_root(tldr_repo_root) / f"{ts}-llm-ab-run-structured.json"
+            suffix = "structured" if args.mode == "structured" else "judge"
+            out_path = bench_runs_root(tldr_repo_root) / f"{ts}-llm-ab-run-{suffix}.json"
         write_report(out_path, report)
         print(out_path)
+        return 0
+
+    if args.mode == "judge":
+        judge_provider = str(args.judge_provider)
+        judge_model = str(args.judge_model)
+        judge_timeout_s = float(args.judge_timeout_s) if args.judge_timeout_s is not None else float(args.timeout_s)
+
+        per_task: list[dict[str, Any]] = []
+        wins: list[float] = []
+        time_s_by_source: dict[str, list[float]] = {"rg": [], "tldr": []}
+        judge_time_s: list[float] = []
+
+        answer_errors_total = 0
+        answer_errors_by_source: dict[str, int] = {"rg": 0, "tldr": 0}
+        judge_errors_total = 0
+        judge_bad_json = 0
+
+        score_by_source: dict[str, dict[str, list[float]]] = {"rg": {}, "tldr": {}}
+
+        with answers_path.open("w", encoding="utf-8") as out_f:
+            for rec in records:
+                if rec.get("task_type") != "open_ended":
+                    continue
+                task_id = rec.get("task_id")
+                category = rec.get("category")
+                question = rec.get("question")
+                rubric = rec.get("rubric")
+                variants = rec.get("variants")
+                if (
+                    not isinstance(task_id, str)
+                    or not isinstance(category, str)
+                    or not isinstance(question, str)
+                    or not isinstance(rubric, str)
+                    or not isinstance(variants, list)
+                ):
+                    continue
+
+                by_label: dict[str, dict[str, Any]] = {}
+                for v in variants:
+                    if not isinstance(v, dict):
+                        continue
+                    label = v.get("label")
+                    if label in ("A", "B"):
+                        by_label[str(label)] = v
+                if "A" not in by_label or "B" not in by_label:
+                    continue
+
+                v_a = by_label["A"]
+                v_b = by_label["B"]
+                if not all(isinstance(v.get("prompt"), str) for v in (v_a, v_b)):
+                    continue
+                if not all(isinstance(v.get("context"), str) for v in (v_a, v_b)):
+                    continue
+                if not all(isinstance(v.get("source"), str) for v in (v_a, v_b)):
+                    continue
+
+                label_to_source = {"A": str(v_a["source"]), "B": str(v_b["source"])}
+
+                task_trial_wins: list[float] = []
+                trial_rows: list[dict[str, Any]] = []
+
+                for trial in range(trials):
+                    answers: dict[str, dict[str, Any]] = {}
+                    for label, v in [("A", v_a), ("B", v_b)]:
+                        source = str(v["source"])
+                        prompt = str(v["prompt"])
+                        t0 = time.monotonic()
+                        error: str | None = None
+                        try:
+                            if args.provider == "codex":
+                                text, usage = _codex_cli_call(
+                                    model=str(args.model),
+                                    prompt=prompt,
+                                    timeout_s=float(args.timeout_s),
+                                    output_schema=None,
+                                    profile=str(args.codex_profile) if args.codex_profile else None,
+                                    reasoning_effort=str(args.codex_reasoning_effort) if args.codex_reasoning_effort else None,
+                                    codex_home=codex_home,
+                                )
+                            elif args.provider == "claude_sdk":
+                                text, usage = _claude_agent_sdk_call(
+                                    model=str(args.model),
+                                    prompt=prompt,
+                                    timeout_s=float(args.timeout_s),
+                                    json_schema=None,
+                                    env=claude_env,
+                                )
+                            elif args.provider == "claude_cli":
+                                text, usage = _claude_cli_call(
+                                    model=str(args.model),
+                                    prompt=prompt,
+                                    timeout_s=float(args.timeout_s),
+                                    json_schema=None,
+                                    env=claude_env,
+                                )
+                            elif args.provider == "anthropic":
+                                text, usage = _anthropic_call(
+                                    model=str(args.model),
+                                    prompt=prompt,
+                                    max_tokens=int(args.max_tokens),
+                                    temperature=float(args.temperature),
+                                )
+                            else:  # pragma: no cover
+                                raise RuntimeError(f"Unsupported provider: {args.provider}")
+                        except Exception as exc:
+                            error = f"{type(exc).__name__}: {exc}"
+                            text = ""
+                            usage = {"error": error}
+                            answer_errors_total += 1
+                            answer_errors_by_source[source] = int(answer_errors_by_source.get(source, 0)) + 1
+                        dt = time.monotonic() - t0
+                        time_s_by_source.setdefault(source, []).append(float(dt))
+
+                        row = {
+                            "kind": "answer",
+                            "task_id": task_id,
+                            "category": category,
+                            "trial": trial,
+                            "label": label,
+                            "source": source,
+                            "provider": str(args.provider),
+                            "model": str(args.model),
+                            "time_s": round(float(dt), 6),
+                            "usage": usage,
+                            "error": error,
+                            "raw_text": text,
+                        }
+                        out_f.write(json.dumps(row, sort_keys=True) + "\n")
+                        out_f.flush()
+                        answers[label] = {"text": text, "usage": usage, "time_s": float(dt), "error": error}
+
+                    judge_prompt = _judge_prompt(
+                        question=question,
+                        rubric=rubric,
+                        context_a=str(v_a["context"]),
+                        answer_a=str(answers.get("A", {}).get("text", "")),
+                        context_b=str(v_b["context"]),
+                        answer_b=str(answers.get("B", {}).get("text", "")),
+                    )
+                    judge_schema = _json_schema_for_judge_verdict() if args.enforce_json_schema else None
+
+                    t0 = time.monotonic()
+                    judge_error: str | None = None
+                    try:
+                        if judge_provider == "codex":
+                            judge_text, judge_usage = _codex_cli_call(
+                                model=judge_model,
+                                prompt=judge_prompt,
+                                timeout_s=judge_timeout_s,
+                                output_schema=judge_schema,
+                                profile=str(args.judge_codex_profile) if args.judge_codex_profile else None,
+                                reasoning_effort=str(args.judge_codex_reasoning_effort)
+                                if args.judge_codex_reasoning_effort
+                                else None,
+                                codex_home=codex_home,
+                            )
+                        elif judge_provider == "claude_sdk":
+                            judge_text, judge_usage = _claude_agent_sdk_call(
+                                model=judge_model,
+                                prompt=judge_prompt,
+                                timeout_s=judge_timeout_s,
+                                json_schema=judge_schema,
+                                env=claude_env,
+                            )
+                        elif judge_provider == "claude_cli":
+                            judge_text, judge_usage = _claude_cli_call(
+                                model=judge_model,
+                                prompt=judge_prompt,
+                                timeout_s=judge_timeout_s,
+                                json_schema=judge_schema,
+                                env=claude_env,
+                            )
+                        elif judge_provider == "anthropic":
+                            judge_text, judge_usage = _anthropic_call(
+                                model=judge_model,
+                                prompt=judge_prompt,
+                                max_tokens=int(args.judge_max_tokens),
+                                temperature=float(args.judge_temperature),
+                            )
+                        else:  # pragma: no cover
+                            raise RuntimeError(f"Unsupported judge provider: {judge_provider}")
+                    except Exception as exc:
+                        judge_error = f"{type(exc).__name__}: {exc}"
+                        judge_text = ""
+                        judge_usage = {"error": judge_error}
+                        judge_errors_total += 1
+                    judge_dt = time.monotonic() - t0
+                    judge_time_s.append(float(judge_dt))
+
+                    verdict_parsed = _extract_json_from_text(judge_text)
+                    winner = _extract_judge_winner(verdict_parsed)
+                    if winner is None:
+                        judge_bad_json += 1
+                        winner = "tie"
+
+                    # Convert judge verdict into a TLDR-vs-rg win score.
+                    if winner == "tie":
+                        win = 0.5
+                    else:
+                        winner_source = label_to_source.get(winner)
+                        if winner_source == "tldr":
+                            win = 1.0
+                        elif winner_source == "rg":
+                            win = 0.0
+                        else:
+                            win = 0.5
+                    task_trial_wins.append(float(win))
+
+                    # Score distributions (optional): map A/B numeric scores to rg/tldr.
+                    if isinstance(verdict_parsed, dict):
+                        scores_obj = verdict_parsed.get("scores")
+                        if isinstance(scores_obj, dict):
+                            for label in ("A", "B"):
+                                sc = scores_obj.get(label)
+                                if not isinstance(sc, dict):
+                                    continue
+                                src = label_to_source.get(label)
+                                if src not in ("rg", "tldr"):
+                                    continue
+                                for k, v in sc.items():
+                                    if isinstance(v, (int, float)):
+                                        score_by_source.setdefault(src, {}).setdefault(str(k), []).append(float(v))
+
+                    judge_row = {
+                        "kind": "judge",
+                        "task_id": task_id,
+                        "category": category,
+                        "trial": trial,
+                        "provider": judge_provider,
+                        "model": judge_model,
+                        "time_s": round(float(judge_dt), 6),
+                        "usage": judge_usage,
+                        "error": judge_error,
+                        "winner": winner,
+                        "label_to_source": label_to_source,
+                        "win_tldr_over_rg": win,
+                        "raw_text": judge_text,
+                    }
+                    out_f.write(json.dumps(judge_row, sort_keys=True) + "\n")
+                    out_f.flush()
+
+                    trial_rows.append(
+                        {
+                            "trial": trial,
+                            "winner": winner,
+                            "win_tldr_over_rg": win,
+                            "judge_error": judge_error,
+                        }
+                    )
+
+                win_mean = statistics.mean(task_trial_wins) if task_trial_wins else 0.5
+                wins.append(float(win_mean))
+                per_task.append(
+                    {
+                        "task_id": task_id,
+                        "category": category,
+                        "variants": [
+                            {"label": "A", "source": label_to_source["A"]},
+                            {"label": "B", "source": label_to_source["B"]},
+                        ],
+                        "win_mean_tldr_over_rg": float(win_mean),
+                        "trials": trial_rows,
+                    }
+                )
+
+        report = make_report(
+            phase="phase7_llm_ab_run_judge",
+            meta=gather_meta(tldr_repo_root=tldr_repo_root),
+            protocol={
+                "schema_version": SCHEMA_VERSION,
+                "prompts": str(prompts_path),
+                "provider": args.provider,
+                "model": str(args.model),
+                "trials": trials,
+                "timeout_s": float(args.timeout_s),
+                "judge_provider": judge_provider,
+                "judge_model": judge_model,
+                "judge_timeout_s": judge_timeout_s,
+                "judge_max_tokens": int(args.judge_max_tokens),
+                "judge_temperature": float(args.judge_temperature),
+                "enforce_json_schema": bool(args.enforce_json_schema),
+                "limit": int(args.limit) if args.limit is not None else None,
+                "codex_profile": str(args.codex_profile) if args.codex_profile else None,
+                "codex_reasoning_effort": str(args.codex_reasoning_effort) if args.codex_reasoning_effort else None,
+                "judge_codex_profile": str(args.judge_codex_profile) if args.judge_codex_profile else None,
+                "judge_codex_reasoning_effort": str(args.judge_codex_reasoning_effort)
+                if args.judge_codex_reasoning_effort
+                else None,
+                "codex_home": str(codex_home) if codex_home is not None else None,
+                "claude_home": str(claude_home) if claude_home is not None else None,
+                "answers_path": str(answers_path),
+            },
+            results={
+                "tasks_judged": len(per_task),
+                "answer_errors_total": int(answer_errors_total),
+                "answer_errors_by_source": {k: int(v) for k, v in answer_errors_by_source.items()},
+                "judge_errors_total": int(judge_errors_total),
+                "judge_bad_json": int(judge_bad_json),
+                "win_rate_tldr_over_rg": (sum(wins) / len(wins)) if wins else None,
+                "answer_time_s_percentiles": {k: percentiles(v) for k, v in time_s_by_source.items() if v},
+                "judge_time_s_percentiles": percentiles(judge_time_s) if judge_time_s else None,
+                "judge_score_mean": {
+                    src: {k: (statistics.mean(v) if v else None) for k, v in dims.items()}
+                    for src, dims in score_by_source.items()
+                },
+                "per_task": per_task,
+            },
+        )
+
+        if args.out:
+            out_path = Path(args.out)
+        else:
+            out_path = bench_runs_root(tldr_repo_root) / f"{ts}-llm-ab-run-judge.json"
+        write_report(out_path, report)
+        print(out_path)
+        print(answers_path)
         return 0
 
     per_task: list[dict[str, Any]] = []

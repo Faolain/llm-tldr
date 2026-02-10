@@ -1,8 +1,8 @@
 # Benchmarking Structural Analysis Quality Implementation Plan
 
-- Status: In progress (Phase 0 contract + manifests implemented; Phase 1 TS curated recall runner + Next.js curated edges implemented; Phase 2 `rg` baselines implemented; Phase 3 perf runners implemented; Phase 4 Python structural runner + Django query suite expanded; Phase 5 retrieval runner + Django query suite expanded; Phase 6 token efficiency runner + initial Django curves implemented; Phase 7 task suite + A/B prompt generator implemented)
+- Status: In progress (Phase 0 contract + manifests implemented; Phase 1 TS curated recall runner + Next.js curated edges implemented; Phase 2 `rg` baselines implemented; Phase 3 perf runners implemented; Phase 4 Python structural runner + Django query suite expanded; Phase 5 retrieval runner + Django query suite expanded; Phase 6 token efficiency runner + initial Django curves implemented; Phase 7 task suite + A/B prompt generator implemented; Phase 7 judge-mode harness implemented)
 - Owner: TBD
-- Last updated: 2026-02-09
+- Last updated: 2026-02-10
 - Source: `specs/006-benchmarking-retrieval-quality.md`
 
 ## Decisions & Assumptions (locked for this plan)
@@ -508,7 +508,8 @@ Next step options:
   - Condition B: TLDR-derived context payload
   - Condition C (optional): hybrid
 - [x] Implement an answer-model runner that supports multiple trials per task and reports p50/p95 timing + win-rate (structured scoring vs ground truth).
-- [ ] Add a judge-model path for open-ended tasks (where ground truth isn't a simple set) and run a small blinded batch to confirm signal.
+- [x] Add a judge-model path for open-ended tasks (`scripts/bench_llm_ab_run.py --mode judge`) and an open-ended suite (`benchmarks/llm/open_ended_tasks.json`).
+- [ ] Run a small blinded batch (answer model != judge model) and log judge win-rate + score distributions.
 
 ### Running Log (Phase 7)
 - 2026-02-09: Added a first downstream task suite for Django under `benchmarks/llm/tasks.json` (30 tasks referencing Phase 4’s structural ground-truth query ids: all impact + all slice + first 5 data_flow).
@@ -626,6 +627,19 @@ Next step options:
   | slice | 0.919 | 0.471 | 0.800 | 0.919 | 0.406 | 1.000 |
   | data_flow | 0.978 | 0.950 | 0.600 | 0.978 | 0.978 | 0.500 |
 
+- 2026-02-10: Implemented the Phase 7 open-ended “judge model” path:
+  - Added an open-ended task suite: `benchmarks/llm/open_ended_tasks.json` (tasks have `task_type=open_ended` + a per-task rubric).
+  - Extended prompt generation (`scripts/bench_llm_ab_prompts.py`) to:
+    - pass through `task_type` + `rubric` into the prompt packet
+    - generate open-ended answer prompts (plain text) instead of forced JSON
+    - for open-ended tasks, materialize more helpful TLDR context (structured + relevant code snippets) for `slice` and `data_flow` so the answer model can actually explain behavior
+  - Extended the runner (`scripts/bench_llm_ab_run.py`) with `--mode judge`:
+    - runs the answer model on A and B (free-form)
+    - runs a separate judge model (blinded A/B) that returns a structured verdict JSON (winner + scores + notes)
+    - aggregates judge win-rate TLDR vs rg and score means per dimension (correctness/groundedness/completeness/clarity/actionability)
+  - Added schema tests for the open-ended suite: `tests/test_bench_llm_open_ended_tasks_schema.py`.
+  Next step: generate an open-ended prompt packet and run a small blinded batch (e.g. Codex answers + Claude judge) and log results here.
+
 **Acceptance**
 - Clear win-rate signal on at least one task class (impact/slicing/debugging).
 
@@ -640,7 +654,7 @@ Next step options:
   - Generate A/B prompt packets as usual (Condition A: rg-derived context, Condition B: TLDR-derived context), but allow free-form answers.
   - Run an answer model to produce responses for each condition.
   - Run a **separate judge model** that sees both answers (blinded as A/B) and a rubric, and emits a structured verdict like `{"winner":"A"|"B"|"tie","scores":{...},"notes":...}`.
-  - Aggregate judge win-rate + score distributions. This is the remaining unchecked Phase 7 key task.
+  - Aggregate judge win-rate + score distributions (implemented via `scripts/bench_llm_ab_run.py --mode judge`; pending: run and log a blinded batch).
 
 - Phase 8 (SWE-bench validation) would be a separate harness to validate TLDR on a standard benchmark dataset:
   - Select a fixed SWE-bench Lite subset relevant to a target corpus (e.g. Django-related instances).

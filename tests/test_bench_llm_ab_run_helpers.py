@@ -44,6 +44,16 @@ def test_score_sets_f1():
     assert round(sc.f1, 4) == 0.6667
 
 
+def test_extract_judge_winner():
+    mod = _load_mod()
+    fn = mod["_extract_judge_winner"]
+    assert fn({"winner": "A"}) == "A"
+    assert fn({"winner": "B"}) == "B"
+    assert fn({"winner": "tie"}) == "tie"
+    assert fn({"winner": "C"}) is None
+    assert fn("nope") is None
+
+
 def test_claude_sdk_result_to_text_and_usage_structured():
     try:
         from claude_agent_sdk import ResultMessage
