@@ -501,6 +501,20 @@ Next step options:
 - 2026-02-10: Started Phase 6 multi-step scoring refinement (selector + targeted code materialization):
   - `scripts/bench_token_efficiency.py`: `tldr_structured_plus_code` for `slice` and `data_flow` now materializes **merged code windows** (radius=3) and records token attribution (`selector_tokens` vs `code_tokens`) plus chosen `windows`.
   - Added helper tests: `tests/test_bench_token_efficiency_helpers.py`.
+- 2026-02-10: Reran Phase 6 structural-mode to capture the new “selector + windows” materialization behavior:
+  - Report: `benchmark/runs/20260210-214935Z-token-efficiency-structural-django-multistep.json`
+  - Slice @ budget 500 (mean across 10 slice queries):
+    - `tldr_structured`: precision_mean `1.0`, recall_mean `0.884`, noise_ratio_mean `0.884` at ~`40` tokens/query
+    - `tldr_structured_plus_code`: recall_mean `1.0` but precision_mean `~0.386`, noise_ratio_mean `~8.00` at ~`238` tokens/query (very close to `grep_window` precision/recall/noise at ~`200` tokens/query)
+  - Data flow @ budget 500 (mean across 10 dfg queries):
+    - `tldr_structured_plus_code`: flow_completeness_mean `1.0`, noise_ratio_mean `~5.27` at ~`199` tokens/query (between `tldr_structured` noise_ratio_mean `~1.35` and `grep_window_function` noise_ratio_mean `~8.92`)
+  - Token attribution @ budget 500:
+    - slice: selector_tokens_mean `~41`, code_tokens_mean `~197`
+    - data_flow: selector_tokens_mean `~40`, code_tokens_mean `~160`
+  Suggestions surfaced:
+  - For Phase 6 scoring, separate “selector correctness” from “materialization overhead”: adding windows for continuity can make precision/noise look like `rg` even when the selector itself is high-precision.
+  - For tight budgets, TLDR’s advantage is primarily the structured selector (`tldr_structured`); aggressive contiguous windows can erase the noise advantage and converge toward grep-window behavior.
+  - Consider two materialization policies: a tight-budget policy that favors small windows around selector lines (no large target window), and an open-ended explanation policy that includes a larger contiguous target window (Phase 7).
 
 **Deliverables**
 - A runner that materializes deterministic payloads for each strategy and scores quality under budgets.
