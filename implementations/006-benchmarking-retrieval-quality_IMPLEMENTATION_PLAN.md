@@ -509,7 +509,7 @@ Next step options:
   - Condition C (optional): hybrid
 - [x] Implement an answer-model runner that supports multiple trials per task and reports p50/p95 timing + win-rate (structured scoring vs ground truth).
 - [x] Add a judge-model path for open-ended tasks (`scripts/bench_llm_ab_run.py --mode judge`) and an open-ended suite (`benchmarks/llm/open_ended_tasks.json`).
-- [ ] Run a small blinded batch (answer model != judge model) and log judge win-rate + score distributions.
+- [x] Run a small blinded batch (answer model != judge model) and log judge win-rate + score distributions.
 
 ### Running Log (Phase 7)
 - 2026-02-09: Added a first downstream task suite for Django under `benchmarks/llm/tasks.json` (30 tasks referencing Phase 4’s structural ground-truth query ids: all impact + all slice + first 5 data_flow).
@@ -639,6 +639,29 @@ Next step options:
     - aggregates judge win-rate TLDR vs rg and score means per dimension (correctness/groundedness/completeness/clarity/actionability)
   - Added schema tests for the open-ended suite: `tests/test_bench_llm_open_ended_tasks_schema.py`.
   Next step: generate an open-ended prompt packet and run a small blinded batch (e.g. Codex answers + Claude judge) and log results here.
+
+- 2026-02-10: Ran a judge-mode open-ended smoke batch (Codex answers, Claude judge; limit=3):
+  - prompts report: `benchmark/runs/20260210-052131Z-llm-ab-prompts-django.json` (open-ended suite; budget_tokens=2000)
+  - prompts: `benchmark/llm/20260210-052131Z-llm-ab-django.jsonl`
+  - command shape:
+    - answer model: `--provider codex --model gpt-5.3-codex --codex-reasoning-effort medium`
+    - judge model: `--judge-provider claude_sdk --judge-model claude-sonnet-4-5-20250929 --enforce-json-schema`
+    - `--mode judge --trials 1 --limit 3`
+  - report: `benchmark/runs/20260210-052355Z-llm-ab-run-judge.json`
+  - answers+jury: `benchmark/llm/20260210-052355Z-llm-ab-answers-judge.jsonl`
+  - key results (3 tasks, all `impact`):
+    - judge win_rate_tldr_over_rg: `0.667` (2 wins, 1 loss; ties=0.5 but none here)
+    - judge score means (rg vs TLDR):
+      - correctness: `4.333` vs `4.667`
+      - groundedness: `4.667` vs `5.000`
+      - completeness: `3.333` vs `4.000`
+      - clarity: `4.333` vs `4.667`
+      - actionability: `3.333` vs `4.333`
+    - answer latency p50/p95:
+      - rg: `10.72s/11.83s`
+      - tldr: `8.97s/16.01s` (p95 noisier at n=3)
+    - judge latency p50/p95: `18.51s/21.83s`
+  Next step: run the full 12 open-ended tasks (and ideally `--trials 3`) to stabilize win-rate and per-dimension score distributions.
 
 **Acceptance**
 - Clear win-rate signal on at least one task class (impact/slicing/debugging).
