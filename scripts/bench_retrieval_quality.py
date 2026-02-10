@@ -201,6 +201,15 @@ def main() -> int:
         default="*.py",
         help="ripgrep --glob filter (default: *.py). Use empty string to disable.",
     )
+    ap.add_argument(
+        "--no-result-guard",
+        choices=["none", "rg_empty"],
+        default="none",
+        help=(
+            "Bench-only gate to allow semantic/hybrid to return 'no results'. "
+            "'rg_empty' suppresses semantic/hybrid when rg finds no matches for the query's rg_pattern."
+        ),
+    )
     ap.add_argument("--out", default=None, help="Write JSON report to this path (default under benchmark/runs/).")
     args = ap.parse_args()
 
@@ -240,6 +249,7 @@ def main() -> int:
 
     glob = str(args.rg_glob)
     glob_arg = glob if glob.strip() else None
+    no_result_guard = str(args.no_result_guard)
 
     per_query: list[dict[str, Any]] = []
 
@@ -279,9 +289,13 @@ def main() -> int:
         sem_rank: list[str] | None = None
         sem_time_s: float | None = None
         if semantic_available:
-            t0 = time.monotonic()
-            sem_rank = _semantic_rank_files(repo_root, index_ctx=index_ctx, query=q.query, k=max_k)
-            sem_time_s = time.monotonic() - t0
+            if no_result_guard == "rg_empty" and not rg_rank:
+                sem_rank = []
+                sem_time_s = 0.0
+            else:
+                t0 = time.monotonic()
+                sem_rank = _semantic_rank_files(repo_root, index_ctx=index_ctx, query=q.query, k=max_k)
+                sem_time_s = time.monotonic() - t0
 
         hybrid_rank: list[str] | None = None
         if sem_rank is not None:
@@ -304,6 +318,7 @@ def main() -> int:
             "id": q.id,
             "query": q.query,
             "relevant_files": list(q.relevant_files),
+            "no_result_guard_triggered": bool(no_result_guard == "rg_empty" and not rg_rank),
             "rg": {
                 "pattern": rg_pattern,
                 "time_s": round(rg_time_s, 6),
@@ -372,6 +387,7 @@ def main() -> int:
             "index_id": index_ctx.index_id,
             "ks": ks,
             "rg_glob": glob_arg,
+            "no_result_guard": no_result_guard,
             "semantic_available": bool(semantic_available),
             "semantic_model": semantic_meta.get("model") if isinstance(semantic_meta, dict) else None,
             "semantic_dimension": semantic_meta.get("dimension") if isinstance(semantic_meta, dict) else None,

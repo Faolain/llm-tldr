@@ -798,6 +798,15 @@ def main() -> int:
     ap.add_argument("--index", default=None, help="Index id (default: repo:<corpus>).")
     ap.add_argument("--rg-glob", default="*.py", help="ripgrep --glob filter for retrieval ranking (default: *.py).")
     ap.add_argument("--max-files", type=int, default=50, help="Max files to consider per retrieval query (default: 50).")
+    ap.add_argument(
+        "--no-result-guard",
+        choices=["none", "rg_empty"],
+        default="none",
+        help=(
+            "Bench-only retrieval gate to allow semantic/hybrid to return 'no results'. "
+            "'rg_empty' suppresses semantic/hybrid when rg finds no matches for the query's rg_pattern."
+        ),
+    )
     ap.add_argument("--out", default=None, help="Write JSON report to this path (default under benchmark/runs/).")
     args = ap.parse_args()
 
@@ -826,6 +835,7 @@ def main() -> int:
 
     glob = str(args.rg_glob)
     glob_arg = glob if glob.strip() else None
+    retrieval_no_result_guard = str(args.no_result_guard)
 
     results: dict[str, Any] = {}
 
@@ -1835,8 +1845,11 @@ def main() -> int:
             rg_rank = _rg_rank_files(repo_root, pattern=rg_pattern, glob=glob_arg)[:max_files]
             sem_rank = None
             if semantic_available:
-                sem_rank = _semantic_rank_files(repo_root, index_ctx=index_ctx, query=q.query, k=max_files) or []
-                sem_rank = sem_rank[:max_files]
+                if retrieval_no_result_guard == "rg_empty" and not rg_rank:
+                    sem_rank = []
+                else:
+                    sem_rank = _semantic_rank_files(repo_root, index_ctx=index_ctx, query=q.query, k=max_files) or []
+                    sem_rank = sem_rank[:max_files]
 
             hybrid_rank = _rrf_fuse([rg_rank, sem_rank])[:max_files] if sem_rank is not None else None
 
@@ -1851,6 +1864,7 @@ def main() -> int:
                 "query": q.query,
                 "relevant_files": list(q.relevant_files),
                 "rg_pattern": rg_pattern,
+                "no_result_guard_triggered": bool(retrieval_no_result_guard == "rg_empty" and not rg_rank),
                 "budgets": {},
             }
 
@@ -1929,6 +1943,7 @@ def main() -> int:
             "queries": str(retrieval_path),
             "budgets": budgets,
             "rg_glob": glob_arg,
+            "no_result_guard": retrieval_no_result_guard,
             "semantic_available": bool(semantic_available),
             "semantic_model": semantic_meta.get("model") if isinstance(semantic_meta, dict) else None,
             "semantic_dimension": semantic_meta.get("dimension") if isinstance(semantic_meta, dict) else None,
@@ -1946,6 +1961,7 @@ def main() -> int:
             "cache_root": str(index_ctx.cache_root) if index_ctx.cache_root is not None else None,
             "index_id": index_ctx.index_id,
             "rg_glob": glob_arg,
+            "retrieval_no_result_guard": retrieval_no_result_guard if args.mode in ("retrieval", "both") else None,
         },
         results=results,
     )

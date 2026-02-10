@@ -390,6 +390,18 @@ Concretely:
   - Negative queries:
     - rg FPR@5/10 = 0.0
     - semantic + hybrid_rrf FPR@5/10 = 1.0 (unchanged). This reinforces the need for a “return none” gate (score threshold and/or lexical guard) if we want semantic/hybrid to behave well on negative queries.
+- 2026-02-10: Score-threshold gating is not viable on this suite: top semantic scores for negative queries overlap positive queries (for both MiniLM and BGE), so a simple “min score” cutoff cannot reliably produce “no result”.
+- 2026-02-10: Implemented a **bench-only** “no result” gate and reran Phase 5:
+  - `scripts/bench_retrieval_quality.py`: added `--no-result-guard rg_empty` which suppresses semantic/hybrid when `rg_pattern` yields zero matches.
+  - This is intentionally benchmark-specific (it relies on the query suite’s deterministic `rg_pattern` being a high-precision “lexical existence check”).
+  - Reports:
+    - MiniLM + guard: `benchmark/runs/20260210-001934Z-retrieval-django-minilm-guard-rg-empty.json`
+    - BGE + guard: `benchmark/runs/20260210-001934Z-retrieval-django-bge-guard-rg-empty.json`
+  - Guard triggered on `3/60` queries (the negative queries), and semantic/hybrid FPR@5/10 dropped from `1.0` -> `0.0` without changing positive-query MRR/Recall@K.
+
+Next step options:
+1. Implement a bench-only “no result” gate (score threshold and/or lexical guard) and rerun Phase 5/6 to get semantic/hybrid FPR down on negative queries.
+2. Move on to the next open quality gap (Python slicing/CFG coverage), then rerun Phase 4/6/7 to see slice flip.
 
 **Deliverables**
 - Deterministic retrieval-quality runner + pinned query set(s) per corpus.
@@ -445,6 +457,11 @@ Concretely:
     - rg: 0.0
     - semantic + hybrid_rrf: 1.0 (unchanged)
   - Token note: semantic/hybrid payloads are larger with BGE (higher MRR but higher `payload_tokens_mean`), because semantic-selected snippets differ.
+- 2026-02-10: Reran Phase 6 retrieval-mode with the bench-only “no result” gate enabled (`--no-result-guard rg_empty`):
+  - Reports:
+    - MiniLM + guard: `benchmark/runs/20260210-001934Z-token-efficiency-retrieval-django-minilm-guard-rg-empty.json`
+    - BGE + guard: `benchmark/runs/20260210-001934Z-token-efficiency-retrieval-django-bge-guard-rg-empty.json`
+  - Negative-query FPR_mean for semantic + hybrid_rrf dropped from `1.0` -> `0.0` across budgets.
 
 **Deliverables**
 - A runner that materializes deterministic payloads for each strategy and scores quality under budgets.

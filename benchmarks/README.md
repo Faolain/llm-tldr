@@ -148,6 +148,12 @@ Run the retrieval-quality runner (semantic/hybrid metrics are skipped unless a s
 uv run python scripts/bench_retrieval_quality.py --corpus django
 ```
 
+Optional (bench-only): allow semantic/hybrid to return "no results" on negative queries by suppressing semantic/hybrid when `rg_pattern` has zero matches:
+
+```bash
+uv run python scripts/bench_retrieval_quality.py --corpus django --no-result-guard rg_empty
+```
+
 Optional (setup, not timed): build a semantic index for the corpus so semantic/hybrid metrics run.
 This may download embedding model weights on first run.
 
@@ -180,6 +186,7 @@ uv run python scripts/bench_token_efficiency.py --corpus django --mode both
 Notes:
 - Retrieval metrics include semantic/hybrid only if semantic index artifacts already exist for the index id.
 - Use `--budgets` to override token budgets (comma-separated).
+- `--no-result-guard rg_empty` applies to retrieval mode only (suppresses semantic/hybrid when `rg_pattern` has zero matches).
 
 ## Phase 7: Downstream A/B Prompt Packets (LLM)
 
