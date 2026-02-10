@@ -229,6 +229,32 @@ uv run python scripts/bench_llm_ab_prompts.py \
   --budget-tokens 2000
 ```
 
+Interpreting retrieval-type results:
+- These tasks are testing the *retrieval + context materialization* path (snippets) and the model's ability to output the correct repo-relative file paths from that context. They are **not** testing TLDR's structural analysis layers (call graphs/slicing/DFG).
+- Retrieval variants in the prompt packet:
+- `rg`: deterministic ranking by `rg_pattern`, then render a small snippet around the first match in each ranked file.
+- `semantic`: embedding-based ranking, then render the same snippet shape (still anchored by `rg_pattern` for determinism).
+- `hybrid_rrf`: RRF fusion of `rg` and `semantic` rankings, then snippet rendering.
+- If the retrieval queries have strong definition-ish `rg_pattern`s, `rg` is often already near-perfect and `hybrid_rrf` will mostly tie.
+- Pure `semantic` can miss “where is X defined?” lookups by returning *usages/references* rather than the defining file; if the context does not surface the defining file, the answer model (correctly) returns an empty `paths` list when instructed not to guess.
+
+Example retrieval structured run (Codex, Django) on 2026-02-10:
+- Prompts report: `benchmark/runs/20260210-065101Z-llm-ab-prompts-django-retrieval.json`
+- Run report: `benchmark/runs/20260210-065101Z-llm-ab-run-structured-retrieval.json` (`--trials 3`, 16 tasks x 3 variants = 144 calls)
+- Key results from that run:
+- `f1_mean`: `hybrid_rrf=0.9375`, `rg=0.8958`, `semantic=0.6875`
+- Pairwise win-rate (ties=0.5): `hybrid_rrf_over_rg=0.5313`, `hybrid_rrf_over_semantic=0.6250`, `rg_over_semantic=0.5938`
+- Note: that report included 1 negative query (`expected=[]`). As of 2026-02-10, Phase 7 structured scoring treats empty/empty as perfect (precision/recall/F1=`1.0`); older reports may undercount negative-query performance.
+
+Recommendations based on retrieval-type results:
+- Default retrieval comparisons to `hybrid_rrf` rather than pure semantic.
+- If you want semantic to compete on definition lookups, add a “definition-intent” validation step (e.g., require the candidate snippet/file to contain `^def name` / `^class Name` or a symbol-index hit) so semantic doesn't keep surfacing references.
+- Use the structural Phase 7 suite (`benchmarks/llm/tasks.json`) to evaluate TLDR's core advantage (impact/slice/data_flow context) rather than the retrieval suite where `rg_pattern` can already solve most tasks.
+
+What TLDR is most useful for (and what would make it more useful):
+- TLDR tends to shine on structural workflows: impact analysis (callers through indirection), slicing (“what actually influences this value”), and data-flow (def/use chains), especially under tight token budgets.
+- For open-ended debugging tasks, the biggest win is improving TLDR context packing: keep the structured summary, but include a small contiguous code window around the target and around slice/DFG-selected lines (merged windows, budgeted) so the answer model can explain behavior without missing crucial nearby lines/comments.
+
 Using Codex CLI (example model: `gpt-5.3-codex` with "medium" reasoning effort):
 
 ```bash
