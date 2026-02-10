@@ -201,6 +201,14 @@ uv run python scripts/bench_llm_ab_prompts.py --corpus django --budget-tokens 20
 
 Optional: run the prompt packets against an answer model and score structured outputs (structured scoring vs ground truth; no judge model yet).
 
+Task suite + scoring:
+- Tasks live in `benchmarks/llm/tasks.json` (currently 30 tasks) and each task references a structural ground-truth query in `benchmarks/python/django_structural_queries.json` via `query_id`.
+- Categories: `impact` (callers), `slice` (backward slice lines), `data_flow` (def/use events).
+- `scripts/bench_llm_ab_run.py` uses deterministic scoring (no LLM judge yet): it parses the model JSON output, converts it to a set, and computes precision/recall/F1 against the `expected` set embedded in the JSONL prompt packet.
+- `overall` metrics (e.g. `f1_mean`) aggregate across all tasks (impact + slice + data_flow).
+- `win_rate_tldr_over_rg` is computed per-task by comparing TLDR vs rg F1 (win=1, loss=0, tie=0.5) and averaging.
+- `--trials N` reruns each task variant N times and reports per-variant `f1_mean` as the mean across trials (plus timing percentiles).
+
 Using Codex CLI (example model: `gpt-5.3-codex` with "medium" reasoning effort):
 
 ```bash
