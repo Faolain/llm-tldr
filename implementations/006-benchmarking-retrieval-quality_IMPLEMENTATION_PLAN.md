@@ -703,6 +703,26 @@ Next step options:
   - `benchmarks/llm/open_ended_tasks.json`: corrected `OE08` to match `query_id=B10` (`configure` in `django/conf/__init__.py` at `target_line=124`).
   - Note: the judge-mode prompt packet `benchmark/llm/20260210-052131Z-llm-ab-django.jsonl` (and the resulting report `benchmark/runs/20260210-053918Z-llm-ab-run-judge.json`) was generated before this fix, so interpret that run with caution and prefer regenerating prompts + rerunning for comparable numbers.
 
+- 2026-02-10: Regenerated open-ended prompt packets and reran judge-mode after mismatch fixes + improved TLDR context packing/judge robustness:
+  - prompts report: `benchmark/runs/20260210-160641Z-llm-ab-prompts-django.json` (open-ended suite; `tasks_total=18`, budget_tokens=2000; tokens_context_mean: rg ~250.2, tldr ~410.1)
+  - prompts: `benchmark/llm/20260210-160641Z-llm-ab-django.jsonl`
+  - command shape:
+    - answer model: `--provider codex --model gpt-5.3-codex --codex-reasoning-effort medium`
+    - judge model: `--judge-provider claude_sdk --judge-model claude-sonnet-4-5-20250929 --enforce-json-schema --judge-retries 1`
+    - `--mode judge --timeout-s 180 --judge-timeout-s 180 --trials 3`
+  - report: `benchmark/runs/20260210-161458Z-llm-ab-run-judge-open-ended.json`
+  - answers+jury: `benchmark/llm/20260210-161458Z-llm-ab-answers-judge-open-ended.jsonl` (162 rows; 2 answer rows + 1 judge row per task/trial)
+  - key results:
+    - overall judge win_rate_tldr_over_rg: `0.556`
+    - by category win_rate_tldr_over_rg:
+      - impact: `0.833`
+      - slice: `0.286` (slice remains the main weakness in open-ended judge mode)
+      - data_flow: `0.600`
+    - judge_bad_json: `0` (down from 6 in `benchmark/runs/20260210-053918Z-llm-ab-run-judge.json`)
+    - judge score means (rg vs TLDR): correctness `4.704` vs `4.833`, groundedness `4.759` vs `4.981`, completeness `4.296` vs `4.481`, clarity `4.463` vs `4.611`, actionability `4.148` vs `4.278`
+    - latency p50/p95 (answer): TLDR `9.76s/19.49s` vs rg `10.11s/19.11s`; judge `13.34s/26.92s`
+  - notes: answer_errors_total=1 (rg only); judge_errors_total=0.
+
 - 2026-02-10: Expanded Phase 7 task suites beyond structural-only:
   - Added a deterministic retrieval-type suite: `benchmarks/llm/retrieval_tasks.json` (expected file paths from `benchmarks/retrieval/django_queries.json`).
   - Extended `scripts/bench_llm_ab_prompts.py` to support `category=retrieval` and generate multiple retrieval variants (`rg`, `semantic`, `hybrid_rrf`) under the same token budget.

@@ -436,6 +436,16 @@ For monorepos, create `.claude/workspace.json` to scope indexing:
 
 ---
 
+## Benchmarks
+
+Reproducible benchmark harness:
+- `benchmarks/README.md` (tracked inputs + commands)
+- `implementations/006-benchmarking-retrieval-quality_IMPLEMENTATION_PLAN.md` (running log + interpretation)
+
+On Django (2026-02-10), the downstream open-ended judge suite (18 tasks x 3 trials; Codex answers + Claude judge) shows TLDR context beating an `rg`-only context overall (win_rate_tldr_over_rg=`0.556`), with the strongest gains in `impact` and `data_flow` and the weakest results in `slice`. See the implementation plan running log for details and how to reproduce.
+
+---
+
 ## Deep Dive
 
 For the full architecture explanation, benchmarks, and advanced workflows:

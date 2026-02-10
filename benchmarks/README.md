@@ -314,5 +314,16 @@ uv run python scripts/bench_llm_ab_run.py \
   --model gpt-5.3-codex \
   --judge-provider claude_sdk \
   --judge-model sonnet \
+  --judge-retries 1 \
   --enforce-json-schema
 ```
+
+Example open-ended judge run (Codex answers, Claude judge; Django) on 2026-02-10:
+- Prompts report: `benchmark/runs/20260210-160641Z-llm-ab-prompts-django.json` (tasks_total=18; budget_tokens=2000)
+- Run report: `benchmark/runs/20260210-161458Z-llm-ab-run-judge-open-ended.json` (`--trials 3`, `--judge-retries 1`)
+- Key results (judge win_rate_tldr_over_rg; ties=0.5):
+- Overall: `0.556`
+- Impact: `0.833`
+- Data flow: `0.600`
+- Slice: `0.286` (slice remains the main weakness in open-ended judge mode)
+- `judge_bad_json`: `0`
