@@ -288,7 +288,20 @@ def _slice_context_tldr_plus_code(
     budget_tokens: int,
 ) -> tuple[str, int, int]:
     abs_path = repo_root / file_rel
-    src = abs_path.read_text(encoding="utf-8", errors="replace")
+    try:
+        src = abs_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        payload0 = json.dumps(
+            {
+                "file": file_rel,
+                "function": function,
+                "target_line": int(target_line),
+                "error": "unreadable",
+            },
+            sort_keys=True,
+        )
+        return payload0, int(count_tokens(payload0)), len(payload0.encode("utf-8"))
+
     lines = src.splitlines()
     span = bte._python_find_def_span(lines, function_name=function)
     if span is not None:
@@ -297,6 +310,8 @@ def _slice_context_tldr_plus_code(
         lo, hi = (1, len(lines))
     lo = max(1, int(lo))
     hi = min(int(hi), len(lines))
+    target_line = max(int(lo), min(int(hi), int(target_line)))
+
     tldr_lines = sorted(
         {
             int(x)
@@ -311,55 +326,321 @@ def _slice_context_tldr_plus_code(
         }
     )
 
-    # Open-ended tasks benefit from a small code window around each slice-selected line,
-    # not just the exact line itself.
-    window_radius = 3
-    selected: list[int] = []
-    code_text = ""
-    by_distance = sorted(tldr_lines, key=lambda x: (abs(int(x) - int(target_line)), x))
-    for ln in by_distance:
-        cand_lines = sorted({*selected, int(ln), int(target_line)})
-        cand_lines = [int(x) for x in cand_lines if lo <= int(x) <= hi]
-        windows = [(int(lo), min(int(hi), int(lo) + 3))]
-        windows.extend(
-            [
-                (max(int(lo), int(x) - int(window_radius)), min(int(hi), int(x) + int(window_radius)))
-                for x in cand_lines
-            ]
-        )
-        merged = bte._merge_windows(windows)
-        code_pieces = [bte._render_code_block(file_rel, start=s, end=e, lines=lines) for s, e in merged]
-        code2 = "\n\n".join([p for p in code_pieces if p.strip()])
-        payload2 = json.dumps(
-            {
-                "file": file_rel,
-                "function": function,
-                "target_line": int(target_line),
-                "slice_lines": cand_lines,
-                "code_window_radius": int(window_radius),
-            },
-            sort_keys=True,
-        )
-        if code2:
-            payload2 += "\n\n" + code2
-        if int(count_tokens(payload2)) > budget_tokens:
-            continue
-        selected = cand_lines
-        code_text = code2
-
-    payload = json.dumps(
-        {
-            "file": file_rel,
-            "function": function,
-            "target_line": int(target_line),
-            "slice_lines": selected,
-            "code_window_radius": int(window_radius),
-        },
-        sort_keys=True,
+    # Open-ended slice tasks often need control-flow continuity. Pack context as:
+    # - one large contiguous "target window" around target_line (rg-style)
+    # - plus extra, budgeted small windows around slice-selected lines outside that window
+    # This tends to keep explanations grounded while still surfacing remote dependencies.
+    meta, code_text = _pack_open_ended_slice_context(
+        file_rel=file_rel,
+        lines=lines,
+        function=function,
+        span=(lo, hi),
+        target_line=int(target_line),
+        slice_lines=tldr_lines,
+        budget_tokens=int(budget_tokens),
     )
+
+    payload = json.dumps(meta, sort_keys=True)
     if code_text:
         payload += "\n\n" + code_text
     return payload, int(count_tokens(payload)), len(payload.encode("utf-8"))
+
+
+def _line_in_windows(windows: list[tuple[int, int]], line: int) -> bool:
+    for s, e in windows:
+        if int(s) <= int(line) <= int(e):
+            return True
+    return False
+
+
+_CALL_NAME_RE = re.compile(r"(?<![A-Za-z0-9_.])(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*\(")
+_CLASS_DEF_RE = re.compile(r"^(?P<indent>\s*)class\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\b")
+
+
+def _indent_width(s: str) -> int:
+    return len(s[: len(s) - len(s.lstrip())].expandtabs(4))
+
+
+def _python_find_class_span(lines: list[str], *, class_name: str) -> tuple[int, int] | None:
+    """Best-effort (start_line, end_line) for a top-level class by name using indentation heuristics."""
+    start_cls: int | None = None
+    cls_indent: int | None = None
+    for i, line in enumerate(lines, start=1):
+        m = _CLASS_DEF_RE.match(line)
+        if not m:
+            continue
+        if m.group("name") != class_name:
+            continue
+        start_cls = i
+        cls_indent = _indent_width(m.group("indent"))
+        break
+
+    if start_cls is None or cls_indent is None:
+        return None
+
+    start = start_cls
+    end = len(lines)
+    for k in range(start_cls + 1, len(lines) + 1):
+        ln = lines[k - 1]
+        if not ln.strip():
+            continue
+        if bte._DEF_RE.match(ln) or _CLASS_DEF_RE.match(ln):
+            if _indent_width(ln) <= cls_indent:
+                end = k - 1
+                break
+    while end > start_cls and not lines[end - 1].strip():
+        end -= 1
+    end = max(end, start_cls)
+    return start, end
+
+
+def _extract_call_names_from_windows(
+    *, lines: list[str], windows: list[tuple[int, int]], target_line: int, line_filter: set[int] | None = None
+) -> dict[str, int]:
+    """Return name -> min abs(line - target_line) for unqualified call names in windows."""
+    out: dict[str, int] = {}
+    for s, e in windows:
+        for ln in range(int(s), int(e) + 1):
+            if not (1 <= int(ln) <= len(lines)):
+                continue
+            if line_filter is not None and int(ln) not in line_filter:
+                continue
+            text = lines[int(ln) - 1]
+            if text.lstrip().startswith("#"):
+                continue
+            # Drop inline comments (best-effort; doesn't attempt to handle "#" inside strings).
+            if "#" in text:
+                text = text.split("#", 1)[0]
+            for m in _CALL_NAME_RE.finditer(text):
+                name = m.group("name")
+                dist = abs(int(ln) - int(target_line))
+                prev = out.get(name)
+                if prev is None or dist < prev:
+                    out[name] = dist
+    return out
+
+
+def _add_related_definitions(
+    *,
+    file_rel: str,
+    lines: list[str],
+    function_span: tuple[int, int],
+    windows: list[tuple[int, int]],
+    target_line: int,
+    budget_tokens: int,
+    meta: dict[str, Any],
+    code_text: str,
+) -> tuple[dict[str, Any], str]:
+    """Append same-file def/class snippets for call targets referenced in windows, if budget allows."""
+    base_payload = json.dumps(meta, sort_keys=True)
+    if code_text:
+        base_payload += "\n\n" + code_text
+    base_tokens = int(count_tokens(base_payload))
+    if base_tokens >= int(budget_tokens):
+        return meta, code_text
+
+    line_filter: set[int] | None = None
+    slice_lines = meta.get("slice_lines")
+    if isinstance(slice_lines, list) and all(isinstance(x, int) for x in slice_lines):
+        line_filter = {int(x) for x in slice_lines}
+    call_dists = _extract_call_names_from_windows(
+        lines=lines,
+        windows=windows,
+        target_line=int(target_line),
+        line_filter=line_filter,
+    )
+    # Stable priority: closest reference to target_line first, then name.
+    candidates = sorted(call_dists.items(), key=lambda kv: (int(kv[1]), str(kv[0])))
+
+    related: list[dict[str, Any]] = []
+    extra_blocks: list[str] = []
+
+    lo, hi = function_span
+    max_related = 4
+    for name, _dist in candidates:
+        if len(related) >= max_related:
+            break
+
+        # Prefer top-level defs/classes only, and avoid the current function span.
+        span = bte._python_find_def_span(lines, function_name=str(name))
+        kind = "def"
+        if span is None:
+            span = _python_find_class_span(lines, class_name=str(name))
+            kind = "class"
+        if span is None:
+            continue
+        s, e = span
+        if int(lo) <= int(s) <= int(hi):
+            continue
+        if _line_in_windows(windows, int(s)) or _line_in_windows(windows, int(e)):
+            continue
+
+        # Cap very large defs/classes; include start + end slices.
+        max_lines = 80
+        spans: list[tuple[int, int]] = [(int(s), int(e))]
+        if int(e) - int(s) + 1 > int(max_lines):
+            head = (int(s), min(int(e), int(s) + 39))
+            tail = (max(int(s), int(e) - 19), int(e))
+            spans = bte._merge_windows([head, tail])
+
+        blocks = [bte._render_code_block(file_rel, start=ss, end=ee, lines=lines) for ss, ee in spans]
+        piece = "\n\n".join([b for b in blocks if b.strip()])
+        if not piece:
+            continue
+
+        # Greedy budget add: update meta + append blocks if the whole payload still fits.
+        cand_related = [*related, {"name": str(name), "kind": kind, "start": int(s), "end": int(e)}]
+        meta2 = dict(meta)
+        meta2["related_definitions"] = cand_related
+        payload2 = json.dumps(meta2, sort_keys=True)
+        if code_text:
+            payload2 += "\n\n" + code_text
+        if extra_blocks:
+            payload2 += "\n\n" + "\n\n".join(extra_blocks)
+        payload2 += "\n\n" + piece
+        if int(count_tokens(payload2)) > int(budget_tokens):
+            continue
+
+        related = cand_related
+        extra_blocks.append(piece)
+
+    if related:
+        meta3 = dict(meta)
+        meta3["related_definitions"] = related
+        if extra_blocks:
+            code_text = (code_text + "\n\n" if code_text else "") + "\n\n".join(extra_blocks)
+        return meta3, code_text
+
+    return meta, code_text
+
+
+def _pack_open_ended_slice_context(
+    *,
+    file_rel: str,
+    lines: list[str],
+    function: str,
+    span: tuple[int, int] | None,
+    target_line: int,
+    slice_lines: list[int],
+    budget_tokens: int,
+) -> tuple[dict[str, Any], str]:
+    window_radius = 3
+    lo = 1
+    hi = len(lines)
+    if span is not None:
+        lo, hi = span
+    lo = max(1, int(lo))
+    hi = min(int(hi), len(lines))
+    target_line = max(int(lo), min(int(hi), int(target_line)))
+
+    # Ensure target_line always appears in the slice line set.
+    slice_all = sorted({int(target_line), *[int(x) for x in slice_lines]})
+    slice_all = [int(x) for x in slice_all if int(lo) <= int(x) <= int(hi)]
+    by_distance = sorted(slice_all, key=lambda x: (abs(int(x) - int(target_line)), int(x)))
+
+    # A tiny header helps the model keep track of the function signature and any decorators/docstring.
+    header_window = (int(lo), min(int(hi), int(lo) + 3))
+
+    # Prefer the largest contiguous target window that still leaves room for at least one extra slice window
+    # (when there are slice lines outside the target window).
+    best_fallback_meta: dict[str, Any] | None = None
+    best_fallback_code = ""
+    fractions = [1.0, 0.9, 0.8, 0.7, 0.6, 0.5]
+    for frac in fractions:
+        base_budget = max(0, int(int(budget_tokens) * float(frac)))
+        _, _, base_win = bte._select_window_within_span(
+            file_rel=file_rel,
+            lines=lines,
+            span=(int(lo), int(hi)),
+            target_line=int(target_line),
+            budget_tokens=int(base_budget),
+        )
+        # Even the target window didn't fit; try a smaller one.
+        if not isinstance(base_win, dict) or "start" not in base_win or "end" not in base_win:
+            continue
+
+        fixed_windows = bte._merge_windows(
+            [header_window, (int(base_win["start"]), int(base_win["end"]))]  # type: ignore[arg-type]
+        )
+        extra_windows: list[tuple[int, int]] = []
+
+        def build(extra: list[tuple[int, int]]) -> tuple[dict[str, Any], str, list[tuple[int, int]]]:
+            all_windows = bte._merge_windows([*fixed_windows, *extra])
+            code_pieces = [bte._render_code_block(file_rel, start=s, end=e, lines=lines) for s, e in all_windows]
+            code = "\n\n".join([p for p in code_pieces if p.strip()])
+            included_slice = [int(x) for x in slice_all if _line_in_windows(all_windows, int(x))]
+            meta = {
+                "file": file_rel,
+                "function": function,
+                "target_line": int(target_line),
+                "slice_lines": included_slice,
+                "target_window": {"start": int(base_win["start"]), "end": int(base_win["end"])},
+                "slice_window_radius": int(window_radius),
+                "extra_windows": [{"start": int(s), "end": int(e)} for s, e in extra],
+                "strategy": "target_window_plus_slice_windows",
+            }
+            return meta, code, all_windows
+
+        meta0, code0, _all0 = build(extra_windows)
+        payload0 = json.dumps(meta0, sort_keys=True)
+        if code0:
+            payload0 += "\n\n" + code0
+        if int(count_tokens(payload0)) > int(budget_tokens):
+            # Shrink the target window (try a smaller fraction).
+            continue
+
+        # Greedily add windows around slice-selected lines that are outside the current windows.
+        for ln in by_distance:
+            _, _, all_cur = build(extra_windows)
+            if _line_in_windows(all_cur, int(ln)):
+                continue
+            w = (max(int(lo), int(ln) - int(window_radius)), min(int(hi), int(ln) + int(window_radius)))
+            cand_extra = bte._merge_windows([*extra_windows, w])
+            meta2, code2, _all2 = build(cand_extra)
+            payload2 = json.dumps(meta2, sort_keys=True)
+            if code2:
+                payload2 += "\n\n" + code2
+            if int(count_tokens(payload2)) > int(budget_tokens):
+                continue
+            extra_windows = cand_extra
+
+        meta_final, code_final, all_final = build(extra_windows)
+
+        meta_final, code_final = _add_related_definitions(
+            file_rel=file_rel,
+            lines=lines,
+            function_span=(int(lo), int(hi)),
+            windows=all_final,
+            target_line=int(target_line),
+            budget_tokens=int(budget_tokens),
+            meta=meta_final,
+            code_text=code_final,
+        )
+
+        # Record a fallback even if we couldn't fit any extra windows.
+        if best_fallback_meta is None:
+            best_fallback_meta = meta_final
+            best_fallback_code = code_final
+
+        # If there are slice lines outside the fixed windows, prefer a fraction that can include at least
+        # one extra window. Otherwise, keep the largest target window possible (earliest fraction).
+        needs_extras = any(not _line_in_windows(fixed_windows, int(ln)) for ln in slice_all)
+        has_extras = bool(meta_final.get("extra_windows"))
+        if not needs_extras or has_extras:
+            return meta_final, code_final
+
+    # Worst case: emit a minimal, budget-respecting payload.
+    if best_fallback_meta is not None:
+        return best_fallback_meta, best_fallback_code
+
+    meta_min = {
+        "file": file_rel,
+        "function": function,
+        "target_line": int(target_line),
+        "slice_lines": [int(target_line)],
+        "strategy": "target_window_plus_slice_windows",
+    }
+    return meta_min, ""
 
 
 def _slice_context_rg(

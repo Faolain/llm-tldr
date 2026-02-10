@@ -5,6 +5,24 @@
 - Last updated: 2026-02-10
 - Source: `specs/006-benchmarking-retrieval-quality.md`
 
+## Next Steps (Recommended Order)
+
+1. Phase 7: lock open-ended slice context packing + validate on the full open-ended judge suite.
+Latest slice-only judge win_rate_tldr_over_rg = `0.548` at `budget_tokens=2000` (7 slice tasks, `--trials 3`; report: `benchmark/runs/20260210-190944Z-llm-ab-run-judge.json`).
+Next: rerun the full open-ended judge suite to refresh headline numbers, then rerun slice-only at tighter budgets (`1000`/`500`) to test the “advantage under tight budgets” claim.
+
+2. Phase 6: multi-step scoring refinement.
+Update Phase 6 to score/attribute tokens like a real workflow: small structured selector output + targeted code materialization (aligned with how we’re packing open-ended context anyway).
+
+3. Phase 8: SWE-bench localization.
+Once Phase 7/6 are stable, start Phase 8 (SWE-bench Lite localization). This is the most credible external validation, but higher effort.
+
+### Goals (Slice)
+
+- Near-term: parity on slice (win_rate ≥ 0.5) under the same token budget (achieved on slice-only open-ended subset at `budget_tokens=2000`: `0.548` in `benchmark/runs/20260210-190944Z-llm-ab-run-judge.json`).
+- More meaningful: parity at `budget_tokens=2000`, and advantage at tighter budgets (`500`/`1000`) where `rg` can’t afford enough contiguous context, while TLDR can “spend” tokens on the right remote dependencies.
+- Stopping signal: if “large contiguous window around `target_line` + extra slice-line windows” still can’t get near parity, either slice isn’t the right tool for open-ended explanations (use it as a selector, but rely on contiguous context), or the underlying slice/PDG needs more control-dependence coverage for explanation-style tasks.
+
 ## Decisions & Assumptions (locked for this plan)
 
 - Primary goal is to answer (with data): **what can TLDRF do that `rg/grep` fundamentally cannot**, and if/where does it win materially on quality-per-token for realistic workflows.
@@ -725,6 +743,51 @@ Next step options:
   Next step options:
   - Improve open-ended `slice` TLDR context further by including a larger contiguous window around `target_line` (rg-style) *plus* budgeted merged windows around slice-selected lines (to capture nearby guard conditions/comments that the slice may omit), then rerun judge-mode and compare slice win-rate.
   - If Phase 7 is “good enough” after slice improvements: proceed to Phase 8 SWE-bench Lite localization harness (file-level localization metrics vs `rg` baselines).
+
+- 2026-02-10: Implemented the open-ended slice context packing improvement:
+  - `scripts/bench_llm_ab_prompts.py`: for open-ended `slice`, TLDR now includes a large contiguous target window around `target_line` (rg-style) plus extra, budgeted small windows around slice-selected lines outside that window.
+  - Added regression test: `tests/test_bench_llm_ab_prompts_slice_packing.py`.
+  Next step: regenerate the open-ended prompt packet and rerun judge-mode to see if slice win-rate moves toward parity (≥ 0.5).
+
+- 2026-02-10: Reran Phase 7 open-ended judge-mode on the **slice-only** subset after the packing change (Codex answers, Claude judge):
+  - prompts: `benchmark/llm/20260210-182428Z-llm-ab-django.jsonl` (filtered to `benchmark/llm/20260210-182428Z-llm-ab-django-slice.jsonl`)
+  - command shape:
+    - answer model: `--provider codex --model gpt-5.3-codex --codex-reasoning-effort medium`
+    - judge model: `--judge-provider claude_sdk --judge-model claude-sonnet-4-5-20250929 --enforce-json-schema`
+    - `--mode judge --timeout-s 180 --judge-timeout-s 180 --trials 1`
+  - report: `benchmark/runs/20260210-183145Z-llm-ab-run-judge.json`
+  - answers+jury: `benchmark/llm/20260210-183145Z-llm-ab-answers-judge.jsonl`
+  - key result (7 slice tasks): slice judge win_rate_tldr_over_rg = `0.429` (up from `0.286` in `benchmark/runs/20260210-161458Z-llm-ab-run-judge-open-ended.json`, noting that baseline was `--trials 3`).
+  Next step: rerun slice-only with `--trials 3` for a more stable estimate, then rerun the full open-ended suite if the slice delta holds.
+
+- 2026-02-10: Reran the same slice-only subset with `--trials 3` for a stable estimate:
+  - report: `benchmark/runs/20260210-184049Z-llm-ab-run-judge.json`
+  - answers+jury: `benchmark/llm/20260210-184049Z-llm-ab-answers-judge.jsonl`
+  - key result (7 slice tasks): slice judge win_rate_tldr_over_rg = `0.381` (baseline: `0.286` in `benchmark/runs/20260210-161458Z-llm-ab-run-judge-open-ended.json`).
+  - per-task win_mean_tldr_over_rg:
+    - `OE05`: 0.333 (was 0.5)
+    - `OE06`: 0.5 (was 0.0)
+    - `OE07`: 0.0 (unchanged)
+    - `OE08`: 0.5 (unchanged)
+    - `OE15`: 0.333 (unchanged)
+    - `OE16`: 0.667 (was 0.333)
+    - `OE17`: 0.333 (unchanged)
+  Next step: decide whether to keep iterating slice context packing to push toward parity (≥ 0.5), or run the full open-ended suite to refresh headline numbers.
+
+- 2026-02-10: Added “related definitions” snippet packing for open-ended slice (same-file `def`/`class` snippets referenced by slice lines) and reran slice-only judge-mode:
+  - prompts: `benchmark/llm/20260210-190631Z-llm-ab-django.jsonl` (filtered to `benchmark/llm/20260210-190631Z-llm-ab-django-slice.jsonl`)
+  - report: `benchmark/runs/20260210-190944Z-llm-ab-run-judge.json`
+  - answers+jury: `benchmark/llm/20260210-190944Z-llm-ab-answers-judge.jsonl`
+  - key result (7 slice tasks): slice judge win_rate_tldr_over_rg = `0.548` (baseline: `0.286` in `benchmark/runs/20260210-161458Z-llm-ab-run-judge-open-ended.json`; previous best: `0.381` in `benchmark/runs/20260210-184049Z-llm-ab-run-judge.json`).
+  - per-task win_mean_tldr_over_rg:
+    - `OE05`: 1.0
+    - `OE06`: 0.333
+    - `OE07`: 0.167
+    - `OE08`: 0.167
+    - `OE15`: 1.0
+    - `OE16`: 0.833
+    - `OE17`: 0.333
+  Next step: rerun the full open-ended suite to refresh headline numbers using this packing (then evaluate tighter budgets for slice-only).
 
 - 2026-02-10: Expanded Phase 7 task suites beyond structural-only:
   - Added a deterministic retrieval-type suite: `benchmarks/llm/retrieval_tasks.json` (expected file paths from `benchmarks/retrieval/django_queries.json`).
