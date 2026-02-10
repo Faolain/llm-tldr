@@ -787,6 +787,11 @@ Next step options:
   - Add **open-ended debugging/refactor tasks** that require the judge path above.
   - Add additional experimental conditions (beyond rg vs TLDR) and tabulate results per category and per model (Codex vs Claude).
 
+- Future: GEPA prompt optimization (for Phase 7 open-ended judge):
+  - Scope: use GEPA (reflective evolutionary, Pareto-style prompt tuning) to optimize prompt + context-format knobs (e.g. slice/DFG window sizes/ordering + instructions), not just wording.
+  - Objectives: improve judge win-rate / score means while reducing context tokens (Pareto frontier over quality vs cost).
+  - Guardrails: train/holdout task split; keep judge prompt fixed (or use multiple judges); report only holdout deltas to avoid overfitting/judge-hacking.
+
 ## Phase 8: SWE-bench Validation (Future)
 
 **Goals**
