@@ -423,8 +423,12 @@ class PythonCFGBuilder(ast.NodeVisitor):
         true_block = self.new_block("body", if_body_start, if_body_end)
         self.add_edge(branch_block_id, true_block.id, "true", condition)
 
-        # Create after-if block for merging
-        after_if = self.new_block("body", node.end_lineno or node.lineno)
+        # Create after-if block for merging. Start after the full if-statement
+        # span to avoid overlapping line ranges with the branch bodies.
+        after_if = self.new_block(
+            "body",
+            (getattr(node, "end_lineno", None) or node.lineno) + 1,
+        )
 
         # Process true branch
         self.current_block = true_block
@@ -472,8 +476,12 @@ class PythonCFGBuilder(ast.NodeVisitor):
 
         condition = self._get_condition_str(node.test)
 
-        # Create after-loop block
-        after_loop = self.new_block("body", node.end_lineno or node.lineno)
+        # Create after-loop block. Start after the full loop statement span to
+        # avoid overlapping line ranges with the loop body.
+        after_loop = self.new_block(
+            "body",
+            (getattr(node, "end_lineno", None) or node.lineno) + 1,
+        )
 
         # Track for break/continue
         self.loop_guard_stack.append(guard.id)
@@ -524,8 +532,12 @@ class PythonCFGBuilder(ast.NodeVisitor):
         if self.current_block:
             self.add_edge(self.current_block.id, guard.id, "unconditional")
 
-        # Create after-loop block
-        after_loop = self.new_block("body", node.end_lineno or node.lineno)
+        # Create after-loop block. Start after the full loop statement span to
+        # avoid overlapping line ranges with the loop body.
+        after_loop = self.new_block(
+            "body",
+            (getattr(node, "end_lineno", None) or node.lineno) + 1,
+        )
 
         # Track for break/continue
         self.loop_guard_stack.append(guard.id)
@@ -570,28 +582,71 @@ class PythonCFGBuilder(ast.NodeVisitor):
         """Handle return statements - marks exit block."""
         if self.current_block:
             self.current_block.block_type = "return"
-            self.current_block.end_line = node.lineno
+            self.current_block.end_line = getattr(node, "end_lineno", None) or node.lineno
             self.exit_block_ids.append(self.current_block.id)
 
-        # Create unreachable block for any code after return
-        self.current_block = self.new_block("body", node.lineno)
+        # Stop the current flow path. Code after return in the same branch is unreachable.
+        self.current_block = None
+
+    def visit_Raise(self, node: ast.Raise):
+        """Handle raise statements - marks exit block (function does not continue)."""
+        if self.current_block:
+            self.current_block.block_type = "return"
+            self.current_block.end_line = getattr(node, "end_lineno", None) or node.lineno
+            self.exit_block_ids.append(self.current_block.id)
+
+        # Stop the current flow path. Code after raise in the same branch is unreachable.
+        self.current_block = None
+
+    def visit_Assert(self, node: ast.Assert):
+        """Handle assert statements as a branch: false path exits via AssertionError."""
+        # Track decision point for complexity
+        self.decision_points += 1
+
+        # Current block becomes branch block
+        if self.current_block:
+            self.current_block.block_type = "branch"
+            self.current_block.end_line = node.lineno
+            branch_block_id = self.current_block.id
+        else:
+            branch = self.new_block("branch", node.lineno)
+            branch_block_id = branch.id
+
+        condition = self._get_condition_str(node.test)
+
+        # False path exits (implicit AssertionError). Use a synthetic exit block
+        # with line range 0..0 so it never captures real statement lines.
+        assert_fail = self.new_block("exit", 0, 0)
+        self.exit_block_ids.append(assert_fail.id)
+        self.add_edge(branch_block_id, assert_fail.id, "false", f"not ({condition})")
+
+        # True path continues after assert.
+        after_assert = self.new_block("body", (getattr(node, "end_lineno", None) or node.lineno) + 1)
+        self.add_edge(branch_block_id, after_assert.id, "true", condition)
+        self.current_block = after_assert
 
     def visit_Break(self, node: ast.Break):
         """Handle break - edge to after-loop block."""
         if self.after_loop_stack and self.current_block:
             self.add_edge(self.current_block.id, self.after_loop_stack[-1], "break")
-            # Create unreachable block for any code after break
-            self.current_block = self.new_block("body", node.lineno)
+            # Stop the current flow path in this branch.
+            self.current_block = None
 
     def visit_Continue(self, node: ast.Continue):
         """Handle continue - edge to loop guard."""
         if self.loop_guard_stack and self.current_block:
             self.add_edge(self.current_block.id, self.loop_guard_stack[-1], "continue")
-            # Create unreachable block for any code after continue
-            self.current_block = self.new_block("body", node.lineno)
+            # Stop the current flow path in this branch.
+            self.current_block = None
 
     def generic_visit(self, node: ast.AST):
         """Visit children for compound statements we don't handle specially."""
+        # Expand current basic block to cover non-control-flow statements so
+        # line->block mapping works for DFG/PDG (and downstream slicing).
+        if isinstance(node, ast.stmt) and self.current_block:
+            end_line = getattr(node, "end_lineno", None) or getattr(node, "lineno", None)
+            if isinstance(end_line, int):
+                self.current_block.end_line = max(self.current_block.end_line, end_line)
         for child in ast.iter_child_nodes(node):
             if isinstance(child, ast.stmt):
                 self.visit(child)

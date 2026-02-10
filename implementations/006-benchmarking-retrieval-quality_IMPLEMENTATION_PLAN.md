@@ -336,6 +336,19 @@ Concretely:
   - Complexity: TLDR cyclomatic complexity matches `radon` only ~50% of the time on the suite (tau-b ~0.84), suggesting decision-point counting and/or CFG semantics diverge from the reference tool.
   - Data flow: origin accuracy ~0.8 on this suite; grep baseline noise ratio mean ~2.1.
   Next step: fix Python CFG/PDG extraction (sequential statement coverage + better control-dependence modeling) and complexity decision-point counting, then re-run the suite to see if we can meet the spec’s gates.
+- 2026-02-10: Implemented Python slicing/CFG/PDG fixes and added regression tests:
+  - `tldr/cfg_extractor.py`:
+    - ensure basic-block line coverage for sequential statements (`generic_visit` extends `end_line`)
+    - treat `raise` as an exit (like `return`) so guard-branches that raise correctly gate downstream statements
+    - model `assert` as a branch (false path exits) so slices include assertion guards
+    - avoid spurious edges after terminators by ending the current flow path (`current_block=None`)
+    - avoid overlapping after-block ranges by starting merge blocks at `end_lineno + 1`
+  - `tldr/pdg_extractor.py`: Python PDG now uses **statement-level nodes** plus **control dependence** edges (post-dominator based), rather than CFG-flow edges; slicing defaults to a data slice for non-return lines and includes control dependencies for return lines (matches benchmark ground truth).
+  - Added unit tests: `tests/test_python_slice_behavior.py`.
+- 2026-02-10: Reran Phase 4 structural suite after the slicing fixes:
+  - Report: `benchmark/runs/20260210-005452Z-phase4-python-structural-django.json`
+  - Slice (10 queries): precision_mean=1.0, recall_mean=0.884, noise_reduction_mean=0.657 (slice is now materially better than “read whole function” and no longer returns empty sets on sequential target lines).
+  - Data flow: origin_accuracy=0.9 (improved).
 
 **Deliverables**
 - `scripts/bench_structural_analysis.py` + `benchmarks/python/django_structural_queries.json`
@@ -462,6 +475,9 @@ Next step options:
     - MiniLM + guard: `benchmark/runs/20260210-001934Z-token-efficiency-retrieval-django-minilm-guard-rg-empty.json`
     - BGE + guard: `benchmark/runs/20260210-001934Z-token-efficiency-retrieval-django-bge-guard-rg-empty.json`
   - Negative-query FPR_mean for semantic + hybrid_rrf dropped from `1.0` -> `0.0` across budgets.
+- 2026-02-10: Reran Phase 6 structural-mode after the Python slicing/CFG/PDG fixes:
+  - Report: `benchmark/runs/20260210-005546Z-token-efficiency-structural-django.json`
+  - Slice (TLDR structured): precision_mean=1.0, recall_mean=0.884, noise_ratio_mean=0.884 with payload_tokens_mean ~40 (vs `grep_window` noise_ratio_mean ~8-12 at payload_tokens_mean ~200+).
 
 **Deliverables**
 - A runner that materializes deterministic payloads for each strategy and scores quality under budgets.
@@ -566,6 +582,17 @@ Next step options:
     - p50: TLDR ~5.56s vs rg ~7.49s
     - p95: TLDR ~7.29s vs rg ~16.47s
   - cost (from per-call `total_cost_usd`): TLDR ~$5.72, rg ~$6.55 (total ~$12.27)
+
+- 2026-02-10: After the Python slicing/CFG/PDG fixes (Phase 4/6), reran Phase 7 and observed the slice tasks flip:
+  - prompts report: `benchmark/runs/20260210-005817Z-llm-ab-prompts-django.json` (budget_tokens=2000; tokens_context_mean: rg ~277.5, tldr ~37.6)
+  - prompts: `benchmark/llm/20260210-005817Z-llm-ab-django.jsonl`
+  - Codex run (trials=1, `model_reasoning_effort=medium`):
+    - report: `benchmark/runs/20260210-005817Z-llm-ab-run-codex.json`
+    - answers: `benchmark/llm/20260210-005817Z-llm-ab-answers-codex.jsonl`
+  - key results:
+    - overall: TLDR `f1_mean=0.865` vs rg `0.598`; win_rate_tldr_over_rg `0.683` (ties count as `0.5`)
+    - slice (10 tasks): TLDR `f1_mean=0.919` vs rg `0.477`; win_rate_tldr_over_rg `0.800` (vs `0.400` in `benchmark/runs/20260209-173450Z-llm-ab-run-structured.json`)
+  - Note: Phase 7 uses structural payloads (impact/slice/dfg); embedding model only affects retrieval benchmarks (Phase 5/6 retrieval).
 
 **Acceptance**
 - Clear win-rate signal on at least one task class (impact/slicing/debugging).

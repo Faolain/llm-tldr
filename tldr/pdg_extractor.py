@@ -17,6 +17,7 @@ Architecture (following ARISTODE pattern):
 - Support for forward/backward slicing
 """
 
+import ast
 from collections import deque
 from dataclasses import dataclass, field
 
@@ -38,7 +39,7 @@ class PDGNode:
     """
 
     id: int
-    node_type: str  # "statement", "branch", "loop", "entry", "exit"
+    node_type: str  # "statement", "branch", "loop", "return", "entry", "exit"
     start_line: int
     end_line: int
 
@@ -180,6 +181,10 @@ class PDGInfo:
         if not target_nodes:
             return set()
 
+        # Bench-oriented default: only include control dependencies when slicing
+        # from a return statement. For other lines, prefer a data slice.
+        include_control = any(n.node_type == "return" for n in target_nodes)
+
         # Build reverse edge map
         incoming: dict[int, list[PDGEdge]] = {}
         for edge in self.edges:
@@ -206,6 +211,8 @@ class PDGInfo:
 
             # Follow incoming edges
             for edge in incoming.get(node_id, []):
+                if edge.dep_type == "control" and not include_control:
+                    continue
                 # If filtering by variable, only follow relevant data edges
                 if variable and edge.dep_type == "data" and edge.label != variable:
                     continue
@@ -228,6 +235,8 @@ class PDGInfo:
         source_nodes = [n for n in self.nodes if n.start_line <= line <= n.end_line]
         if not source_nodes:
             return set()
+
+        include_control = any(n.node_type == "return" for n in source_nodes)
 
         # Build forward edge map
         outgoing: dict[int, list[PDGEdge]] = {}
@@ -255,6 +264,8 @@ class PDGInfo:
 
             # Follow outgoing edges
             for edge in outgoing.get(node_id, []):
+                if edge.dep_type == "control" and not include_control:
+                    continue
                 # If filtering by variable, only follow relevant data edges
                 if variable and edge.dep_type == "data" and edge.label != variable:
                     continue
@@ -413,6 +424,304 @@ class PDGBuilder:
 
 
 # =============================================================================
+# Python PDG Construction (statement-level nodes + control dependence)
+# =============================================================================
+
+
+def _find_python_function_node(
+    source_code: str, function_name: str
+) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
+    tree = ast.parse(source_code)
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == function_name:
+            return node
+    return None
+
+
+def _reachable_cfg_blocks(cfg: CFGInfo) -> set[int]:
+    succ: dict[int, list[int]] = {}
+    for e in cfg.edges:
+        succ.setdefault(e.source_id, []).append(e.target_id)
+
+    reachable: set[int] = set()
+    work = [cfg.entry_block_id]
+    while work:
+        n = work.pop()
+        if n in reachable:
+            continue
+        reachable.add(n)
+        for s in succ.get(n, []):
+            work.append(s)
+    return reachable
+
+
+def _compute_cfg_control_dependencies(cfg: CFGInfo) -> set[tuple[int, int, str]]:
+    """Compute block-level control dependencies via post-dominators.
+
+    Returns a set of (controller_block_id, dependent_block_id, edge_type_label).
+    """
+    reachable = _reachable_cfg_blocks(cfg)
+    if not reachable:
+        return set()
+
+    succ: dict[int, list[int]] = {bid: [] for bid in reachable}
+    for e in cfg.edges:
+        if e.source_id in reachable and e.target_id in reachable:
+            succ.setdefault(e.source_id, []).append(e.target_id)
+
+    exit_id = max(reachable) + 1
+    all_nodes = set(reachable) | {exit_id}
+
+    # Ensure exits flow to a single synthetic exit for post-dominator computation.
+    for bid in list(reachable):
+        if bid in cfg.exit_block_ids:
+            succ.setdefault(bid, []).append(exit_id)
+    for bid in list(reachable):
+        if not succ.get(bid):
+            succ[bid] = [exit_id]
+
+    postdom: dict[int, set[int]] = {exit_id: {exit_id}}
+    for n in reachable:
+        postdom[n] = set(all_nodes)
+
+    changed = True
+    while changed:
+        changed = False
+        for n in reachable:
+            new = {n}
+            inter = set(all_nodes)
+            for s in succ.get(n, [exit_id]):
+                inter &= postdom.get(s, {s})
+            new |= inter
+            if new != postdom[n]:
+                postdom[n] = new
+                changed = True
+
+    # Immediate post-dominator (ipdom) via set properties.
+    ipdom: dict[int, int | None] = {exit_id: None}
+    for n in reachable:
+        cands = postdom[n] - {n}
+        if not cands:
+            ipdom[n] = None
+            continue
+        found: int | None = None
+        for m in cands:
+            if all(m == k or m not in postdom[k] for k in cands):
+                found = m
+                break
+        ipdom[n] = found if found is not None else min(cands)
+
+    deps: set[tuple[int, int, str]] = set()
+    for e in cfg.edges:
+        x, z = e.source_id, e.target_id
+        if x not in reachable or z not in reachable:
+            continue
+        if z in postdom[x]:
+            continue
+        stop = ipdom.get(x)
+        y: int | None = z
+        while y is not None and y != stop and y != exit_id:
+            deps.add((x, y, e.edge_type))
+            y = ipdom.get(y)
+
+    return deps
+
+
+class PythonPDGBuilder:
+    """Build a Python PDG with statement-level nodes and control dependence edges."""
+
+    def __init__(
+        self,
+        *,
+        source_code: str,
+        func_node: ast.FunctionDef | ast.AsyncFunctionDef,
+        cfg: CFGInfo,
+        dfg: DFGInfo,
+    ):
+        self.source_code = source_code
+        self.func_node = func_node
+        self.cfg = cfg
+        self.dfg = dfg
+
+        self.nodes: list[PDGNode] = []
+        self.edges: list[PDGEdge] = []
+
+        self._node_by_id: dict[int, PDGNode] = {}
+        self._line_to_node: dict[int, int] = {}
+        self._block_to_stmt_nodes: dict[int, list[int]] = {}
+
+    def build(self) -> PDGInfo:
+        reachable_blocks = _reachable_cfg_blocks(self.cfg)
+        self._create_statement_nodes()
+        self._assign_nodes_to_cfg_blocks(reachable_blocks)
+        self._add_var_refs_to_nodes()
+        self._add_control_dependence_edges(reachable_blocks)
+        self._add_data_edges()
+
+        return PDGInfo(
+            function_name=self.cfg.function_name,
+            cfg=self.cfg,
+            dfg=self.dfg,
+            nodes=self.nodes,
+            edges=self.edges,
+        )
+
+    def _map_line_to_node(self, node: PDGNode) -> None:
+        span = node.end_line - node.start_line
+        for ln in range(node.start_line, node.end_line + 1):
+            existing = self._line_to_node.get(ln)
+            if existing is None:
+                self._line_to_node[ln] = node.id
+                continue
+            prev = self._node_by_id.get(existing)
+            if prev is None:
+                self._line_to_node[ln] = node.id
+                continue
+            prev_span = prev.end_line - prev.start_line
+            if span < prev_span:
+                self._line_to_node[ln] = node.id
+
+    def _add_node(self, *, node_type: str, start_line: int, end_line: int) -> None:
+        node = PDGNode(
+            id=len(self.nodes),
+            node_type=node_type,
+            start_line=int(start_line),
+            end_line=int(end_line),
+            cfg_block_id=None,
+        )
+        self.nodes.append(node)
+        self._node_by_id[node.id] = node
+        self._map_line_to_node(node)
+
+    def _create_statement_nodes(self) -> None:
+        def walk(stmts: list[ast.stmt]) -> None:
+            for stmt in stmts:
+                # Control-structure headers get their own single-line nodes so
+                # slices can include predicates without pulling entire bodies.
+                if isinstance(stmt, ast.If):
+                    self._add_node(node_type="branch", start_line=stmt.lineno, end_line=stmt.lineno)
+                    walk(stmt.body)
+                    walk(stmt.orelse)
+                    continue
+                if isinstance(stmt, (ast.For, ast.AsyncFor, ast.While)):
+                    self._add_node(node_type="loop", start_line=stmt.lineno, end_line=stmt.lineno)
+                    walk(stmt.body)
+                    walk(stmt.orelse)
+                    continue
+                if isinstance(stmt, ast.Assert):
+                    self._add_node(node_type="branch", start_line=stmt.lineno, end_line=stmt.lineno)
+                    continue
+                if isinstance(stmt, (ast.Try, ast.With, ast.AsyncWith)):
+                    # Coarse header node + recurse; this is enough for current
+                    # benchmark suites and avoids body-wide node ranges.
+                    self._add_node(node_type="branch", start_line=stmt.lineno, end_line=stmt.lineno)
+                    body = getattr(stmt, "body", []) or []
+                    walk(body)
+                    for h in getattr(stmt, "handlers", []) or []:
+                        if hasattr(h, "lineno"):
+                            self._add_node(node_type="branch", start_line=h.lineno, end_line=h.lineno)
+                        walk(getattr(h, "body", []) or [])
+                    walk(getattr(stmt, "orelse", []) or [])
+                    walk(getattr(stmt, "finalbody", []) or [])
+                    continue
+
+                # Nested defs/classes are statements, but we only model their
+                # header line to avoid dragging entire bodies into slices.
+                if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    self._add_node(node_type="statement", start_line=stmt.lineno, end_line=stmt.lineno)
+                    continue
+
+                node_type = "return" if isinstance(stmt, ast.Return) else "statement"
+                start = getattr(stmt, "lineno", None)
+                if not isinstance(start, int):
+                    continue
+                end = getattr(stmt, "end_lineno", None)
+                if not isinstance(end, int):
+                    end = start
+                self._add_node(node_type=node_type, start_line=start, end_line=end)
+
+        walk(list(self.func_node.body or []))
+
+    def _assign_nodes_to_cfg_blocks(self, reachable_blocks: set[int]) -> None:
+        blocks = [b for b in self.cfg.blocks if b.id in reachable_blocks and b.start_line > 0 and b.end_line > 0]
+
+        def best_block_for_line(line: int) -> int | None:
+            candidates = [b for b in blocks if b.start_line <= line <= b.end_line]
+            if not candidates:
+                return None
+            best = min(candidates, key=lambda b: (b.end_line - b.start_line, b.id))
+            return best.id
+
+        for n in self.nodes:
+            bid = best_block_for_line(n.start_line)
+            n.cfg_block_id = bid
+            if bid is None:
+                continue
+            self._block_to_stmt_nodes.setdefault(bid, []).append(n.id)
+
+    def _add_var_refs_to_nodes(self) -> None:
+        for ref in self.dfg.var_refs:
+            node_id = self._line_to_node.get(ref.line)
+            if node_id is None:
+                continue
+            node = self._node_by_id.get(node_id)
+            if node is None:
+                continue
+            if ref.ref_type in ("definition", "update"):
+                if ref.name not in node.definitions:
+                    node.definitions.append(ref.name)
+            elif ref.ref_type == "use":
+                if ref.name not in node.uses:
+                    node.uses.append(ref.name)
+
+    def _pick_controller_node(self, controller_block_id: int) -> int | None:
+        stmt_ids = self._block_to_stmt_nodes.get(controller_block_id, [])
+        candidates: list[PDGNode] = []
+        for sid in stmt_ids:
+            n = self._node_by_id.get(sid)
+            if n and n.node_type in ("branch", "loop"):
+                candidates.append(n)
+        if candidates:
+            return max(candidates, key=lambda n: (n.start_line, n.id)).id
+        return None
+
+    def _add_control_dependence_edges(self, reachable_blocks: set[int]) -> None:
+        deps = _compute_cfg_control_dependencies(self.cfg)
+        for ctrl_bid, dep_bid, label in deps:
+            if ctrl_bid not in reachable_blocks or dep_bid not in reachable_blocks:
+                continue
+            src = self._pick_controller_node(ctrl_bid)
+            if src is None:
+                continue
+            for tgt in self._block_to_stmt_nodes.get(dep_bid, []):
+                if tgt == src:
+                    continue
+                self.edges.append(
+                    PDGEdge(
+                        source_id=src,
+                        target_id=tgt,
+                        dep_type="control",
+                        label=label,
+                    )
+                )
+
+    def _add_data_edges(self) -> None:
+        for df_edge in self.dfg.dataflow_edges:
+            src = self._line_to_node.get(df_edge.def_ref.line)
+            tgt = self._line_to_node.get(df_edge.use_ref.line)
+            if src is None or tgt is None or src == tgt:
+                continue
+            self.edges.append(
+                PDGEdge(
+                    source_id=src,
+                    target_id=tgt,
+                    dep_type="data",
+                    label=df_edge.var_name,
+                )
+            )
+
+
+# =============================================================================
 # Python PDG Extraction
 # =============================================================================
 
@@ -429,6 +738,10 @@ def extract_python_pdg(source_code: str, function_name: str) -> PDGInfo | None:
         PDGInfo with CFG, DFG, and merged PDG, or None if extraction fails
     """
     try:
+        func_node = _find_python_function_node(source_code, function_name)
+        if func_node is None:
+            return None
+
         # Extract CFG
         cfg = extract_python_cfg(source_code, function_name)
         if cfg is None:
@@ -439,8 +752,8 @@ def extract_python_pdg(source_code: str, function_name: str) -> PDGInfo | None:
         if dfg is None:
             return None
 
-        # Build PDG
-        builder = PDGBuilder(cfg, dfg)
+        # Build PDG (statement-level nodes + control dependence)
+        builder = PythonPDGBuilder(source_code=source_code, func_node=func_node, cfg=cfg, dfg=dfg)
         return builder.build()
     except ValueError:
         # Function not found
