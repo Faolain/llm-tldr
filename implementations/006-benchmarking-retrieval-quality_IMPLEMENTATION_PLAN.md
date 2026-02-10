@@ -629,6 +629,31 @@ Next step options:
 **Acceptance**
 - Clear win-rate signal on at least one task class (impact/slicing/debugging).
 
+### Notes / Clarifications (Phase 7)
+- Current Phase 7 (as implemented) is **deterministically scored**: tasks have a structured `expected` output embedded in the prompt packet (derived from `benchmarks/python/django_structural_queries.json` via `benchmarks/llm/tasks.json`), and `scripts/bench_llm_ab_run.py` computes precision/recall/F1 by parsing the model JSON output into a set:
+  - `impact`: set of `(file, function)` tuples from `{"callers":[{"file":..., "function":...}, ...]}`
+  - `slice`: set of line numbers from `{"lines":[...]}`
+  - `data_flow`: set of `(line, event)` tuples from `{"flow":[{"line":..., "event":"defined"|"used"}, ...]}`
+  The reported `f1_mean` is aggregated across all 30 tasks (impact + slice + data_flow). `win_rate_tldr_over_rg` is computed per-task (win=1, loss=0, tie=0.5) and averaged.
+
+- “Judge model path for open-ended tasks” means adding a parallel evaluation mode for tasks that **do not have clean set-valued ground truth** (e.g., “diagnose why this fails”, “propose a fix”, “explain the root cause”, “recommend a refactor”):
+  - Generate A/B prompt packets as usual (Condition A: rg-derived context, Condition B: TLDR-derived context), but allow free-form answers.
+  - Run an answer model to produce responses for each condition.
+  - Run a **separate judge model** that sees both answers (blinded as A/B) and a rubric, and emits a structured verdict like `{"winner":"A"|"B"|"tie","scores":{...},"notes":...}`.
+  - Aggregate judge win-rate + score distributions. This is the remaining unchecked Phase 7 key task.
+
+- Phase 8 (SWE-bench validation) would be a separate harness to validate TLDR on a standard benchmark dataset:
+  - Select a fixed SWE-bench Lite subset relevant to a target corpus (e.g. Django-related instances).
+  - Implement localization pipelines:
+    - Condition A: `rg`-only localization
+    - Condition B: TLDR-assisted localization (impact/context/structure and/or retrieval)
+  - Score localization against known touched files (Recall@k/MRR/etc) and record tokens/time/cost (optionally extend to patch success later).
+
+- Expanding/adjusting the Phase 7 task suite can mean:
+  - Add **retrieval-type tasks** (“where is X implemented/configured?”) that are still deterministically scorable (expected file paths/symbols) and compare different context heuristics (`rg` vs semantic vs hybrid vs TLDR).
+  - Add **open-ended debugging/refactor tasks** that require the judge path above.
+  - Add additional experimental conditions (beyond rg vs TLDR) and tabulate results per category and per model (Codex vs Claude).
+
 ## Phase 8: SWE-bench Validation (Future)
 
 **Goals**
