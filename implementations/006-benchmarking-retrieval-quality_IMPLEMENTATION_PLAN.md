@@ -727,6 +727,16 @@ Next step options:
   - `data_flow`: set of `(line, event)` tuples from `{"flow":[{"line":..., "event":"defined"|"used"}, ...]}`
   The reported `f1_mean` is aggregated across all 30 tasks (impact + slice + data_flow). `win_rate_tldr_over_rg` is computed per-task (win=1, loss=0, tie=0.5) and averaged.
 
+- Phase 7 retrieval-type structured tasks (`benchmarks/llm/retrieval_tasks.json`) are testing the **retrieval + context materialization** path (snippets) and the answer model’s ability to output correct repo-relative file paths from that context. They are **not** testing TLDR’s structural analysis layers (call graphs/slicing/DFG).
+  - Variants in the retrieval prompt packet:
+    - `rg`: deterministic ranking by `rg_pattern`, then render a small snippet around the first match per ranked file.
+    - `semantic`: embedding ranking, then render the same snippet shape (still anchored by `rg_pattern`).
+    - `hybrid_rrf`: RRF fusion of `rg` and `semantic` rankings, then snippet rendering.
+  - Recommendation: default comparisons to `hybrid_rrf` (semantic-only is unreliable for “where is X defined?” because it often returns references/usages instead of the defining file).
+  - To make semantic competitive on definition lookups: add a “definition-intent” validation/rerank step (e.g., require a `^def name` / `^class Name` match or a symbol-index hit in the candidate file/snippet).
+
+- TLDR’s clearest “worth using” signal is still the structural workflows (Phase 6/7 structured suites): impact analysis through indirection, slicing to isolate influencing statements, and data-flow to separate definitions from uses under tight token budgets. Retrieval-only tasks can be `rg`-dominated when `rg_pattern` is already definition-shaped.
+
 - “Judge model path for open-ended tasks” means adding a parallel evaluation mode for tasks that **do not have clean set-valued ground truth** (e.g., “diagnose why this fails”, “propose a fix”, “explain the root cause”, “recommend a refactor”):
   - Generate A/B prompt packets as usual (Condition A: rg-derived context, Condition B: TLDR-derived context), but allow free-form answers.
   - Run an answer model to produce responses for each condition.
