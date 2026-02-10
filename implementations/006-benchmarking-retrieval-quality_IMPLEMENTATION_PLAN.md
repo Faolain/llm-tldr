@@ -694,6 +694,10 @@ Next step options:
       - Adjust `scripts/bench_llm_ab_prompts.py` to include better budgeted code windows around slice/DFG-selected lines (not just the exact lines).
       - Make the judge path more robust in `scripts/bench_llm_ab_run.py` (retry / treat empty verdicts as errors, reduce `judge_bad_json`).
 
+- 2026-02-10: Implemented the Phase 7 open-ended follow-ups (context packing + judge robustness):
+  - `scripts/bench_llm_ab_prompts.py`: for open-ended `slice` and `data_flow`, TLDR context now materializes small **code windows** (radius=3) around slice/DFG-selected lines (plus a short function header), instead of emitting only the exact selected lines.
+  - `scripts/bench_llm_ab_run.py`: judge-mode now retries on invalid/empty verdicts (`--judge-retries`, default=1) and records verdict parse failures as explicit judge errors (instead of silently treating them as ties). Judge rows now record `attempts` + `usage_attempts` for cost attribution.
+
 - 2026-02-10: Fixed Phase 7 task/question mismatches:
   - `benchmarks/llm/tasks.json`: corrected 4 slice task questions (`L22`-`L25`) to match structural `query_id` targets (`B07`-`B10`) instead of outdated `parse_*` / `salted_hmac` text.
   - `benchmarks/llm/open_ended_tasks.json`: corrected `OE08` to match `query_id=B10` (`configure` in `django/conf/__init__.py` at `target_line=124`).
