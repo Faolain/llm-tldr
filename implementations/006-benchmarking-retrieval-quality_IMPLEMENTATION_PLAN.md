@@ -722,6 +722,9 @@ Next step options:
     - judge score means (rg vs TLDR): correctness `4.704` vs `4.833`, groundedness `4.759` vs `4.981`, completeness `4.296` vs `4.481`, clarity `4.463` vs `4.611`, actionability `4.148` vs `4.278`
     - latency p50/p95 (answer): TLDR `9.76s/19.49s` vs rg `10.11s/19.11s`; judge `13.34s/26.92s`
   - notes: answer_errors_total=1 (rg only); judge_errors_total=0.
+  Next step options:
+  - Improve open-ended `slice` TLDR context further by including a larger contiguous window around `target_line` (rg-style) *plus* budgeted merged windows around slice-selected lines (to capture nearby guard conditions/comments that the slice may omit), then rerun judge-mode and compare slice win-rate.
+  - If Phase 7 is “good enough” after slice improvements: proceed to Phase 8 SWE-bench Lite localization harness (file-level localization metrics vs `rg` baselines).
 
 - 2026-02-10: Expanded Phase 7 task suites beyond structural-only:
   - Added a deterministic retrieval-type suite: `benchmarks/llm/retrieval_tasks.json` (expected file paths from `benchmarks/retrieval/django_queries.json`).
