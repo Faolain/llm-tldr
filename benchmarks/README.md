@@ -190,7 +190,7 @@ Notes:
 
 ## Phase 7: Downstream A/B Prompt Packets (LLM)
 
-Generates randomized per-task A/B prompt packets with rg-derived context vs TLDR-derived context.
+Generates randomized per-task prompt packets with multiple context variants (rg, TLDR structural context, and retrieval strategies).
 Outputs:
 - a JSON report under `benchmark/runs/`
 - a JSONL prompts file under `benchmark/llm/` (gitignored)
@@ -205,17 +205,29 @@ There are two Phase 7 modes:
 - `--mode judge`: open-ended tasks scored by a separate judge model (blinded A/B).
 
 Task suite + scoring:
-- Tasks live in `benchmarks/llm/tasks.json` (currently 30 tasks) and each task references a structural ground-truth query in `benchmarks/python/django_structural_queries.json` via `query_id`.
+- Structural tasks live in `benchmarks/llm/tasks.json` (currently 30 tasks) and each task references a structural ground-truth query in `benchmarks/python/django_structural_queries.json` via `query_id`.
+- Retrieval-type tasks live in `benchmarks/llm/retrieval_tasks.json` and reference retrieval ground truth in `benchmarks/retrieval/django_queries.json` via `query_id`.
 Categories:
 - `impact`: list direct callers (scored as a set of `(file, function)` tuples)
 - `slice`: compute backward slice lines (scored as a set of line numbers)
 - `data_flow`: trace def/use events (scored as a set of `(line, event)` tuples)
+- `retrieval`: locate implementation/configuration files (scored as a set of repo-relative file paths from `{\"paths\": [...]}`)
 - `scripts/bench_llm_ab_run.py` supports:
 - `--mode structured`: deterministic scoring by parsing the model JSON output into a set and computing precision/recall/F1 against the `expected` set embedded in the JSONL prompt packet.
 - `--mode judge`: open-ended scoring by running a separate judge model that compares A vs B (blinded) against a rubric and returns a structured verdict.
-- `overall` metrics (e.g. `f1_mean`) aggregate across all tasks (impact + slice + data_flow).
-- `win_rate_tldr_over_rg` is computed per-task by comparing TLDR vs rg F1 (win=1, loss=0, tie=0.5) and averaging.
+- `overall` metrics (e.g. `f1_mean`) aggregate across all tasks in the prompt packet.
+- `win_rate_tldr_over_rg` is computed per-task by comparing TLDR vs rg F1 (win=1, loss=0, tie=0.5) and averaging (when both sources are present).
+- When a prompt packet contains more than two sources, `win_rate_by_pair` and `win_rate_by_pair_by_category` are also reported (e.g. `semantic_over_rg`, `hybrid_rrf_over_rg`).
 - `--trials N` reruns each task variant N times and reports per-variant `f1_mean` as the mean across trials (plus timing percentiles).
+
+Retrieval-type tasks (structured mode):
+
+```bash
+uv run python scripts/bench_llm_ab_prompts.py \
+  --corpus django \
+  --tasks benchmarks/llm/retrieval_tasks.json \
+  --budget-tokens 2000
+```
 
 Using Codex CLI (example model: `gpt-5.3-codex` with "medium" reasoning effort):
 

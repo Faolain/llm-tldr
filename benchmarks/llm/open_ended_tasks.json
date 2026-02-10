@@ -104,6 +104,54 @@
       "query_id": "D10",
       "rubric": "Pick the better answer using only the provided contexts. Prefer answers that are correct, grounded in the context (no claims not supported by context), complete, and clearly explained. Penalize hallucinations and vague hand-waving. Output should be concise and actionable.",
       "question": "Explain how key is defined and used in salted_hmac (django/utils/crypto.py). How does it affect the HMAC computation?"
+    },
+    {
+      "id": "OE13",
+      "task_type": "open_ended",
+      "category": "impact",
+      "query_id": "A10",
+      "rubric": "Pick the better answer using only the provided contexts. Prefer answers that are correct, grounded in the context (no claims not supported by context), complete, and clearly explained. Penalize hallucinations and vague hand-waving. Output should be concise and actionable.",
+      "question": "You are debugging a CSRF error about malformed tokens. Explain where _check_token_format (django/middleware/csrf.py) is called from, and what that suggests about when token formatting is validated. Suggest what you would log or inspect upstream to diagnose why a token fails validation."
+    },
+    {
+      "id": "OE14",
+      "task_type": "open_ended",
+      "category": "impact",
+      "query_id": "A12",
+      "rubric": "Pick the better answer using only the provided contexts. Prefer answers that are correct, grounded in the context (no claims not supported by context), complete, and clearly explained. Penalize hallucinations and vague hand-waving. Output should be concise and actionable.",
+      "question": "You are debugging why a CSRF cookie is not being set. Explain where _add_new_csrf_cookie (django/middleware/csrf.py) is called from and what role it likely plays in the response flow. Based on context, propose a short checklist of conditions that could prevent the cookie from being added."
+    },
+    {
+      "id": "OE15",
+      "task_type": "open_ended",
+      "category": "slice",
+      "query_id": "B02",
+      "rubric": "Pick the better answer using only the provided contexts. Prefer answers that are correct, grounded in the context (no claims not supported by context), complete, and clearly explained. Penalize hallucinations and vague hand-waving. Output should be concise and actionable.",
+      "question": "You are debugging CSRF token mismatches. Explain what inputs and branches influence the boolean return of _does_token_match (django/middleware/csrf.py) at target_line=157. Include what you would log to diagnose mismatches without leaking secrets."
+    },
+    {
+      "id": "OE16",
+      "task_type": "open_ended",
+      "category": "slice",
+      "query_id": "B09",
+      "rubric": "Pick the better answer using only the provided contexts. Prefer answers that are correct, grounded in the context (no claims not supported by context), complete, and clearly explained. Penalize hallucinations and vague hand-waving. Output should be concise and actionable.",
+      "question": "You are debugging a password-hash mismatch. Explain how pbkdf2 (django/utils/crypto.py) sets up the pbkdf2_hmac call at target_line=77, including any defaulting/normalization. Suggest one safe change (or test) you would make if you suspected the wrong digest or encoding was being used."
+    },
+    {
+      "id": "OE17",
+      "task_type": "open_ended",
+      "category": "slice",
+      "query_id": "B08",
+      "rubric": "Pick the better answer using only the provided contexts. Prefer answers that are correct, grounded in the context (no claims not supported by context), complete, and clearly explained. Penalize hallucinations and vague hand-waving. Output should be concise and actionable.",
+      "question": "You are debugging an exception that seems to bypass normal error handling. Explain what influences the return value of handle_uncaught_exception (django/core/handlers/exception.py) at target_line=186. Based on the context, suggest where you would add instrumentation to confirm which path is taken."
+    },
+    {
+      "id": "OE18",
+      "task_type": "open_ended",
+      "category": "data_flow",
+      "query_id": "D03",
+      "rubric": "Pick the better answer using only the provided contexts. Prefer answers that are correct, grounded in the context (no claims not supported by context), complete, and clearly explained. Penalize hallucinations and vague hand-waving. Output should be concise and actionable.",
+      "question": "You are debugging CSRF token unmasking. Explain how mask is defined and used in _unmask_cipher_token (django/middleware/csrf.py). Note any assumptions about token format/length that the code appears to make."
     }
   ]
 }

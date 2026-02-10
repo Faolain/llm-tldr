@@ -86,6 +86,12 @@ def _prompt_for_open_ended_task(*, question: str, context: str) -> str:
     )
 
 
+def _label_variants(variants: list[dict[str, Any]]) -> None:
+    labels = [chr(ord("A") + i) for i in range(26)]
+    for i, v in enumerate(variants):
+        v["label"] = labels[i] if i < len(labels) else f"V{i+1}"
+
+
 def _impact_context_tldr(
     *,
     call_graph: Any,
@@ -486,8 +492,33 @@ def _data_flow_context_rg(
     return payload, int(ptok), int(pbytes)
 
 
+def _retrieval_context_from_ranked_files(
+    *,
+    repo_root: Path,
+    ranked_files: list[str],
+    rg_pattern: str,
+    budget_tokens: int,
+    before: int,
+    after: int,
+) -> tuple[str, int, int]:
+    pieces: list[str] = []
+    for fp in ranked_files:
+        snippet, _ = bte._render_snippet_for_file(
+            repo_root,
+            file_rel=fp,
+            rg_pattern=rg_pattern,
+            before=int(before),
+            after=int(after),
+        )
+        pieces.append(snippet)
+    payload, ptok, pbytes, _used = bte._apply_budget(pieces, int(budget_tokens))
+    return payload, int(ptok), int(pbytes)
+
+
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Phase 7: generate randomized A/B LLM prompts (rg vs TLDR).")
+    ap = argparse.ArgumentParser(
+        description="Phase 7: generate randomized LLM prompt packets with multiple context variants (rg/TLDR/retrieval)."
+    )
     group = ap.add_mutually_exclusive_group(required=True)
     group.add_argument("--corpus", default=None, help="Corpus id from benchmarks/corpora.json (e.g. django).")
     group.add_argument("--repo-root", default=None, help="Path to corpus repo root.")
@@ -502,11 +533,22 @@ def main() -> int:
         help="Structural query set JSON (default: benchmarks/python/django_structural_queries.json).",
     )
     ap.add_argument(
+        "--retrieval-queries",
+        default=str(get_repo_root() / "benchmarks" / "retrieval" / "django_queries.json"),
+        help="Retrieval query set JSON (default: benchmarks/retrieval/django_queries.json).",
+    )
+    ap.add_argument(
         "--budget-tokens",
         type=int,
         default=2000,
         help="Context token budget per variant (default: 2000).",
     )
+    ap.add_argument(
+        "--retrieval-rg-glob",
+        default="*.py",
+        help="ripgrep --glob filter for retrieval ranking (default: *.py).",
+    )
+    ap.add_argument("--retrieval-max-files", type=int, default=50, help="Max files per retrieval variant (default: 50).")
     ap.add_argument("--seed", type=int, default=0, help="Deterministic seed for per-task A/B label shuffling.")
     ap.add_argument(
         "--cache-root",
@@ -540,6 +582,12 @@ def main() -> int:
     tasks = _load_tasks(tasks_path)
     structural_queries = bte._load_structural_queries(structural_path)
     by_id = _index_by_id(structural_queries)
+
+    retrieval_by_id: dict[str, bte.RetrievalQuery] = {}
+    retrieval_path = Path(args.retrieval_queries).resolve()
+    if any(t.get("category") == "retrieval" for t in tasks):
+        retrieval_queries = bte._load_retrieval_queries(retrieval_path)
+        retrieval_by_id = {q.id: q for q in retrieval_queries}
 
     index_id = args.index or default_index_id
     index_ctx = get_index_context(
@@ -575,7 +623,13 @@ def main() -> int:
         prompts_path = (prompt_dir / f"{ts}-llm-ab-{corpus_id}.jsonl").resolve()
 
     records: list[dict[str, Any]] = []
-    tok_by_source: dict[str, list[int]] = {"rg": [], "tldr": []}
+    tok_by_source: dict[str, list[int]] = {}
+
+    semantic_available = (
+        index_ctx.paths is not None
+        and index_ctx.paths.semantic_faiss.exists()
+        and index_ctx.paths.semantic_metadata.exists()
+    )
 
     for t in tasks:
         tid = t.get("id")
@@ -589,7 +643,7 @@ def main() -> int:
         if task_type == "open_ended" and not (isinstance(rubric, str) and rubric.strip()):
             continue
         q = by_id.get(qid)
-        if q is None:
+        if category != "retrieval" and q is None:
             continue
 
         budget = int(args.budget_tokens)
@@ -774,15 +828,91 @@ def main() -> int:
             ]
             record_expected = {"flow": expected} if task_type != "open_ended" else None
 
+        elif category == "retrieval":
+            if task_type == "open_ended":
+                # Judge-mode currently assumes 2 variants (A/B). Keep retrieval tasks deterministic for now.
+                continue
+            rq = retrieval_by_id.get(qid)
+            if rq is None:
+                continue
+
+            rg_pattern = str(rq.rg_pattern or re.escape(rq.query))
+            expected_paths = sorted({p.replace("\\", "/").lstrip("./") for p in rq.relevant_files})
+            schema_hint = "{\"paths\": [\"path\", ...]}"
+
+            max_files = max(1, int(args.retrieval_max_files))
+            glob_arg = str(args.retrieval_rg_glob) if args.retrieval_rg_glob else None
+
+            rg_rank = bte._rg_rank_files(repo_root, pattern=rg_pattern, glob=glob_arg)[:max_files]
+            ctx_rg, r_tok, r_bytes = _retrieval_context_from_ranked_files(
+                repo_root=repo_root,
+                ranked_files=rg_rank,
+                rg_pattern=rg_pattern,
+                budget_tokens=budget,
+                before=2,
+                after=2,
+            )
+            variants = [
+                {
+                    "source": "rg",
+                    "context": ctx_rg,
+                    "context_tokens": r_tok,
+                    "context_bytes": r_bytes,
+                    "prompt": _prompt_for_task(question=question, context=ctx_rg, schema_hint=schema_hint),
+                }
+            ]
+
+            if semantic_available:
+                sem_rank = bte._semantic_rank_files(repo_root, index_ctx=index_ctx, query=rq.query, k=max_files) or []
+                sem_rank = sem_rank[:max_files]
+                ctx_sem, s_tok, s_bytes = _retrieval_context_from_ranked_files(
+                    repo_root=repo_root,
+                    ranked_files=sem_rank,
+                    rg_pattern=rg_pattern,
+                    budget_tokens=budget,
+                    before=2,
+                    after=2,
+                )
+                variants.append(
+                    {
+                        "source": "semantic",
+                        "context": ctx_sem,
+                        "context_tokens": s_tok,
+                        "context_bytes": s_bytes,
+                        "prompt": _prompt_for_task(question=question, context=ctx_sem, schema_hint=schema_hint),
+                    }
+                )
+
+                hybrid_rank = bte._rrf_fuse([rg_rank, sem_rank])[:max_files]
+                ctx_h, h_tok, h_bytes = _retrieval_context_from_ranked_files(
+                    repo_root=repo_root,
+                    ranked_files=hybrid_rank,
+                    rg_pattern=rg_pattern,
+                    budget_tokens=budget,
+                    before=2,
+                    after=2,
+                )
+                variants.append(
+                    {
+                        "source": "hybrid_rrf",
+                        "context": ctx_h,
+                        "context_tokens": h_tok,
+                        "context_bytes": h_bytes,
+                        "prompt": _prompt_for_task(question=question, context=ctx_h, schema_hint=schema_hint),
+                    }
+                )
+
+            record_expected = {"paths": expected_paths}
+
         else:
             continue
 
         variants = _stable_shuffle(int(args.seed), str(tid), variants)
-        variants[0]["label"] = "A"
-        variants[1]["label"] = "B"
+        _label_variants(variants)
 
         for v in variants:
-            tok_by_source[v["source"]].append(int(v["context_tokens"]))
+            src = str(v.get("source"))
+            tok_by_source.setdefault(src, []).append(int(v.get("context_tokens") or 0))
 
         rec: dict[str, Any] = {
             "task_id": tid,
@@ -812,8 +942,12 @@ def main() -> int:
             "schema_version": SCHEMA_VERSION,
             "tasks": str(tasks_path),
             "structural_queries": str(structural_path),
+            "retrieval_queries": str(retrieval_path),
             "budget_tokens": int(args.budget_tokens),
             "seed": int(args.seed),
+            "retrieval_rg_glob": str(args.retrieval_rg_glob) if args.retrieval_rg_glob else None,
+            "retrieval_max_files": int(args.retrieval_max_files),
+            "semantic_available": bool(semantic_available),
             "cache_root": str(index_ctx.cache_root) if index_ctx.cache_root is not None else None,
             "index_id": index_ctx.index_id,
             "prompts_path": str(prompts_path),

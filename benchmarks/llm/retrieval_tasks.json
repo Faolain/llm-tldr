@@ -1,0 +1,110 @@
+{
+  "schema_version": 1,
+  "repo": "django",
+  "pinned_ref": "5.1.13",
+  "updated": "2026-02-10",
+  "notes": [
+    "Phase 7 deterministic retrieval-type LLM task suite for Django.",
+    "Tasks reference file-level retrieval ground truth in benchmarks/retrieval/django_queries.json via query_id.",
+    "The goal is to compare answer quality when the model is given different retrieval-derived context payloads (rg vs semantic vs hybrid) under a fixed context budget."
+  ],
+  "tasks": [
+    {
+      "id": "LR01",
+      "category": "retrieval",
+      "query_id": "R01",
+      "question": "Where is CSRF middleware implemented? Output JSON: {\"paths\": [\"path\", ...]} (repo-relative paths)."
+    },
+    {
+      "id": "LR02",
+      "category": "retrieval",
+      "query_id": "R02",
+      "question": "Where is override_settings defined? Output JSON: {\"paths\": [\"path\", ...]} (repo-relative paths)."
+    },
+    {
+      "id": "LR03",
+      "category": "retrieval",
+      "query_id": "R03",
+      "question": "Where is mark_safe defined? Output JSON: {\"paths\": [\"path\", ...]} (repo-relative paths)."
+    },
+    {
+      "id": "LR04",
+      "category": "retrieval",
+      "query_id": "R07",
+      "question": "Where does Django configure settings at runtime? Output JSON: {\"paths\": [\"path\", ...]} (repo-relative paths)."
+    },
+    {
+      "id": "LR05",
+      "category": "retrieval",
+      "query_id": "R09",
+      "question": "Where is the debug technical 500 response implemented? Output JSON: {\"paths\": [\"path\", ...]} (repo-relative paths)."
+    },
+    {
+      "id": "LR06",
+      "category": "retrieval",
+      "query_id": "R11",
+      "question": "Where is the csrf token rotation helper defined? Output JSON: {\"paths\": [\"path\", ...]} (repo-relative paths)."
+    },
+    {
+      "id": "LR07",
+      "category": "retrieval",
+      "query_id": "R13",
+      "question": "Where is Http404 defined? Output JSON: {\"paths\": [\"path\", ...]} (repo-relative paths)."
+    },
+    {
+      "id": "LR08",
+      "category": "retrieval",
+      "query_id": "R15",
+      "question": "Where is JsonResponse implemented? Output JSON: {\"paths\": [\"path\", ...]} (repo-relative paths)."
+    },
+    {
+      "id": "LR09",
+      "category": "retrieval",
+      "query_id": "R16",
+      "question": "Where is QuerySet implemented (ORM query API)? Output JSON: {\"paths\": [\"path\", ...]} (repo-relative paths)."
+    },
+    {
+      "id": "LR10",
+      "category": "retrieval",
+      "query_id": "R17",
+      "question": "Where is the Q object (query expressions) implemented? Output JSON: {\"paths\": [\"path\", ...]} (repo-relative paths)."
+    },
+    {
+      "id": "LR11",
+      "category": "retrieval",
+      "query_id": "R18",
+      "question": "Where is the Model base class implemented? Output JSON: {\"paths\": [\"path\", ...]} (repo-relative paths)."
+    },
+    {
+      "id": "LR12",
+      "category": "retrieval",
+      "query_id": "R19",
+      "question": "Where is transaction.atomic implemented? Output JSON: {\"paths\": [\"path\", ...]} (repo-relative paths)."
+    },
+    {
+      "id": "LR13",
+      "category": "retrieval",
+      "query_id": "R23",
+      "question": "Where is the post_save signal defined? Output JSON: {\"paths\": [\"path\", ...]} (repo-relative paths)."
+    },
+    {
+      "id": "LR14",
+      "category": "retrieval",
+      "query_id": "R26",
+      "question": "Where is BaseCommand implemented (management commands)? Output JSON: {\"paths\": [\"path\", ...]} (repo-relative paths)."
+    },
+    {
+      "id": "LR15",
+      "category": "retrieval",
+      "query_id": "R27",
+      "question": "Where is execute_from_command_line implemented? Output JSON: {\"paths\": [\"path\", ...]} (repo-relative paths)."
+    },
+    {
+      "id": "LR16",
+      "category": "retrieval",
+      "query_id": "R12",
+      "question": "Negative query: symbol that should not exist. Based on context, output JSON: {\"paths\": [\"path\", ...]} with an empty list if no matching implementation appears."
+    }
+  ]
+}
+

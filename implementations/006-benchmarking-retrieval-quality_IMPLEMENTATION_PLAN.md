@@ -503,6 +503,7 @@ Next step options:
 
 **Key tasks**
 - [x] Create `benchmarks/llm/tasks.json` (~30 tasks) with expected rubric.
+- [x] Add a deterministic retrieval-type LLM suite (`benchmarks/llm/retrieval_tasks.json`) with expected file paths (ground truth from `benchmarks/retrieval/django_queries.json`).
 - [x] Implement randomized A/B prompt generation:
   - Condition A: `rg`-derived context payload
   - Condition B: TLDR-derived context payload
@@ -692,6 +693,12 @@ Next step options:
   - `benchmarks/llm/tasks.json`: corrected 4 slice task questions (`L22`-`L25`) to match structural `query_id` targets (`B07`-`B10`) instead of outdated `parse_*` / `salted_hmac` text.
   - `benchmarks/llm/open_ended_tasks.json`: corrected `OE08` to match `query_id=B10` (`configure` in `django/conf/__init__.py` at `target_line=124`).
   - Note: the judge-mode prompt packet `benchmark/llm/20260210-052131Z-llm-ab-django.jsonl` (and the resulting report `benchmark/runs/20260210-053918Z-llm-ab-run-judge.json`) was generated before this fix, so interpret that run with caution and prefer regenerating prompts + rerunning for comparable numbers.
+
+- 2026-02-10: Expanded Phase 7 task suites beyond structural-only:
+  - Added a deterministic retrieval-type suite: `benchmarks/llm/retrieval_tasks.json` (expected file paths from `benchmarks/retrieval/django_queries.json`).
+  - Extended `scripts/bench_llm_ab_prompts.py` to support `category=retrieval` and generate multiple retrieval variants (`rg`, `semantic`, `hybrid_rrf`) under the same token budget.
+  - Extended `scripts/bench_llm_ab_run.py` to deterministically score retrieval outputs (`{\"paths\": [...]}`) and report pairwise win rates across all sources (not only `tldr_over_rg`).
+  - Expanded the open-ended suite with more debugging-style questions (`OE13`-`OE18`).
 
 **Acceptance**
 - Clear win-rate signal on at least one task class (impact/slicing/debugging).

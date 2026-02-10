@@ -138,6 +138,22 @@ def _expected_set(record: dict[str, Any]) -> set[Any] | None:
             if isinstance(ln, int) and isinstance(ev, str):
                 out.add((int(ln), ev))
         return out
+    if cat == "retrieval":
+        paths_obj = exp
+        if isinstance(exp, dict) and isinstance(exp.get("paths"), list):
+            paths_obj = exp.get("paths")
+        if not isinstance(paths_obj, list):
+            return None
+        out: set[str] = set()
+        for p in paths_obj:
+            if not isinstance(p, str):
+                continue
+            s = p.strip().replace("\\", "/")
+            if s.startswith("./"):
+                s = s[2:]
+            if s:
+                out.add(s)
+        return out
     return None
 
 
@@ -173,6 +189,22 @@ def _got_set(category: str, parsed: Any) -> set[Any] | None:
                     out.add((int(ln), ev))
             return out
         return None
+    if category == "retrieval":
+        paths_obj = parsed
+        if isinstance(parsed, dict) and isinstance(parsed.get("paths"), list):
+            paths_obj = parsed.get("paths")
+        if not isinstance(paths_obj, list):
+            return None
+        out: set[str] = set()
+        for p in paths_obj:
+            if not isinstance(p, str):
+                continue
+            s = p.strip().replace("\\", "/")
+            if s.startswith("./"):
+                s = s[2:]
+            if s:
+                out.add(s)
+        return out
     return None
 
 
@@ -220,6 +252,13 @@ def _json_schema_for_category(category: str) -> dict[str, Any] | None:
                 }
             },
             "required": ["flow"],
+        }
+    if category == "retrieval":
+        return {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {"paths": {"type": "array", "items": {"type": "string"}}},
+            "required": ["paths"],
         }
     return None
 
@@ -1102,6 +1141,8 @@ def main() -> int:
 
     per_task: list[dict[str, Any]] = []
     wins: list[float] = []
+    win_by_pair: dict[str, list[float]] = {}
+    win_by_pair_by_category: dict[str, dict[str, list[float]]] = {}
     f1_by_source: dict[str, list[float]] = {"rg": [], "tldr": []}
     time_s_by_source: dict[str, list[float]] = {"rg": [], "tldr": []}
     bad_json = 0
@@ -1225,6 +1266,22 @@ def main() -> int:
                     }
                 )
 
+            # Pairwise win signals across all sources present on this task.
+            srcs = sorted(scores.keys())
+            for a in srcs:
+                for b in srcs:
+                    if a == b:
+                        continue
+                    if scores[a] > scores[b]:
+                        w = 1.0
+                    elif scores[a] < scores[b]:
+                        w = 0.0
+                    else:
+                        w = 0.5
+                    key = f"{a}_over_{b}"
+                    win_by_pair.setdefault(key, []).append(float(w))
+                    win_by_pair_by_category.setdefault(category, {}).setdefault(key, []).append(float(w))
+
             # A/B win signal (0/0.5/1): compare TLDR vs rg when both present.
             if "tldr" in scores and "rg" in scores:
                 if scores["tldr"] > scores["rg"]:
@@ -1262,6 +1319,11 @@ def main() -> int:
             "errors_total": int(errors_total),
             "errors_by_source": {k: int(v) for k, v in errors_by_source.items()},
             "win_rate_tldr_over_rg": (sum(wins) / len(wins)) if wins else None,
+            "win_rate_by_pair": {k: ((sum(v) / len(v)) if v else None) for k, v in win_by_pair.items()},
+            "win_rate_by_pair_by_category": {
+                cat: {k: ((sum(v) / len(v)) if v else None) for k, v in pairs.items()}
+                for cat, pairs in win_by_pair_by_category.items()
+            },
             "f1_mean": {k: (statistics.mean(v) if v else None) for k, v in f1_by_source.items()},
             "f1_percentiles": {k: percentiles(v) for k, v in f1_by_source.items() if v},
             "time_s_percentiles": {k: percentiles(v) for k, v in time_s_by_source.items() if v},
