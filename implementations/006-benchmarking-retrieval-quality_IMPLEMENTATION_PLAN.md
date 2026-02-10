@@ -564,7 +564,7 @@ Next step options:
     - `NON-FATAL: Lock acquisition failed for /Users/aristotle/.local/share/claude/versions/...`
   - Verified local install: `which claude` -> `/Users/aristotle/.local/bin/claude`; `claude --version` -> `2.1.37 (Claude Code)`.
   - Sandbox workaround: `scripts/bench_llm_ab_run.py` redirects `HOME`/`XDG_*` to `benchmark/claude-home` by default for `--provider claude_cli|claude_sdk` (override via `--claude-home`). This avoids EPERM but **does not reuse the existing Claude subscription login**, so Claude CLI prints: `Not logged in · Please run /login`.
-  - Added dependency: `claude-agent-sdk` and support for `--provider claude_sdk` (programmatic calls). Per Anthropic Agent SDK docs, this path requires an API key (`ANTHROPIC_API_KEY`) and does not automatically use Claude Code subscription auth.
+  - Added dependency: `claude-agent-sdk` and support for `--provider claude_sdk` (programmatic calls). Correction: `claude-agent-sdk` talks to the local `claude` (Claude Code) CLI, so it uses your Claude Code login/subscription (no API key) and inherits the same state-write/sandbox caveats.
 - 2026-02-09: Fixed Claude Code CLI structured-output capture in `scripts/bench_llm_ab_run.py`:
   - `claude --json-schema ... --output-format text` yields empty stdout, even on successful calls.
   - For schema enforcement, we now use `--output-format json` and read `structured_output`, then feed that JSON into the existing scorer.
@@ -601,6 +601,30 @@ Next step options:
     - overall: TLDR `f1_mean=0.865` vs rg `0.619`; win_rate_tldr_over_rg `0.683` (ties count as `0.5`)
     - slice (10 tasks): TLDR `f1_mean=0.919` vs rg `0.471`; win_rate_tldr_over_rg `0.800` (stable vs the `--trials 1` rerun above)
     - latency (p50/p95): TLDR `2.19s/4.39s` vs rg `4.26s/12.23s`
+
+- 2026-02-10: Fixed `--provider claude_sdk` Phase 7 extraction and turn-budgeting:
+  - `claude-agent-sdk` yields typed messages; the terminal output comes from `ResultMessage.structured_output` (it does not expose a `.type == "result"` attribute).
+  - `max_turns=1` can terminate early with subtype `error_max_turns` and empty output; updated `scripts/bench_llm_ab_run.py` to use `max_turns=2` for the Claude SDK path.
+  - Added regression tests for `_claude_sdk_result_to_text_and_usage` in `tests/test_bench_llm_ab_run_helpers.py`.
+
+- 2026-02-10: Ran a full 30-task, 3-trial structured A/B batch using Claude Agent SDK + Sonnet 4.5 on the **new** prompt packet (same as the stabilized Codex run above):
+  - command shape: `--provider claude_sdk --model claude-sonnet-4-5-20250929 --claude-home $HOME --enforce-json-schema --timeout-s 180 --trials 3`
+  - prompts: `benchmark/llm/20260210-005817Z-llm-ab-django.jsonl`
+  - report: `benchmark/runs/20260210-040732Z-llm-ab-run-claude.json`
+  - answers: `benchmark/llm/20260210-040732Z-llm-ab-answers-claude.jsonl`
+  - key results:
+    - overall: TLDR `f1_mean=0.865` vs rg `0.655`; win_rate_tldr_over_rg `0.700` (ties count as `0.5`)
+    - slice (10 tasks): TLDR `f1_mean=0.919` vs rg `0.406`; win_rate_tldr_over_rg `1.000`
+    - latency (p50/p95): TLDR `5.26s/7.22s` vs rg `6.59s/12.41s`
+
+  Comparison (same prompt packet `20260210-005817Z-llm-ab-django.jsonl`, `--trials 3`):
+
+  | Category | Codex TLDR F1 | Codex rg F1 | Codex win_rate | Claude TLDR F1 | Claude rg F1 | Claude win_rate |
+  | --- | --- | --- | --- | --- | --- | --- |
+  | overall | 0.865 | 0.619 | 0.683 | 0.865 | 0.655 | 0.700 |
+  | impact | 0.791 | 0.607 | 0.633 | 0.791 | 0.713 | 0.567 |
+  | slice | 0.919 | 0.471 | 0.800 | 0.919 | 0.406 | 1.000 |
+  | data_flow | 0.978 | 0.950 | 0.600 | 0.978 | 0.978 | 0.500 |
 
 **Acceptance**
 - Clear win-rate signal on at least one task class (impact/slicing/debugging).

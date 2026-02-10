@@ -318,6 +318,47 @@ def _codex_cli_call(
         return text_out, {}
 
 
+def _claude_sdk_result_to_text_and_usage(msg: Any) -> tuple[str, dict[str, Any]] | None:
+    """Extract the final structured output from claude-agent-sdk messages.
+
+    The SDK yields typed dataclass messages (UserMessage/AssistantMessage/SystemMessage/ResultMessage/StreamEvent).
+    We only care about the terminal ResultMessage.
+    """
+    try:
+        from claude_agent_sdk import ResultMessage
+    except Exception:  # pragma: no cover
+        return None
+
+    if not isinstance(msg, ResultMessage):
+        return None
+
+    if getattr(msg, "is_error", False):
+        err = str(getattr(msg, "result", "") or getattr(msg, "subtype", "") or "claude error")
+        raise RuntimeError(err)
+
+    structured = getattr(msg, "structured_output", None)
+    if structured is not None:
+        try:
+            text_out = json.dumps(structured, sort_keys=True)
+        except Exception:
+            text_out = str(structured)
+    else:
+        text_out = str(getattr(msg, "result", "") or "")
+
+    usage: dict[str, Any] = {}
+    usage_obj = getattr(msg, "usage", None)
+    if isinstance(usage_obj, dict):
+        # Claude Code / SDK commonly uses camelCase keys.
+        usage = {
+            "input_tokens": usage_obj.get("inputTokens") or usage_obj.get("input_tokens"),
+            "output_tokens": usage_obj.get("outputTokens") or usage_obj.get("output_tokens"),
+        }
+    total_cost_usd = getattr(msg, "total_cost_usd", None)
+    if total_cost_usd is not None:
+        usage["total_cost_usd"] = total_cost_usd
+    return text_out, usage
+
+
 def _claude_cli_call(
     *,
     model: str,
@@ -409,7 +450,9 @@ async def _claude_agent_sdk_call_async(
 
     options = ClaudeAgentOptions(
         model=str(model),
-        max_turns=1,
+        # Claude Code SDK often consumes a turn for internal/tool plumbing (even with tools=[]),
+        # so max_turns=1 can terminate runs with subtype=error_max_turns and no output.
+        max_turns=2,
         # This benchmark runner treats Claude as a pure answer model over provided context.
         tools=[],
         allowed_tools=[],
@@ -424,22 +467,10 @@ async def _claude_agent_sdk_call_async(
         text_out = ""
         usage: dict[str, Any] = {}
         async for msg in query(prompt=str(prompt), options=options):
-            if getattr(msg, "type", None) != "result":
+            res = _claude_sdk_result_to_text_and_usage(msg)
+            if res is None:
                 continue
-            structured = getattr(msg, "structured_output", None)
-            if structured is not None:
-                try:
-                    text_out = json.dumps(structured, sort_keys=True)
-                except Exception:
-                    text_out = str(structured)
-            else:
-                text_out = str(getattr(msg, "result", "") or "")
-            usage_obj = getattr(msg, "usage", None)
-            if usage_obj is not None:
-                usage = {
-                    "input_tokens": getattr(usage_obj, "input_tokens", None),
-                    "output_tokens": getattr(usage_obj, "output_tokens", None),
-                }
+            text_out, usage = res
         return text_out, usage
 
     return await asyncio.wait_for(_run(), timeout=float(timeout_s))
