@@ -62,6 +62,9 @@ def test_extract_judge_winner():
     assert fn({"winner": "A"}) == "A"
     assert fn({"winner": "B"}) == "B"
     assert fn({"winner": "tie"}) == "tie"
+    assert fn({"winner": " a "}) == "A"
+    assert fn({"winner": "Tie"}) == "tie"
+    assert fn({"winner": "draw"}) == "tie"
     assert fn({"winner": "C"}) is None
     assert fn("nope") is None
 

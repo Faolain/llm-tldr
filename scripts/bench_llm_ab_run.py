@@ -320,6 +320,10 @@ def _judge_prompt(
     return (
         "You are an impartial judge. Compare two answers (A vs B) to the same question.\n"
         "Use ONLY the provided contexts when judging correctness/groundedness.\n\n"
+        "Output MUST be strictly valid JSON:\n"
+        "- double quotes for all keys/strings\n"
+        "- no trailing commas\n"
+        '- keep "notes" to a single line (no literal newlines)\n\n'
         f"Question:\n{question}\n\n"
         f"Rubric:\n{rubric}\n\n"
         "Variant A context:\n<BEGIN_CONTEXT_A>\n"
@@ -343,8 +347,15 @@ def _extract_judge_winner(parsed: Any) -> str | None:
     if not isinstance(parsed, dict):
         return None
     winner = parsed.get("winner")
-    if winner in ("A", "B", "tie"):
-        return str(winner)
+    if not isinstance(winner, str):
+        return None
+    w = winner.strip().lower()
+    if w == "a":
+        return "A"
+    if w == "b":
+        return "B"
+    if w in ("tie", "draw"):
+        return "tie"
     return None
 
 
@@ -652,6 +663,12 @@ def main() -> int:
     ap.add_argument("--judge-max-tokens", type=int, default=800)
     ap.add_argument("--judge-temperature", type=float, default=0.0)
     ap.add_argument(
+        "--judge-retries",
+        type=int,
+        default=1,
+        help="Retry judge call on invalid/empty verdicts (default: 1).",
+    )
+    ap.add_argument(
         "--enforce-json-schema",
         action="store_true",
         help="Pass a JSON Schema to the provider when supported (claude_sdk/claude_cli/codex).",
@@ -797,6 +814,7 @@ def main() -> int:
                 "judge_timeout_s": float(args.judge_timeout_s) if args.judge_timeout_s is not None else None,
                 "judge_max_tokens": int(args.judge_max_tokens),
                 "judge_temperature": float(args.judge_temperature),
+                "judge_retries": int(args.judge_retries),
                 "enforce_json_schema": bool(args.enforce_json_schema),
                 "dry_run": True,
                 "limit": int(args.limit) if args.limit is not None else None,
@@ -965,59 +983,97 @@ def main() -> int:
                     )
                     judge_schema = _json_schema_for_judge_verdict() if args.enforce_json_schema else None
 
-                    t0 = time.monotonic()
                     judge_error: str | None = None
-                    try:
-                        if judge_provider == "codex":
-                            judge_text, judge_usage = _codex_cli_call(
-                                model=judge_model,
-                                prompt=judge_prompt,
-                                timeout_s=judge_timeout_s,
-                                output_schema=judge_schema,
-                                profile=str(args.judge_codex_profile) if args.judge_codex_profile else None,
-                                reasoning_effort=str(args.judge_codex_reasoning_effort)
-                                if args.judge_codex_reasoning_effort
-                                else None,
-                                codex_home=codex_home,
-                            )
-                        elif judge_provider == "claude_sdk":
-                            judge_text, judge_usage = _claude_agent_sdk_call(
-                                model=judge_model,
-                                prompt=judge_prompt,
-                                timeout_s=judge_timeout_s,
-                                json_schema=judge_schema,
-                                env=claude_env,
-                            )
-                        elif judge_provider == "claude_cli":
-                            judge_text, judge_usage = _claude_cli_call(
-                                model=judge_model,
-                                prompt=judge_prompt,
-                                timeout_s=judge_timeout_s,
-                                json_schema=judge_schema,
-                                env=claude_env,
-                            )
-                        elif judge_provider == "anthropic":
-                            judge_text, judge_usage = _anthropic_call(
-                                model=judge_model,
-                                prompt=judge_prompt,
-                                max_tokens=int(args.judge_max_tokens),
-                                temperature=float(args.judge_temperature),
-                            )
-                        else:  # pragma: no cover
-                            raise RuntimeError(f"Unsupported judge provider: {judge_provider}")
-                    except Exception as exc:
-                        judge_error = f"{type(exc).__name__}: {exc}"
-                        judge_text = ""
-                        judge_usage = {"error": judge_error}
-                        judge_errors_total += 1
-                    judge_dt = time.monotonic() - t0
-                    judge_time_s.append(float(judge_dt))
+                    judge_text = ""
+                    judge_usage: dict[str, Any] = {}
+                    judge_usage_attempts: list[dict[str, Any]] = []
+                    judge_dt_total = 0.0
+                    verdict_parsed: Any | None = None
+                    winner: str | None = None
+                    judge_attempts = 0
+                    last_attempt_error: str | None = None
 
-                    verdict_parsed = _extract_json_from_text(judge_text)
-                    winner = _extract_judge_winner(verdict_parsed)
+                    judge_retries = max(0, int(args.judge_retries))
+                    for attempt in range(judge_retries + 1):
+                        judge_attempts = attempt + 1
+                        prompt2 = (
+                            judge_prompt
+                            if attempt == 0
+                            else (judge_prompt + "\n\nREMINDER: Return ONLY valid JSON. Do not include newlines in strings.")
+                        )
+
+                        t0 = time.monotonic()
+                        attempt_error: str | None = None
+                        try:
+                            if judge_provider == "codex":
+                                judge_text, judge_usage = _codex_cli_call(
+                                    model=judge_model,
+                                    prompt=prompt2,
+                                    timeout_s=judge_timeout_s,
+                                    output_schema=judge_schema,
+                                    profile=str(args.judge_codex_profile) if args.judge_codex_profile else None,
+                                    reasoning_effort=str(args.judge_codex_reasoning_effort)
+                                    if args.judge_codex_reasoning_effort
+                                    else None,
+                                    codex_home=codex_home,
+                                )
+                            elif judge_provider == "claude_sdk":
+                                judge_text, judge_usage = _claude_agent_sdk_call(
+                                    model=judge_model,
+                                    prompt=prompt2,
+                                    timeout_s=judge_timeout_s,
+                                    json_schema=judge_schema,
+                                    env=claude_env,
+                                )
+                            elif judge_provider == "claude_cli":
+                                judge_text, judge_usage = _claude_cli_call(
+                                    model=judge_model,
+                                    prompt=prompt2,
+                                    timeout_s=judge_timeout_s,
+                                    json_schema=judge_schema,
+                                    env=claude_env,
+                                )
+                            elif judge_provider == "anthropic":
+                                judge_text, judge_usage = _anthropic_call(
+                                    model=judge_model,
+                                    prompt=prompt2,
+                                    max_tokens=int(args.judge_max_tokens),
+                                    temperature=float(args.judge_temperature),
+                                )
+                            else:  # pragma: no cover
+                                raise RuntimeError(f"Unsupported judge provider: {judge_provider}")
+                        except Exception as exc:
+                            attempt_error = f"{type(exc).__name__}: {exc}"
+                            judge_text = ""
+                            judge_usage = {"error": attempt_error}
+                            judge_errors_total += 1
+
+                        judge_dt_total += time.monotonic() - t0
+                        judge_usage_attempts.append(dict(judge_usage or {}))
+                        last_attempt_error = attempt_error
+
+                        verdict_parsed = _extract_json_from_text(judge_text)
+                        winner = _extract_judge_winner(verdict_parsed)
+                        if winner is not None:
+                            judge_error = attempt_error
+                            break
+
+                        if attempt < judge_retries:
+                            continue
+
                     if winner is None:
+                        # Treat invalid/empty verdicts as errors (do not silently count as ties).
                         judge_bad_json += 1
+                        judge_errors_total += 1
+                        if last_attempt_error is not None:
+                            judge_error = last_attempt_error
+                        elif not str(judge_text).strip():
+                            judge_error = "empty_verdict"
+                        else:
+                            judge_error = "bad_json"
                         winner = "tie"
+
+                    judge_time_s.append(float(judge_dt_total))
 
                     # Convert judge verdict into a TLDR-vs-rg win score.
                     if winner == "tie":
@@ -1054,8 +1110,10 @@ def main() -> int:
                         "trial": trial,
                         "provider": judge_provider,
                         "model": judge_model,
-                        "time_s": round(float(judge_dt), 6),
+                        "time_s": round(float(judge_dt_total), 6),
+                        "attempts": int(judge_attempts),
                         "usage": judge_usage,
+                        "usage_attempts": judge_usage_attempts,
                         "error": judge_error,
                         "winner": winner,
                         "label_to_source": label_to_source,
@@ -1071,6 +1129,7 @@ def main() -> int:
                             "winner": winner,
                             "win_tldr_over_rg": win,
                             "judge_error": judge_error,
+                            "judge_attempts": int(judge_attempts),
                         }
                     )
 
@@ -1104,6 +1163,7 @@ def main() -> int:
                 "judge_timeout_s": judge_timeout_s,
                 "judge_max_tokens": int(args.judge_max_tokens),
                 "judge_temperature": float(args.judge_temperature),
+                "judge_retries": int(args.judge_retries),
                 "enforce_json_schema": bool(args.enforce_json_schema),
                 "limit": int(args.limit) if args.limit is not None else None,
                 "codex_profile": str(args.codex_profile) if args.codex_profile else None,

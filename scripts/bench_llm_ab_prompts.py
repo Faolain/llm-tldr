@@ -290,6 +290,13 @@ def _slice_context_tldr_plus_code(
     abs_path = repo_root / file_rel
     src = abs_path.read_text(encoding="utf-8", errors="replace")
     lines = src.splitlines()
+    span = bte._python_find_def_span(lines, function_name=function)
+    if span is not None:
+        lo, hi = span
+    else:
+        lo, hi = (1, len(lines))
+    lo = max(1, int(lo))
+    hi = min(int(hi), len(lines))
     tldr_lines = sorted(
         {
             int(x)
@@ -304,25 +311,50 @@ def _slice_context_tldr_plus_code(
         }
     )
 
+    # Open-ended tasks benefit from a small code window around each slice-selected line,
+    # not just the exact line itself.
+    window_radius = 3
     selected: list[int] = []
     code_text = ""
     by_distance = sorted(tldr_lines, key=lambda x: (abs(int(x) - int(target_line)), x))
     for ln in by_distance:
-        cand_lines = [*selected, int(ln)]
-        code2, included2 = bte._extract_lines_for_numbers(file_rel, lines=lines, line_nos=cand_lines)
+        cand_lines = sorted({*selected, int(ln), int(target_line)})
+        cand_lines = [int(x) for x in cand_lines if lo <= int(x) <= hi]
+        windows = [(int(lo), min(int(hi), int(lo) + 3))]
+        windows.extend(
+            [
+                (max(int(lo), int(x) - int(window_radius)), min(int(hi), int(x) + int(window_radius)))
+                for x in cand_lines
+            ]
+        )
+        merged = bte._merge_windows(windows)
+        code_pieces = [bte._render_code_block(file_rel, start=s, end=e, lines=lines) for s, e in merged]
+        code2 = "\n\n".join([p for p in code_pieces if p.strip()])
         payload2 = json.dumps(
-            {"file": file_rel, "function": function, "target_line": int(target_line), "lines": sorted(included2)},
+            {
+                "file": file_rel,
+                "function": function,
+                "target_line": int(target_line),
+                "slice_lines": cand_lines,
+                "code_window_radius": int(window_radius),
+            },
             sort_keys=True,
         )
         if code2:
             payload2 += "\n\n" + code2
         if int(count_tokens(payload2)) > budget_tokens:
             continue
-        selected = sorted(included2)
+        selected = cand_lines
         code_text = code2
 
     payload = json.dumps(
-        {"file": file_rel, "function": function, "target_line": int(target_line), "lines": selected},
+        {
+            "file": file_rel,
+            "function": function,
+            "target_line": int(target_line),
+            "slice_lines": selected,
+            "code_window_radius": int(window_radius),
+        },
         sort_keys=True,
     )
     if code_text:
@@ -411,6 +443,13 @@ def _data_flow_context_tldr_plus_code(
     abs_path = repo_root / file_rel
     src = abs_path.read_text(encoding="utf-8", errors="replace")
     lines = src.splitlines()
+    span = bte._python_find_def_span(lines, function_name=function)
+    if span is not None:
+        lo, hi = span
+    else:
+        lo, hi = (1, len(lines))
+    lo = max(1, int(lo))
+    hi = min(int(hi), len(lines))
 
     dfg = get_dfg_context(str(abs_path), function, language="python")
 
@@ -441,12 +480,32 @@ def _data_flow_context_tldr_plus_code(
 
     selected: list[dict[str, Any]] = []
     code_text = ""
+    window_radius = 3
     for ev in events2:
         cand = [*selected, ev]
-        line_nos = [int(x.get("line") or 0) for x in cand if isinstance(x.get("line"), int)]
-        code2, _included2 = bte._extract_lines_for_numbers(file_rel, lines=lines, line_nos=line_nos)
+        line_nos = [
+            int(x.get("line") or 0)
+            for x in cand
+            if isinstance(x.get("line"), int) and lo <= int(x.get("line") or 0) <= hi
+        ]
+        windows = [(int(lo), min(int(hi), int(lo) + 3))]
+        windows.extend(
+            [
+                (max(int(lo), int(x) - int(window_radius)), min(int(hi), int(x) + int(window_radius)))
+                for x in line_nos
+            ]
+        )
+        merged = bte._merge_windows(windows)
+        code_pieces = [bte._render_code_block(file_rel, start=s, end=e, lines=lines) for s, e in merged]
+        code2 = "\n\n".join([p for p in code_pieces if p.strip()])
         payload2 = json.dumps(
-            {"file": file_rel, "function": function, "variable": variable, "flow": cand},
+            {
+                "file": file_rel,
+                "function": function,
+                "variable": variable,
+                "flow": cand,
+                "code_window_radius": int(window_radius),
+            },
             sort_keys=True,
         )
         if code2:
@@ -457,7 +516,13 @@ def _data_flow_context_tldr_plus_code(
         code_text = code2
 
     payload = json.dumps(
-        {"file": file_rel, "function": function, "variable": variable, "flow": selected},
+        {
+            "file": file_rel,
+            "function": function,
+            "variable": variable,
+            "flow": selected,
+            "code_window_radius": int(window_radius),
+        },
         sort_keys=True,
     )
     if code_text:

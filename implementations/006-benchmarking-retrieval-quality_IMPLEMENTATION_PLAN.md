@@ -687,7 +687,12 @@ Next step options:
     - judge score means (rg vs TLDR): correctness `4.900` vs `4.433`, groundedness `5.000` vs `4.767`, completeness `4.367` vs `3.533`, clarity `4.733` vs `4.267`, actionability `4.167` vs `3.533`
     - judge_bad_json: `6` (verdict parse failures; counted as ties)
     - latency p50/p95 (answer): TLDR `7.87s/11.81s` vs rg `7.68s/13.23s`; judge `15.49s/22.39s`
-  Next step: improve TLDR open-ended slice/data_flow context packaging (currently weaker than rg on this suite), and reduce judge parse failures.
+  Next step:
+  1. Phase 7 (open-ended judge): improve TLDR open-ended slice/data_flow context packing and reduce judge parse failures.
+    - This is the immediate follow-up after the 12-task x 3-trial judge run above.
+    - Practically:
+      - Adjust `scripts/bench_llm_ab_prompts.py` to include better budgeted code windows around slice/DFG-selected lines (not just the exact lines).
+      - Make the judge path more robust in `scripts/bench_llm_ab_run.py` (retry / treat empty verdicts as errors, reduce `judge_bad_json`).
 
 - 2026-02-10: Fixed Phase 7 task/question mismatches:
   - `benchmarks/llm/tasks.json`: corrected 4 slice task questions (`L22`-`L25`) to match structural `query_id` targets (`B07`-`B10`) instead of outdated `parse_*` / `salted_hmac` text.
