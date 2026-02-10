@@ -700,6 +700,23 @@ Next step options:
   - Extended `scripts/bench_llm_ab_run.py` to deterministically score retrieval outputs (`{\"paths\": [...]}`) and report pairwise win rates across all sources (not only `tldr_over_rg`).
   - Expanded the open-ended suite with more debugging-style questions (`OE13`-`OE18`).
 
+- 2026-02-10: Ran Phase 7 deterministic retrieval-type structured batch (Codex):
+  - prompts report: `benchmark/runs/20260210-065101Z-llm-ab-prompts-django-retrieval.json` (`tasks_total=16`, `budget_tokens=2000`, `tokens_context_mean`: rg ~403.7, semantic ~404.3, hybrid_rrf ~617.6)
+  - prompts: `benchmark/llm/20260210-065101Z-llm-ab-django-retrieval.jsonl`
+  - run report: `benchmark/runs/20260210-065101Z-llm-ab-run-structured-retrieval.json` (`--trials 3`, 16 tasks x 3 variants = 144 calls)
+  - answers: `benchmark/llm/20260210-065101Z-llm-ab-answers-retrieval.jsonl`
+  - results (`f1_mean` across tasks; old scorer treated empty/empty as `f1=0` so absolute means are underreported due to 1 negative task):
+    - hybrid_rrf: `0.9375` (adjusted: `1.0000`)
+    - rg: `0.8958` (adjusted: `0.9583`)
+    - semantic: `0.6875` (adjusted: `0.7500`)
+    - pairwise win rates (ties=0.5): `hybrid_rrf_over_rg=0.5313`, `rg_over_semantic=0.5938`, `hybrid_rrf_over_semantic=0.6250`
+  Notes:
+  - On 4 positive tasks (`LR04`, `LR11`, `LR13`, `LR14`), `semantic` consistently returned `{\"paths\": []}` (missed the definition file within the ranked+budgeted context); `hybrid_rrf` and `rg` remained perfect on this run.
+
+- 2026-02-10: Fixed Phase 7 structured scorer empty-set handling:
+  - `scripts/bench_llm_ab_run.py`: when both expected and predicted sets are empty, treat precision/recall/F1 as `1.0` (previously `0.0` due to 0/0 handling).
+  - This mainly affects negative retrieval tasks (and any future tasks whose ground truth is legitimately empty).
+
 **Acceptance**
 - Clear win-rate signal on at least one task class (impact/slicing/debugging).
 

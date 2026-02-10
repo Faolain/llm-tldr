@@ -38,11 +38,14 @@ class Score:
 
     @property
     def precision(self) -> float:
-        return self.tp / (self.tp + self.fp) if (self.tp + self.fp) else 0.0
+        # Treat "no predicted positives" as perfect precision (no false positives).
+        # This also makes the empty/empty case score as perfect overall.
+        return self.tp / (self.tp + self.fp) if (self.tp + self.fp) else 1.0
 
     @property
     def recall(self) -> float:
-        return self.tp / (self.tp + self.fn) if (self.tp + self.fn) else 0.0
+        # Treat "no actual positives" as perfect recall (no false negatives).
+        return self.tp / (self.tp + self.fn) if (self.tp + self.fn) else 1.0
 
     @property
     def f1(self) -> float:

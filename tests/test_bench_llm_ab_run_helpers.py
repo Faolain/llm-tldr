@@ -44,6 +44,18 @@ def test_score_sets_f1():
     assert round(sc.f1, 4) == 0.6667
 
 
+def test_score_sets_empty_is_perfect():
+    mod = _load_mod()
+    score_sets = mod["_score_sets"]
+    sc = score_sets(set(), set())
+    assert sc.tp == 0
+    assert sc.fp == 0
+    assert sc.fn == 0
+    assert sc.precision == 1.0
+    assert sc.recall == 1.0
+    assert sc.f1 == 1.0
+
+
 def test_extract_judge_winner():
     mod = _load_mod()
     fn = mod["_extract_judge_winner"]
