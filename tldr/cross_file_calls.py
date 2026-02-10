@@ -310,6 +310,27 @@ def scan_project(
     if respect_ignore and ignore_spec is None:
         ignore_spec = IgnoreSpec(root)
 
+    # Avoid per-file `git check-ignore` calls for large repos. When IgnoreSpec
+    # is used, `match_file()` falls back to a per-path subprocess call for
+    # gitignore checks. For benchmarks (and large corpora generally), that can
+    # make scans effectively unusable. Prefer batching gitignore checks.
+    use_batch_gitignore = (
+        respect_ignore
+        and isinstance(ignore_spec, IgnoreSpec)
+        and bool(getattr(ignore_spec, "use_gitignore", True))
+        and bool(getattr(ignore_spec, "_is_git", False))
+    )
+    negation_patterns = []
+    if use_batch_gitignore:
+        try:
+            negation_patterns = [
+                p
+                for p in getattr(ignore_spec, "_spec").patterns
+                if getattr(p, "include", None) is True
+            ]
+        except Exception:
+            negation_patterns = []
+
     if language == "python":
         extensions = {'.py'}
     elif language == "typescript":
@@ -347,6 +368,9 @@ def scan_project(
     else:
         raise ValueError(f"Unsupported language: {language}")
 
+    kept_due_to_negation: list[tuple[str, str]] = []
+    gitignore_candidates: list[tuple[str, str]] = []
+
     for dirpath, dirnames, filenames in os.walk(root):
         # Always prune TLDR cache dir to avoid self-indexing
         dirnames[:] = [d for d in dirnames if d != ".tldr"]
@@ -354,24 +378,72 @@ def scan_project(
         # Skip ignored directories (modifying dirnames in-place prunes os.walk)
         if respect_ignore and ignore_spec:
             rel_dir = os.path.relpath(dirpath, root)
-            # Check if current directory should be ignored
-            if rel_dir != '.' and ignore_spec.match_file(rel_dir + '/'):
-                dirnames.clear()  # Don't descend into ignored directories
-                continue
-            # Filter subdirectories
-            dirnames[:] = [
-                d for d in dirnames
-                if not ignore_spec.match_file(os.path.join(rel_dir, d) + '/')
-            ]
+            if use_batch_gitignore and isinstance(ignore_spec, IgnoreSpec):
+                # Directory pruning only uses .tldrignore patterns (fast). Gitignore
+                # filtering is applied in a single batch step at the end.
+                spec = getattr(ignore_spec, "_spec")
+                if rel_dir != '.' and spec.match_file(rel_dir + '/'):
+                    dirnames.clear()
+                    continue
+                dirnames[:] = [
+                    d for d in dirnames
+                    if not spec.match_file(os.path.join(rel_dir, d) + '/')
+                ]
+            else:
+                # Check if current directory should be ignored
+                if rel_dir != '.' and ignore_spec.match_file(rel_dir + '/'):
+                    dirnames.clear()  # Don't descend into ignored directories
+                    continue
+                # Filter subdirectories
+                dirnames[:] = [
+                    d for d in dirnames
+                    if not ignore_spec.match_file(os.path.join(rel_dir, d) + '/')
+                ]
 
         for filename in filenames:
             if any(filename.endswith(ext) for ext in extensions):
                 file_path = os.path.join(dirpath, filename)
-                # Check individual file against ignore patterns
                 if respect_ignore and ignore_spec:
                     rel_path = os.path.relpath(file_path, root)
+                    if use_batch_gitignore and isinstance(ignore_spec, IgnoreSpec):
+                        spec = getattr(ignore_spec, "_spec")
+                        if spec.match_file(rel_path):
+                            continue
+                        # If .tldrignore has an explicit negation for this path,
+                        # it overrides gitignore entirely.
+                        has_neg = False
+                        for pat in negation_patterns:
+                            try:
+                                if pat.match_file(rel_path):
+                                    has_neg = True
+                                    break
+                            except Exception:
+                                continue
+                        if has_neg:
+                            kept_due_to_negation.append((file_path, rel_path))
+                        else:
+                            gitignore_candidates.append((file_path, rel_path))
+                        continue
                     if ignore_spec.match_file(rel_path):
                         continue
+                files.append(file_path)
+
+    if use_batch_gitignore and isinstance(ignore_spec, IgnoreSpec):
+        from .tldrignore import batch_gitignored
+
+        git_root = getattr(ignore_spec, "_git_root", None)
+        project_root = Path(getattr(ignore_spec, "project_path", root)).resolve()
+
+        candidate_paths = [Path(fp) for fp, _ in gitignore_candidates]
+        ignored_rel = batch_gitignored(
+            candidate_paths,
+            project_root,
+            git_root=git_root,
+        )
+        for file_path, rel_path in kept_due_to_negation:
+            files.append(file_path)
+        for file_path, rel_path in gitignore_candidates:
+            if rel_path not in ignored_rel:
                 files.append(file_path)
 
     # Apply workspace config filtering if provided

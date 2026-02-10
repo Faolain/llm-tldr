@@ -120,7 +120,6 @@ end
 
     # Must handle continue - look for back edge
     # The CFG should have an edge from continue block back to loop header
-    back_edges = [e for e in cfg.edges if e.edge_type == "back" or "continue" in str(e).lower()]
 
     # Either explicit back edge or the graph structure handles continue
     # At minimum, the function should parse without error

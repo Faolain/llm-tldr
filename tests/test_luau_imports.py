@@ -10,7 +10,6 @@ These tests define expected behavior for parse_luau_imports().
 """
 
 import tempfile
-from pathlib import Path
 
 import pytest
 

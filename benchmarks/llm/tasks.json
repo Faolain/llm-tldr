@@ -1,0 +1,193 @@
+{
+  "schema_version": 1,
+  "repo": "django",
+  "pinned_ref": "5.1.13",
+  "updated": "2026-02-09",
+  "notes": [
+    "Phase 7 downstream A/B task suite (LLM) for Django.",
+    "Tasks reference structural ground-truth queries in benchmarks/python/django_structural_queries.json via query_id.",
+    "The goal is to compare answer quality when the model is given rg-derived context vs TLDR-derived context under a fixed context budget."
+  ],
+  "tasks": [
+    {
+      "id": "L01",
+      "category": "impact",
+      "query_id": "A01",
+      "question": "List all direct callers of _contains_subclass (django/contrib/admin/checks.py). Output JSON: {\"callers\": [{\"file\": str, \"function\": str}, ...]}."
+    },
+    {
+      "id": "L02",
+      "category": "impact",
+      "query_id": "A02",
+      "question": "List all direct callers of construct_search (django/contrib/admin/options.py). Output JSON: {\"callers\": [{\"file\": str, \"function\": str}, ...]}."
+    },
+    {
+      "id": "L03",
+      "category": "impact",
+      "query_id": "A03",
+      "question": "List all direct callers of items_for_result (django/contrib/admin/templatetags/admin_list.py). Output JSON: {\"callers\": [{\"file\": str, \"function\": str}, ...]}."
+    },
+    {
+      "id": "L04",
+      "category": "impact",
+      "query_id": "A04",
+      "question": "List all direct callers of link_in_col (django/contrib/admin/templatetags/admin_list.py). Output JSON: {\"callers\": [{\"file\": str, \"function\": str}, ...]}."
+    },
+    {
+      "id": "L05",
+      "category": "impact",
+      "query_id": "A05",
+      "question": "List all direct callers of make_qs_param (django/contrib/admin/templatetags/admin_list.py). Output JSON: {\"callers\": [{\"file\": str, \"function\": str}, ...]}."
+    },
+    {
+      "id": "L06",
+      "category": "impact",
+      "query_id": "A06",
+      "question": "List all direct callers of _get_changed_field_labels_from_form (django/contrib/admin/utils.py). Output JSON: {\"callers\": [{\"file\": str, \"function\": str}, ...]}."
+    },
+    {
+      "id": "L07",
+      "category": "impact",
+      "query_id": "A07",
+      "question": "List all direct callers of _coerce_field_name (django/contrib/admin/templatetags/admin_list.py). Output JSON: {\"callers\": [{\"file\": str, \"function\": str}, ...]}."
+    },
+    {
+      "id": "L08",
+      "category": "impact",
+      "query_id": "A08",
+      "question": "List all direct callers of results (django/contrib/admin/templatetags/admin_list.py). Output JSON: {\"callers\": [{\"file\": str, \"function\": str}, ...]}."
+    },
+    {
+      "id": "L09",
+      "category": "impact",
+      "query_id": "A09",
+      "question": "List all direct callers of _get_failure_view (django/middleware/csrf.py). Output JSON: {\"callers\": [{\"file\": str, \"function\": str}, ...]}."
+    },
+    {
+      "id": "L10",
+      "category": "impact",
+      "query_id": "A10",
+      "question": "List all direct callers of _check_token_format (django/middleware/csrf.py). Output JSON: {\"callers\": [{\"file\": str, \"function\": str}, ...]}."
+    },
+    {
+      "id": "L11",
+      "category": "impact",
+      "query_id": "A11",
+      "question": "List all direct callers of _unmask_cipher_token (django/middleware/csrf.py). Output JSON: {\"callers\": [{\"file\": str, \"function\": str}, ...]}."
+    },
+    {
+      "id": "L12",
+      "category": "impact",
+      "query_id": "A12",
+      "question": "List all direct callers of _add_new_csrf_cookie (django/middleware/csrf.py). Output JSON: {\"callers\": [{\"file\": str, \"function\": str}, ...]}."
+    },
+    {
+      "id": "L13",
+      "category": "impact",
+      "query_id": "A13",
+      "question": "List all direct callers of _get_new_csrf_string (django/middleware/csrf.py). Output JSON: {\"callers\": [{\"file\": str, \"function\": str}, ...]}."
+    },
+    {
+      "id": "L14",
+      "category": "impact",
+      "query_id": "A14",
+      "question": "List all direct callers of _mask_cipher_secret (django/middleware/csrf.py). Output JSON: {\"callers\": [{\"file\": str, \"function\": str}, ...]}."
+    },
+    {
+      "id": "L15",
+      "category": "impact",
+      "query_id": "A15",
+      "question": "List all direct callers of _does_token_match (django/middleware/csrf.py). Output JSON: {\"callers\": [{\"file\": str, \"function\": str}, ...]}."
+    },
+    {
+      "id": "L16",
+      "category": "slice",
+      "query_id": "B01",
+      "question": "Compute the backward slice lines for _boolean_icon at target_line=185 (django/contrib/admin/templatetags/admin_list.py). Output JSON: {\"lines\": [int, ...]} (sorted ascending)."
+    },
+    {
+      "id": "L17",
+      "category": "slice",
+      "query_id": "B02",
+      "question": "Compute the backward slice lines for _does_token_match at target_line=157 (django/middleware/csrf.py). Output JSON: {\"lines\": [int, ...]} (sorted ascending)."
+    },
+    {
+      "id": "L18",
+      "category": "slice",
+      "query_id": "B03",
+      "question": "Compute the backward slice lines for get_token at target_line=114 (django/middleware/csrf.py). Output JSON: {\"lines\": [int, ...]} (sorted ascending)."
+    },
+    {
+      "id": "L19",
+      "category": "slice",
+      "query_id": "B04",
+      "question": "Compute the backward slice lines for response_for_exception at target_line=129 (django/core/handlers/exception.py). Output JSON: {\"lines\": [int, ...]} (sorted ascending)."
+    },
+    {
+      "id": "L20",
+      "category": "slice",
+      "query_id": "B05",
+      "question": "Compute the backward slice lines for get_valid_filename at target_line=283 (django/utils/text.py). Output JSON: {\"lines\": [int, ...]} (sorted ascending)."
+    },
+    {
+      "id": "L21",
+      "category": "slice",
+      "query_id": "B06",
+      "question": "Compute the backward slice lines for compress_string at target_line=368 (django/utils/text.py). Output JSON: {\"lines\": [int, ...]} (sorted ascending)."
+    },
+    {
+      "id": "L22",
+      "category": "slice",
+      "query_id": "B07",
+      "question": "Compute the backward slice lines for parse_date at target_line=66 (django/utils/dateparse.py). Output JSON: {\"lines\": [int, ...]} (sorted ascending)."
+    },
+    {
+      "id": "L23",
+      "category": "slice",
+      "query_id": "B08",
+      "question": "Compute the backward slice lines for parse_time at target_line=95 (django/utils/dateparse.py). Output JSON: {\"lines\": [int, ...]} (sorted ascending)."
+    },
+    {
+      "id": "L24",
+      "category": "slice",
+      "query_id": "B09",
+      "question": "Compute the backward slice lines for parse_datetime at target_line=129 (django/utils/dateparse.py). Output JSON: {\"lines\": [int, ...]} (sorted ascending)."
+    },
+    {
+      "id": "L25",
+      "category": "slice",
+      "query_id": "B10",
+      "question": "Compute the backward slice lines for salted_hmac at target_line=45 (django/utils/crypto.py). Output JSON: {\"lines\": [int, ...]} (sorted ascending)."
+    },
+    {
+      "id": "L26",
+      "category": "data_flow",
+      "query_id": "D01",
+      "question": "Trace icon_url in _boolean_icon (django/contrib/admin/templatetags/admin_list.py). Output JSON: {\"flow\": [{\"line\": int, \"event\": \"defined\"|\"used\"}, ...]} (sorted by line)."
+    },
+    {
+      "id": "L27",
+      "category": "data_flow",
+      "query_id": "D02",
+      "question": "Trace mask in _mask_cipher_secret (django/middleware/csrf.py). Output JSON: {\"flow\": [{\"line\": int, \"event\": \"defined\"|\"used\"}, ...]} (sorted by line)."
+    },
+    {
+      "id": "L28",
+      "category": "data_flow",
+      "query_id": "D03",
+      "question": "Trace mask in _unmask_cipher_token (django/middleware/csrf.py). Output JSON: {\"flow\": [{\"line\": int, \"event\": \"defined\"|\"used\"}, ...]} (sorted by line)."
+    },
+    {
+      "id": "L29",
+      "category": "data_flow",
+      "query_id": "D04",
+      "question": "Trace s in get_valid_filename (django/utils/text.py). Output JSON: {\"flow\": [{\"line\": int, \"event\": \"defined\"|\"used\"}, ...]} (sorted by line)."
+    },
+    {
+      "id": "L30",
+      "category": "data_flow",
+      "query_id": "D05",
+      "question": "Trace filename in compress_string (django/utils/text.py). Output JSON: {\"flow\": [{\"line\": int, \"event\": \"defined\"|\"used\"}, ...]} (sorted by line)."
+    }
+  ]
+}

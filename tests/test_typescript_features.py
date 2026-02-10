@@ -342,7 +342,6 @@ class TestImpact:
         result = run_tldr(["impact", "helper", "--project", tmpdir])
 
         # main.ts calls helper, so it should appear in impact
-        output = json.dumps(result)
         assert len(result) > 0, \
             f"should find callers of helper, got: {result}"
 

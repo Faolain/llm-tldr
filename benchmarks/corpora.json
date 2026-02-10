@@ -24,7 +24,17 @@
         "Pinned to the latest stable tag as of 2026-02-09 (v16.1.6).",
         "This corpus should get its own curated edge set (benchmarks/ts/nextjs_curated_edges.json) for repeatable quality scoring."
       ]
+    },
+    {
+      "id": "django",
+      "git_url": "https://github.com/django/django.git",
+      "language": "python",
+      "pinned_ref": "5.1.13",
+      "pinned_sha": "c04a09ddb3bb1fe8157292fcd902b35cad9a5e10",
+      "notes": [
+        "Pinned Django corpus for Phase 4 Python structural analysis benchmarks (impact/slice/cfg/dfg).",
+        "Tag chosen for stability; update requires re-running the full Phase 4 suite."
+      ]
     }
   ]
 }
-

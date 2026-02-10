@@ -255,11 +255,6 @@ def _validate_meta(meta: dict, config: IndexConfig) -> None:
         config_patterns = list(config.cli_patterns or ())
         if meta_patterns != config_patterns:
             raise ValueError("Ignore patterns mismatch for existing index directory.")
-        if config.use_gitignore:
-            meta_root = ignore_meta.get("gitignore_root_abs")
-            config_root = _normalize_abs(config.gitignore_root) if config.gitignore_root else None
-            if meta_root and config_root and meta_root != config_root:
-                raise ValueError("Gitignore root mismatch for existing index directory.")
 
 
 def ensure_index(
@@ -329,6 +324,19 @@ def _sync_ignore_meta(meta: dict, config: IndexConfig) -> tuple[bool, bool]:
 
     if ignore_meta.get("content_hash") != expected_hash:
         ignore_meta["content_hash"] = expected_hash
+        ignore_meta["last_changed_at"] = _now_iso()
+        meta_changed = True
+        ignore_changed = True
+
+    # Keep metadata consistent even when git root shifts (e.g. corpora checkouts under a gitignored host repo).
+    expected_git_root_abs = (
+        _normalize_abs(config.gitignore_root) if config.gitignore_root else None
+    )
+    if ignore_meta.get("gitignore_root_abs") != expected_git_root_abs:
+        ignore_meta["gitignore_root_abs"] = expected_git_root_abs
+        ignore_meta["gitignore_root_rel_to_cache_root"] = _path_rel(
+            config.gitignore_root, config.cache_root
+        )
         ignore_meta["last_changed_at"] = _now_iso()
         meta_changed = True
         ignore_changed = True
@@ -458,13 +466,14 @@ def get_index_context(
 
     gitignore_root = None
     if use_gitignore:
-        if ignore_meta and ignore_meta.get("gitignore_root_abs"):
-            gitignore_root = Path(ignore_meta.get("gitignore_root_abs"))
-        else:
-            from tldr.tldrignore import resolve_git_root
-            gitignore_root = resolve_git_root(cache_root)
-            if gitignore_root is None:
-                gitignore_root = cache_root
+        # Gitignore should be evaluated in the context of the scanned project,
+        # not the cache-root's repo. This matters when benchmarking corpora that
+        # live under a gitignored directory (e.g. `benchmark/` in this repo).
+        from tldr.tldrignore import resolve_git_root
+
+        gitignore_root = resolve_git_root(scan_root)
+        if gitignore_root is None:
+            gitignore_root = scan_root
 
     config = IndexConfig(
         cache_root=cache_root,

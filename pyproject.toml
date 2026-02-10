@@ -72,8 +72,10 @@ dev = [
     "black>=21.0",
     "flake8>=3.8",
     "mypy>=0.900",
+    "radon>=6.0.1",
     "rich>=13.0",
     "shtab>=1.7.0",
+    "claude-agent-sdk",
 ]
 
 [project.urls]

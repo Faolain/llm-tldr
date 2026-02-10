@@ -7,10 +7,8 @@ These tests define the expected behavior for:
 """
 
 import json
-import os
 import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -199,8 +197,6 @@ class TestDaemonStatsIntegration:
 
     def test_daemon_tracks_session_stats(self):
         """Daemon should track stats per session ID."""
-        from tldr.daemon import TLDRDaemon
-
         # This tests that the daemon can accept and track session IDs
         # Implementation will add session tracking to daemon
         pass  # TODO: Implement after daemon changes

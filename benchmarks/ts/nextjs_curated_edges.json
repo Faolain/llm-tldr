@@ -1,0 +1,162 @@
+{
+  "repo": "nextjs",
+  "updated": "2026-02-09",
+  "notes": [
+    "Curated cross-file call edges for validating llm-tldr's TS-resolved callgraph on the Next.js monorepo (vercel/next.js).",
+    "All paths are repo-root relative. Symbols are the callgraph symbol ids (e.g. Class.method).",
+    "This set is intentionally biased toward patterns that are hard to answer well with grep-style tooling (default exports, renamed imports, barrel/index imports, workspace package imports)."
+  ],
+  "exclusions": [
+    "Dynamic dispatch patterns (e.g. element access like obj[method](), any-typed calls, computed property names).",
+    "Reflection-like patterns (eval, Function constructor).",
+    "Generated build outputs and node_modules (these should be ignored by default ignore rules).",
+    "Calls whose nearest stable enclosing symbol is anonymous (inline arrow lambdas without a stable binding name)."
+  ],
+  "edges": [
+    {
+      "caller": { "file": "packages/next/src/server/config.ts", "symbol": "loadConfig" },
+      "callee": { "file": "packages/next-env/index.ts", "symbol": "loadEnvConfig" }
+    },
+    {
+      "caller": { "file": "packages/next/src/server/config.ts", "symbol": "loadConfig" },
+      "callee": { "file": "packages/next-env/index.ts", "symbol": "updateInitialEnv" }
+    },
+    {
+      "caller": { "file": "packages/next/src/server/next-server.ts", "symbol": "NextNodeServer.loadEnvConfig" },
+      "callee": { "file": "packages/next-env/index.ts", "symbol": "loadEnvConfig" }
+    },
+    {
+      "caller": { "file": "packages/next/src/server/lib/app-info-log.ts", "symbol": "getStartServerInfo" },
+      "callee": { "file": "packages/next/src/server/config.ts", "symbol": "loadConfig" }
+    },
+    {
+      "caller": { "file": "packages/next/src/server/lib/app-info-log.ts", "symbol": "getStartServerInfo" },
+      "callee": { "file": "packages/next-env/index.ts", "symbol": "loadEnvConfig" }
+    },
+    {
+      "caller": { "file": "packages/next/src/build/jest/jest.ts", "symbol": "getConfig" },
+      "callee": { "file": "packages/next/src/server/config.ts", "symbol": "loadConfig" }
+    },
+    {
+      "caller": { "file": "packages/next/src/build/jest/jest.ts", "symbol": "setUpEnv" },
+      "callee": { "file": "packages/next-env/index.ts", "symbol": "loadEnvConfig" }
+    },
+    {
+      "caller": { "file": "packages/next/src/server/config.ts", "symbol": "assignDefaultsAndValidate" },
+      "callee": { "file": "packages/next/src/lib/find-root.ts", "symbol": "findRootDirAndLockFiles" }
+    },
+    {
+      "caller": { "file": "packages/next/src/server/config.ts", "symbol": "assignDefaultsAndValidate" },
+      "callee": { "file": "packages/next/src/lib/find-root.ts", "symbol": "warnDuplicatedLockFiles" }
+    },
+    {
+      "caller": { "file": "packages/next/src/lib/find-root.ts", "symbol": "warnDuplicatedLockFiles" },
+      "callee": { "file": "packages/next/src/build/output/log.ts", "symbol": "warnOnce" }
+    },
+    {
+      "caller": { "file": "packages/next/src/server/config.ts", "symbol": "checkDeprecations" },
+      "callee": { "file": "packages/next/src/lib/find-pages-dir.ts", "symbol": "findDir" }
+    },
+    {
+      "caller": { "file": "packages/next/src/server/config.ts", "symbol": "normalizeNextConfigZodErrors" },
+      "callee": { "file": "packages/next/src/shared/lib/zod.ts", "symbol": "normalizeZodErrors" }
+    },
+    {
+      "caller": { "file": "packages/next/src/server/config.ts", "symbol": "assignDefaultsAndValidate" },
+      "callee": { "file": "packages/next/src/shared/lib/match-remote-pattern.ts", "symbol": "matchRemotePattern" }
+    },
+    {
+      "caller": { "file": "packages/next/src/server/config.ts", "symbol": "assignDefaultsAndValidate" },
+      "callee": { "file": "packages/next/src/shared/lib/router/utils/path-has-prefix.ts", "symbol": "pathHasPrefix" }
+    },
+    {
+      "caller": { "file": "packages/next/src/shared/lib/router/utils/path-has-prefix.ts", "symbol": "pathHasPrefix" },
+      "callee": { "file": "packages/next/src/shared/lib/router/utils/parse-path.ts", "symbol": "parsePath" }
+    },
+    {
+      "caller": { "file": "packages/next/src/server/config.ts", "symbol": "assignDefaultsAndValidate" },
+      "callee": { "file": "packages/next/src/server/setup-http-agent-env.ts", "symbol": "setHttpClientAndAgentOptions" }
+    },
+    {
+      "caller": { "file": "packages/next/src/server/config.ts", "symbol": "loadConfig" },
+      "callee": { "file": "packages/next/src/server/setup-http-agent-env.ts", "symbol": "setHttpClientAndAgentOptions" }
+    },
+    {
+      "caller": { "file": "packages/next/src/server/config.ts", "symbol": "getCacheKey" },
+      "callee": { "file": "packages/next/src/shared/lib/hash.ts", "symbol": "djb2Hash" }
+    },
+    {
+      "caller": { "file": "packages/next/src/server/config.ts", "symbol": "applyModifyConfig" },
+      "callee": { "file": "packages/next/src/lib/interop-default.ts", "symbol": "interopDefault" }
+    },
+    {
+      "caller": { "file": "packages/next/src/server/config.ts", "symbol": "validateConfigSchema" },
+      "callee": { "file": "packages/next/src/telemetry/flush-telemetry.ts", "symbol": "flushTelemetry" }
+    },
+    {
+      "caller": { "file": "packages/next/src/telemetry/flush-telemetry.ts", "symbol": "flushTelemetry" },
+      "callee": { "file": "packages/next/src/telemetry/storage.ts", "symbol": "Telemetry.flush" }
+    },
+    {
+      "caller": { "file": "packages/next/src/server/config.ts", "symbol": "loadConfig" },
+      "callee": { "file": "packages/next/src/build/next-config-ts/transpile-config.ts", "symbol": "transpileConfig" }
+    },
+    {
+      "caller": { "file": "packages/next/src/server/next-server.ts", "symbol": "NextNodeServer.loadCustomCacheHandlers" },
+      "callee": { "file": "packages/next/src/server/use-cache/handlers.ts", "symbol": "initializeCacheHandlers" }
+    },
+    {
+      "caller": { "file": "packages/next/src/server/next-server.ts", "symbol": "NextNodeServer.loadCustomCacheHandlers" },
+      "callee": { "file": "packages/next/src/server/use-cache/handlers.ts", "symbol": "setCacheHandler" }
+    },
+    {
+      "caller": { "file": "packages/next/src/server/next-server.ts", "symbol": "NextNodeServer.loadCustomCacheHandlers" },
+      "callee": { "file": "packages/next/src/lib/interop-default.ts", "symbol": "interopDefault" }
+    },
+    {
+      "caller": { "file": "packages/next/src/server/next-server.ts", "symbol": "NextNodeServer.loadCustomCacheHandlers" },
+      "callee": { "file": "packages/next/src/lib/format-dynamic-import-path.ts", "symbol": "formatDynamicImportPath" }
+    },
+    {
+      "caller": { "file": "packages/next/src/server/use-cache/handlers.ts", "symbol": "initializeCacheHandlers" },
+      "callee": { "file": "packages/next/src/server/lib/cache-handlers/default.ts", "symbol": "createDefaultCacheHandler" }
+    },
+    {
+      "caller": { "file": "packages/next/src/server/lib/cache-handlers/default.ts", "symbol": "createDefaultCacheHandler" },
+      "callee": { "file": "packages/next/src/server/lib/incremental-cache/tags-manifest.external.ts", "symbol": "areTagsExpired" }
+    },
+    {
+      "caller": { "file": "packages/next/src/server/lib/cache-handlers/default.ts", "symbol": "createDefaultCacheHandler" },
+      "callee": { "file": "packages/next/src/server/lib/incremental-cache/tags-manifest.external.ts", "symbol": "areTagsStale" }
+    },
+    {
+      "caller": { "file": "packages/next/src/server/lib/cache-handlers/default.ts", "symbol": "createDefaultCacheHandler" },
+      "callee": { "file": "packages/next/src/server/lib/lru-cache.ts", "symbol": "LRUCache.constructor" }
+    },
+    {
+      "caller": { "file": "packages/next/src/export/index.ts", "symbol": "exportAppImpl" },
+      "callee": { "file": "packages/next/src/build/index.ts", "symbol": "createStaticWorker" }
+    },
+    {
+      "caller": { "file": "packages/next/src/server/base-server.ts", "symbol": "Server.handleRequestImpl" },
+      "callee": { "file": "packages/next/src/shared/lib/router/utils/parse-url.ts", "symbol": "parseUrl" }
+    },
+    {
+      "caller": { "file": "packages/next/src/shared/lib/router/utils/parse-url.ts", "symbol": "parseUrl" },
+      "callee": { "file": "packages/next/src/shared/lib/router/utils/parse-relative-url.ts", "symbol": "parseRelativeUrl" }
+    },
+    {
+      "caller": { "file": "packages/next/src/shared/lib/router/utils/parse-url.ts", "symbol": "parseUrl" },
+      "callee": { "file": "packages/next/src/shared/lib/router/utils/querystring.ts", "symbol": "searchParamsToUrlQuery" }
+    },
+    {
+      "caller": { "file": "packages/next/src/shared/lib/router/utils/parse-relative-url.ts", "symbol": "parseRelativeUrl" },
+      "callee": { "file": "packages/next/src/shared/lib/utils.ts", "symbol": "getLocationOrigin" }
+    },
+    {
+      "caller": { "file": "packages/next/src/shared/lib/router/utils/parse-relative-url.ts", "symbol": "parseRelativeUrl" },
+      "callee": { "file": "packages/next/src/shared/lib/router/utils/querystring.ts", "symbol": "searchParamsToUrlQuery" }
+    }
+  ]
+}
+

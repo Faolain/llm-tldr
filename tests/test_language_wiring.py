@@ -85,7 +85,6 @@ class TestLanguageWiring:
         """Language should be recognized by scan_project()."""
         from tldr.cross_file_calls import scan_project
         import tempfile
-        import os
 
         # Create a temp directory with a test file
         with tempfile.TemporaryDirectory() as tmpdir:

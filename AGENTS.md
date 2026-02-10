@@ -32,3 +32,20 @@
 ## Configuration & Runtime Notes
 - The CLI honors `TLDR_*` env vars (e.g., `TLDR_CACHE_ROOT`, `TLDR_INDEX`, `TLDR_SCAN_ROOT`).
 - Prefer `uv run …` for any command that depends on optional native or ML deps.
+
+## Long-Running / TTY-Sensitive Commands
+  - If a command may run >60s: start it async (background task/session/job). Do not block waiting.
+  - Prefer agent-native background execution when available:
+    - Claude Code: `run_in_background: true` (shell) or background `Task` agents; poll via `TaskOutput`.
+    - Tool-runner sessions (PTY/task handles): keep the handle and poll for output.
+  - Session-scoped warning: agent-native background tasks are typically tied to the current session/runner. If the session ends (terminal closes, conversation/task is aborted, runner restarts), the background work can be terminated. Do not assume background implies durability.
+  - Record a handle immediately (task id/session id/PID) and how to stop it (cancel/kill).
+  - Ensure readable progress:
+    - prefer plain/unbuffered output: `--no-progress` / `--progress=plain` / `--quiet`, and `PYTHONUNBUFFERED=1` (plus `NO_COLOR=1`/`CI=1` if helpful).
+    - if output is still “silent” or clearly TTY-gated, rerun with pseudo‑TTY/`tty` enabled.
+  - Silence rule: if there’s no new output within 10–15s, do a status check via the handle; never wait >60s without output or an explicit status check.
+  - If the job must survive interruptions (or will run >5 min): run it inside `tmux` (or `screen`) and tee output to a log file under the repo (e.g. `benchmark/logs/`).
+  - `tmux` pattern (example):
+    - Start: `tmux new-session -d -s <name> 'cd <repo> && PYTHONUNBUFFERED=1 NO_PROGRESS=1 <cmd> 2>&1 | tee <log>'`
+    - Status: `tmux has-session -t <name>` and `tmux capture-pane -pt <name>:0 | tail -n 50` (or `tail -n 50 <log>`)
+    - Stop: `tmux kill-session -t <name>`

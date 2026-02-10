@@ -1,0 +1,374 @@
+{
+  "schema_version": 1,
+  "repo": "django",
+  "pinned_ref": "5.1.13",
+  "updated": "2026-02-09",
+  "notes": [
+    "Phase 5 retrieval-quality query set for Django.",
+    "Each query includes an explicit `rg_pattern` so the rg baseline is deterministic and not dependent on heuristic keyword extraction.",
+    "Relevant files are repo-root relative paths.",
+    "The suite includes a mix of symbol-definition lookups, behavioral/concept queries (still with deterministic patterns), and a few negative queries for FPR tracking."
+  ],
+  "queries": [
+    {
+      "id": "R01",
+      "query": "Where is CSRF middleware implemented?",
+      "rg_pattern": "CsrfViewMiddleware\\b",
+      "relevant_files": ["django/middleware/csrf.py"]
+    },
+    {
+      "id": "R02",
+      "query": "Where is override_settings defined?",
+      "rg_pattern": "override_settings\\b",
+      "relevant_files": ["django/test/utils.py"]
+    },
+    {
+      "id": "R03",
+      "query": "Where is mark_safe defined?",
+      "rg_pattern": "mark_safe\\b",
+      "relevant_files": ["django/utils/safestring.py"]
+    },
+    {
+      "id": "R04",
+      "query": "Where is URLResolver implemented?",
+      "rg_pattern": "URLResolver\\b",
+      "relevant_files": ["django/urls/resolvers.py"]
+    },
+    {
+      "id": "R05",
+      "query": "Where is ProjectState implemented?",
+      "rg_pattern": "ProjectState\\b",
+      "relevant_files": ["django/db/migrations/state.py"]
+    },
+    {
+      "id": "R06",
+      "query": "Where is AdminSite implemented?",
+      "rg_pattern": "AdminSite\\b",
+      "relevant_files": ["django/contrib/admin/sites.py"]
+    },
+    {
+      "id": "R07",
+      "query": "Where does Django configure settings at runtime?",
+      "rg_pattern": "def\\s+configure\\b",
+      "relevant_files": ["django/conf/__init__.py"]
+    },
+    {
+      "id": "R08",
+      "query": "Where is formset_factory implemented?",
+      "rg_pattern": "formset_factory\\b",
+      "relevant_files": ["django/forms/formsets.py"]
+    },
+    {
+      "id": "R09",
+      "query": "Where is the debug technical 500 response implemented?",
+      "rg_pattern": "technical_500_response\\b",
+      "relevant_files": ["django/views/debug.py"]
+    },
+    {
+      "id": "R10",
+      "query": "Where is WSGIRequest defined?",
+      "rg_pattern": "WSGIRequest\\b",
+      "relevant_files": ["django/core/handlers/wsgi.py"]
+    },
+    {
+      "id": "R11",
+      "query": "Where is the csrf token rotation helper defined?",
+      "rg_pattern": "rotate_token\\b",
+      "relevant_files": ["django/middleware/csrf.py"]
+    },
+    {
+      "id": "R12",
+      "query": "Negative query: symbol that should not exist",
+      "rg_pattern": "this_symbol_should_not_exist_abcdef1234",
+      "relevant_files": []
+    },
+    {
+      "id": "R13",
+      "query": "Where is Http404 defined?",
+      "rg_pattern": "^class\\s+Http404\\b",
+      "relevant_files": ["django/http/response.py"]
+    },
+    {
+      "id": "R14",
+      "query": "Where is HttpResponse implemented?",
+      "rg_pattern": "^class\\s+HttpResponse\\b",
+      "relevant_files": ["django/http/response.py"]
+    },
+    {
+      "id": "R15",
+      "query": "Where is JsonResponse implemented?",
+      "rg_pattern": "^class\\s+JsonResponse\\b",
+      "relevant_files": ["django/http/response.py"]
+    },
+    {
+      "id": "R16",
+      "query": "Where is QuerySet implemented (ORM query API)?",
+      "rg_pattern": "^class\\s+QuerySet\\b",
+      "relevant_files": ["django/db/models/query.py"]
+    },
+    {
+      "id": "R17",
+      "query": "Where is the Q object (query expressions) implemented?",
+      "rg_pattern": "^class\\s+Q\\b",
+      "relevant_files": ["django/db/models/query_utils.py"]
+    },
+    {
+      "id": "R18",
+      "query": "Where is the Model base class implemented?",
+      "rg_pattern": "^class\\s+Model\\b",
+      "relevant_files": ["django/db/models/base.py"]
+    },
+    {
+      "id": "R19",
+      "query": "Where is transaction.atomic implemented?",
+      "rg_pattern": "^def\\s+atomic\\b",
+      "relevant_files": ["django/db/transaction.py"]
+    },
+    {
+      "id": "R20",
+      "query": "Where is MiddlewareMixin defined?",
+      "rg_pattern": "^class\\s+MiddlewareMixin\\b",
+      "relevant_files": ["django/utils/deprecation.py"]
+    },
+    {
+      "id": "R21",
+      "query": "Where is cached_property implemented?",
+      "rg_pattern": "^class\\s+cached_property\\b",
+      "relevant_files": ["django/utils/functional.py"]
+    },
+    {
+      "id": "R22",
+      "query": "Where is LazyObject implemented?",
+      "rg_pattern": "^class\\s+LazyObject\\b",
+      "relevant_files": ["django/utils/functional.py"]
+    },
+    {
+      "id": "R23",
+      "query": "Where is the post_save signal defined?",
+      "rg_pattern": "^post_save\\s*=\\s*ModelSignal\\b",
+      "relevant_files": ["django/db/models/signals.py"]
+    },
+    {
+      "id": "R24",
+      "query": "Where is AppConfig implemented?",
+      "rg_pattern": "^class\\s+AppConfig\\b",
+      "relevant_files": ["django/apps/config.py"]
+    },
+    {
+      "id": "R25",
+      "query": "Where is the app registry implemented (Apps class)?",
+      "rg_pattern": "^class\\s+Apps\\b",
+      "relevant_files": ["django/apps/registry.py"]
+    },
+    {
+      "id": "R26",
+      "query": "Where is BaseCommand implemented (management commands)?",
+      "rg_pattern": "^class\\s+BaseCommand\\b",
+      "relevant_files": ["django/core/management/base.py"]
+    },
+    {
+      "id": "R27",
+      "query": "Where is execute_from_command_line implemented?",
+      "rg_pattern": "^def\\s+execute_from_command_line\\b",
+      "relevant_files": ["django/core/management/__init__.py"]
+    },
+    {
+      "id": "R28",
+      "query": "Where is the render() shortcut implemented?",
+      "rg_pattern": "^def\\s+render\\b",
+      "relevant_files": ["django/shortcuts.py"]
+    },
+    {
+      "id": "R29",
+      "query": "Where is the redirect() shortcut implemented?",
+      "rg_pattern": "^def\\s+redirect\\b",
+      "relevant_files": ["django/shortcuts.py"]
+    },
+    {
+      "id": "R30",
+      "query": "Where is reverse() implemented (URL reversing)?",
+      "rg_pattern": "^def\\s+reverse\\b",
+      "relevant_files": ["django/urls/base.py"]
+    },
+    {
+      "id": "R31",
+      "query": "Where is include() implemented (URL config include)?",
+      "rg_pattern": "^def\\s+include\\b",
+      "relevant_files": ["django/urls/conf.py"]
+    },
+    {
+      "id": "R32",
+      "query": "Where is path() implemented (RoutePattern URL helper)?",
+      "rg_pattern": "^path\\s*=\\s*partial\\(",
+      "relevant_files": ["django/urls/conf.py"]
+    },
+    {
+      "id": "R33",
+      "query": "Where is csrf_exempt decorator implemented?",
+      "rg_pattern": "^def\\s+csrf_exempt\\b",
+      "relevant_files": ["django/views/decorators/csrf.py"]
+    },
+    {
+      "id": "R34",
+      "query": "Where is csrf_protect defined?",
+      "rg_pattern": "^csrf_protect\\s*=\\s*decorator_from_middleware\\(",
+      "relevant_files": ["django/views/decorators/csrf.py"]
+    },
+    {
+      "id": "R35",
+      "query": "Where is login_required decorator implemented?",
+      "rg_pattern": "^def\\s+login_required\\b",
+      "relevant_files": ["django/contrib/auth/decorators.py"]
+    },
+    {
+      "id": "R36",
+      "query": "Where is authenticate() implemented?",
+      "rg_pattern": "^def\\s+authenticate\\b",
+      "relevant_files": ["django/contrib/auth/__init__.py"]
+    },
+    {
+      "id": "R37",
+      "query": "Where is make_password implemented?",
+      "rg_pattern": "^def\\s+make_password\\b",
+      "relevant_files": ["django/contrib/auth/hashers.py"]
+    },
+    {
+      "id": "R38",
+      "query": "Where is check_password implemented?",
+      "rg_pattern": "^def\\s+check_password\\b",
+      "relevant_files": ["django/contrib/auth/hashers.py"]
+    },
+    {
+      "id": "R39",
+      "query": "Where is PasswordResetTokenGenerator implemented?",
+      "rg_pattern": "^class\\s+PasswordResetTokenGenerator\\b",
+      "relevant_files": ["django/contrib/auth/tokens.py"]
+    },
+    {
+      "id": "R40",
+      "query": "Where is BaseForm implemented (forms API)?",
+      "rg_pattern": "^class\\s+BaseForm\\b",
+      "relevant_files": ["django/forms/forms.py"]
+    },
+    {
+      "id": "R41",
+      "query": "Where is ValidationError defined?",
+      "rg_pattern": "^class\\s+ValidationError\\b",
+      "relevant_files": ["django/core/exceptions.py"]
+    },
+    {
+      "id": "R42",
+      "query": "Where is ImproperlyConfigured defined?",
+      "rg_pattern": "^class\\s+ImproperlyConfigured\\b",
+      "relevant_files": ["django/core/exceptions.py"]
+    },
+    {
+      "id": "R43",
+      "query": "Where is QueryDict implemented?",
+      "rg_pattern": "^class\\s+QueryDict\\b",
+      "relevant_files": ["django/http/request.py"]
+    },
+    {
+      "id": "R44",
+      "query": "Where is HttpRequest implemented?",
+      "rg_pattern": "^class\\s+HttpRequest\\b",
+      "relevant_files": ["django/http/request.py"]
+    },
+    {
+      "id": "R45",
+      "query": "Where is DisallowedHost defined?",
+      "rg_pattern": "^class\\s+DisallowedHost\\b",
+      "relevant_files": ["django/core/exceptions.py"]
+    },
+    {
+      "id": "R46",
+      "query": "Where does Django validate the Host header (get_host implementation)?",
+      "rg_pattern": "def\\s+get_host\\b",
+      "relevant_files": ["django/http/request.py"]
+    },
+    {
+      "id": "R47",
+      "query": "Where is Paginator implemented?",
+      "rg_pattern": "^class\\s+Paginator\\b",
+      "relevant_files": ["django/core/paginator.py"]
+    },
+    {
+      "id": "R48",
+      "query": "Where is the base cache backend class implemented (BaseCache)?",
+      "rg_pattern": "^class\\s+BaseCache\\b",
+      "relevant_files": ["django/core/cache/backends/base.py"]
+    },
+    {
+      "id": "R49",
+      "query": "Where is DEFAULT_CACHE_ALIAS defined?",
+      "rg_pattern": "^DEFAULT_CACHE_ALIAS\\s*=",
+      "relevant_files": ["django/core/cache/__init__.py"]
+    },
+    {
+      "id": "R50",
+      "query": "Where does Django define DEFAULT_DB_ALIAS?",
+      "rg_pattern": "^DEFAULT_DB_ALIAS\\s*=",
+      "relevant_files": ["django/db/utils.py"]
+    },
+    {
+      "id": "R51",
+      "query": "Where is MultiPartParser implemented (multipart upload parsing)?",
+      "rg_pattern": "^class\\s+MultiPartParser\\b",
+      "relevant_files": ["django/http/multipartparser.py"]
+    },
+    {
+      "id": "R52",
+      "query": "Where does Django run the request middleware chain (BaseHandler)?",
+      "rg_pattern": "^class\\s+BaseHandler\\b",
+      "relevant_files": ["django/core/handlers/base.py"]
+    },
+    {
+      "id": "R53",
+      "query": "Where is the Template class implemented (template rendering)?",
+      "rg_pattern": "^class\\s+Template\\b",
+      "relevant_files": ["django/template/base.py"]
+    },
+    {
+      "id": "R54",
+      "query": "Where is the template Engine implemented?",
+      "rg_pattern": "^class\\s+Engine\\b",
+      "relevant_files": ["django/template/engine.py"]
+    },
+    {
+      "id": "R55",
+      "query": "Where is SQLCompiler implemented (ORM SQL compilation)?",
+      "rg_pattern": "^class\\s+SQLCompiler\\b",
+      "relevant_files": ["django/db/models/sql/compiler.py"]
+    },
+    {
+      "id": "R56",
+      "query": "Where is ConnectionHandler implemented (database connections)?",
+      "rg_pattern": "^class\\s+ConnectionHandler\\b",
+      "relevant_files": ["django/db/utils.py"]
+    },
+    {
+      "id": "R57",
+      "query": "Where is MigrationExecutor implemented (migrations runner)?",
+      "rg_pattern": "^class\\s+MigrationExecutor\\b",
+      "relevant_files": ["django/db/migrations/executor.py"]
+    },
+    {
+      "id": "R58",
+      "query": "Where does Django convert exceptions to HTTP responses (response_for_exception)?",
+      "rg_pattern": "^def\\s+response_for_exception\\b",
+      "relevant_files": ["django/core/handlers/exception.py"]
+    },
+    {
+      "id": "R59",
+      "query": "Negative query: nonexistent setting constant",
+      "rg_pattern": "THIS_SETTING_DOES_NOT_EXIST_XYZ123",
+      "relevant_files": []
+    },
+    {
+      "id": "R60",
+      "query": "Negative query: nonexistent class",
+      "rg_pattern": "^class\\s+DefinitelyNotAClassInDjango\\b",
+      "relevant_files": []
+    }
+  ]
+}

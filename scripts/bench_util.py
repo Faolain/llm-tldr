@@ -10,6 +10,9 @@ from pathlib import Path
 from typing import Any
 
 
+REPORT_SCHEMA_VERSION = 1
+
+
 def _run(cmd: list[str], *, cwd: Path | None = None) -> str | None:
     try:
         proc = subprocess.run(
@@ -128,6 +131,37 @@ def percentiles(values: list[float], ps: list[float] | None = None) -> dict[str,
 def write_report(path: Path, obj: Any) -> None:
     """Write a benchmark report JSON (stable key ordering for diffability)."""
     write_json(path, obj)
+
+
+def now_utc_compact() -> str:
+    """UTC timestamp suitable for filenames (YYYYMMDD-HHMMSSZ)."""
+    return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%SZ")
+
+
+def make_report(
+    *,
+    phase: str,
+    meta: dict[str, Any],
+    protocol: dict[str, Any] | None,
+    results: dict[str, Any],
+    schema_version: int = REPORT_SCHEMA_VERSION,
+) -> dict[str, Any]:
+    """Create a benchmark report object.
+
+    Contract v1 (top-level keys):
+    - schema_version: int
+    - phase: str
+    - meta: dict (see gather_meta())
+    - protocol: dict (phase-specific but deterministic)
+    - results: dict (phase-specific but deterministic)
+    """
+    return {
+        "schema_version": int(schema_version),
+        "phase": str(phase),
+        "meta": meta,
+        "protocol": protocol or {},
+        "results": results,
+    }
 
 
 def bench_root(tldr_repo_root: Path) -> Path:

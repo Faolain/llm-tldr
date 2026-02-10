@@ -1,0 +1,498 @@
+{
+  "schema_version": 1,
+  "repo": "django",
+  "pinned_ref": "5.1.13",
+  "updated": "2026-02-09",
+  "notes": [
+    "Phase 4 Python structural benchmark query set for Django.",
+    "Queries are intentionally kept relatively local (often within one file) to keep ground truth unambiguous and to avoid collisions from unqualified Python function identifiers.",
+    "Python call graph identifiers currently use unqualified names (no Class.method) for impact queries; file scoping is part of the disambiguation."
+  ],
+  "queries": [
+    {
+      "id": "A01",
+      "category": "impact",
+      "function": "_contains_subclass",
+      "file": "django/contrib/admin/checks.py",
+      "expected_callers": [
+        { "function": "check_dependencies", "file": "django/contrib/admin/checks.py" }
+      ],
+      "difficulty": "easy",
+      "why_grep_struggles": "Helper is used multiple times within the same function; grep hits need caller extraction to be useful."
+    },
+    {
+      "id": "A02",
+      "category": "impact",
+      "function": "construct_search",
+      "file": "django/contrib/admin/options.py",
+      "expected_callers": [
+        { "function": "get_search_results", "file": "django/contrib/admin/options.py" }
+      ],
+      "difficulty": "easy",
+      "why_grep_struggles": "Nested helper inside a method; caller identification requires context heuristics."
+    },
+    {
+      "id": "A03",
+      "category": "impact",
+      "function": "items_for_result",
+      "file": "django/contrib/admin/templatetags/admin_list.py",
+      "expected_callers": [
+        { "function": "results", "file": "django/contrib/admin/templatetags/admin_list.py" }
+      ],
+      "difficulty": "easy",
+      "why_grep_struggles": "Call site is inside a generator; grep produces file/line hits but not caller-level impact without extra heuristics."
+    },
+    {
+      "id": "A04",
+      "category": "impact",
+      "function": "link_in_col",
+      "file": "django/contrib/admin/templatetags/admin_list.py",
+      "expected_callers": [
+        { "function": "items_for_result", "file": "django/contrib/admin/templatetags/admin_list.py" }
+      ],
+      "difficulty": "easy",
+      "why_grep_struggles": "Nested helper within a function; raw grep hits are difficult to attribute to a stable symbol."
+    },
+    {
+      "id": "A05",
+      "category": "impact",
+      "function": "make_qs_param",
+      "file": "django/contrib/admin/templatetags/admin_list.py",
+      "expected_callers": [
+        { "function": "result_headers", "file": "django/contrib/admin/templatetags/admin_list.py" }
+      ],
+      "difficulty": "easy",
+      "why_grep_struggles": "Nested helper inside a generator; caller extraction is required to produce a useful impact set."
+    },
+    {
+      "id": "A06",
+      "category": "impact",
+      "function": "_get_changed_field_labels_from_form",
+      "file": "django/contrib/admin/utils.py",
+      "expected_callers": [
+        { "function": "construct_change_message", "file": "django/contrib/admin/utils.py" }
+      ],
+      "difficulty": "easy",
+      "why_grep_struggles": "Multiple call sites within one function; grep needs stable caller extraction to avoid noise."
+    },
+    {
+      "id": "A07",
+      "category": "impact",
+      "function": "_coerce_field_name",
+      "file": "django/contrib/admin/templatetags/admin_list.py",
+      "expected_callers": [
+        { "function": "items_for_result", "file": "django/contrib/admin/templatetags/admin_list.py" },
+        { "function": "result_headers", "file": "django/contrib/admin/templatetags/admin_list.py" }
+      ],
+      "difficulty": "easy",
+      "why_grep_struggles": "Helper is called from multiple generators; grep hits are hard to turn into a stable caller set without extra heuristics."
+    },
+    {
+      "id": "A08",
+      "category": "impact",
+      "function": "results",
+      "file": "django/contrib/admin/templatetags/admin_list.py",
+      "expected_callers": [
+        { "function": "result_list", "file": "django/contrib/admin/templatetags/admin_list.py" }
+      ],
+      "difficulty": "easy",
+      "why_grep_struggles": "Function name is generic enough that grep-only workflows often need additional context extraction to identify the real caller."
+    },
+    {
+      "id": "A09",
+      "category": "impact",
+      "function": "_get_failure_view",
+      "file": "django/middleware/csrf.py",
+      "expected_callers": [
+        { "function": "_reject", "file": "django/middleware/csrf.py" }
+      ],
+      "difficulty": "easy",
+      "why_grep_struggles": "The callee returns a callable, so grepping hits doesn't directly answer 'who uses this failure view'."
+    },
+    {
+      "id": "A10",
+      "category": "impact",
+      "function": "_check_token_format",
+      "file": "django/middleware/csrf.py",
+      "expected_callers": [
+        { "function": "_check_token", "file": "django/middleware/csrf.py" },
+        { "function": "_get_secret", "file": "django/middleware/csrf.py" }
+      ],
+      "difficulty": "easy",
+      "why_grep_struggles": "Multiple call sites inside methods; raw grep hits require reliable enclosing-symbol extraction."
+    },
+    {
+      "id": "A11",
+      "category": "impact",
+      "function": "_unmask_cipher_token",
+      "file": "django/middleware/csrf.py",
+      "expected_callers": [
+        { "function": "_does_token_match", "file": "django/middleware/csrf.py" },
+        { "function": "_get_secret", "file": "django/middleware/csrf.py" }
+      ],
+      "difficulty": "easy",
+      "why_grep_struggles": "Calls happen in both a module-level helper and a middleware method; grep will find them but not attribute callers cleanly."
+    },
+    {
+      "id": "A12",
+      "category": "impact",
+      "function": "_add_new_csrf_cookie",
+      "file": "django/middleware/csrf.py",
+      "expected_callers": [
+        { "function": "get_token", "file": "django/middleware/csrf.py" },
+        { "function": "process_request", "file": "django/middleware/csrf.py" },
+        { "function": "rotate_token", "file": "django/middleware/csrf.py" }
+      ],
+      "difficulty": "easy",
+      "why_grep_struggles": "Called from both module-level helpers and middleware methods; caller attribution is the hard part."
+    },
+    {
+      "id": "A13",
+      "category": "impact",
+      "function": "_get_new_csrf_string",
+      "file": "django/middleware/csrf.py",
+      "expected_callers": [
+        { "function": "_add_new_csrf_cookie", "file": "django/middleware/csrf.py" },
+        { "function": "_mask_cipher_secret", "file": "django/middleware/csrf.py" }
+      ],
+      "difficulty": "easy",
+      "why_grep_struggles": "A small helper used in multiple places; grep needs additional logic to compute a caller set."
+    },
+    {
+      "id": "A14",
+      "category": "impact",
+      "function": "_mask_cipher_secret",
+      "file": "django/middleware/csrf.py",
+      "expected_callers": [
+        { "function": "get_token", "file": "django/middleware/csrf.py" }
+      ],
+      "difficulty": "easy",
+      "why_grep_struggles": "The call site is short but grep-only output is just a line number; callers require context extraction."
+    },
+    {
+      "id": "A15",
+      "category": "impact",
+      "function": "_does_token_match",
+      "file": "django/middleware/csrf.py",
+      "expected_callers": [
+        { "function": "_check_token", "file": "django/middleware/csrf.py" }
+      ],
+      "difficulty": "easy",
+      "why_grep_struggles": "Grep can find the call site, but without structural context it doesn't answer higher-level impact questions (e.g., transitive callers)."
+    },
+    {
+      "id": "B01",
+      "category": "slice",
+      "file": "django/contrib/admin/templatetags/admin_list.py",
+      "function": "_boolean_icon",
+      "target_line": 185,
+      "expected_slice_lines": [182, 183, 184, 185],
+      "difficulty": "easy",
+      "why_grep_cant": "Slicing requires data+control dependencies; baseline is 'read the whole function'."
+    },
+    {
+      "id": "B02",
+      "category": "slice",
+      "file": "django/middleware/csrf.py",
+      "function": "_does_token_match",
+      "target_line": 157,
+      "expected_slice_lines": [154, 155, 156, 157],
+      "difficulty": "easy",
+      "why_grep_cant": "Even in a small function, slicing needs control+data dependency awareness (if branch + assignment + return)."
+    },
+    {
+      "id": "B03",
+      "category": "slice",
+      "file": "django/middleware/csrf.py",
+      "function": "get_token",
+      "target_line": 114,
+      "expected_slice_lines": [106, 107, 112, 113, 114],
+      "difficulty": "medium",
+      "why_grep_cant": "Slicing must track which definitions of csrf_secret can reach the return and ignore unrelated side-effect lines."
+    },
+    {
+      "id": "B04",
+      "category": "slice",
+      "file": "django/core/handlers/exception.py",
+      "function": "response_for_exception",
+      "target_line": 129,
+      "expected_slice_lines": [129],
+      "difficulty": "easy",
+      "why_grep_cant": "This is an intentionally simple slice target inside a long function; grep can't reduce context without flow analysis."
+    },
+    {
+      "id": "B05",
+      "category": "slice",
+      "file": "django/utils/text.py",
+      "function": "get_valid_filename",
+      "target_line": 283,
+      "expected_slice_lines": [279, 280, 281, 283],
+      "difficulty": "easy",
+      "why_grep_cant": "Slicing should keep only the string transformations and guard condition that affect the return."
+    },
+    {
+      "id": "B06",
+      "category": "slice",
+      "file": "django/utils/text.py",
+      "function": "compress_string",
+      "target_line": 368,
+      "expected_slice_lines": [357, 359, 362, 363, 364, 365, 366, 368],
+      "difficulty": "medium",
+      "why_grep_cant": "The return depends on prior buffer/header construction and the max_random_bytes branch; grep has no dependency graph."
+    },
+    {
+      "id": "B07",
+      "category": "slice",
+      "file": "django/utils/safestring.py",
+      "function": "mark_safe",
+      "target_line": 72,
+      "expected_slice_lines": [68, 70, 72],
+      "difficulty": "easy",
+      "why_grep_cant": "The final return is gated by earlier conditions; a slice should ignore the early-return branches for this line."
+    },
+    {
+      "id": "B08",
+      "category": "slice",
+      "file": "django/core/handlers/exception.py",
+      "function": "handle_uncaught_exception",
+      "target_line": 186,
+      "expected_slice_lines": [178, 181, 185, 186],
+      "difficulty": "easy",
+      "why_grep_cant": "Slicing can discard unrelated branches (debug paths) when targeting the non-debug return."
+    },
+    {
+      "id": "B09",
+      "category": "slice",
+      "file": "django/utils/crypto.py",
+      "function": "pbkdf2",
+      "target_line": 77,
+      "expected_slice_lines": [72, 73, 74, 75, 76, 77],
+      "difficulty": "easy",
+      "why_grep_cant": "A slice should identify the minimal setup for the pbkdf2_hmac call (digest defaulting + normalization)."
+    },
+    {
+      "id": "B10",
+      "category": "slice",
+      "file": "django/conf/__init__.py",
+      "function": "configure",
+      "target_line": 124,
+      "expected_slice_lines": [117, 119, 120, 121, 122, 123, 124],
+      "difficulty": "medium",
+      "why_grep_cant": "Slicing is about which statements affect setting the configured holder, not about reading the whole method."
+    },
+    {
+      "id": "C01",
+      "category": "complexity",
+      "file": "django/contrib/admin/checks.py",
+      "function": "check_dependencies",
+      "difficulty": "easy",
+      "reference_tool": "radon"
+    },
+    {
+      "id": "C02",
+      "category": "complexity",
+      "file": "django/contrib/admin/templatetags/admin_list.py",
+      "function": "items_for_result",
+      "difficulty": "medium",
+      "reference_tool": "radon"
+    },
+    {
+      "id": "C03",
+      "category": "complexity",
+      "file": "django/contrib/admin/templatetags/admin_list.py",
+      "function": "_coerce_field_name",
+      "difficulty": "easy",
+      "reference_tool": "radon"
+    },
+    {
+      "id": "C04",
+      "category": "complexity",
+      "file": "django/middleware/csrf.py",
+      "function": "get_token",
+      "difficulty": "medium",
+      "reference_tool": "radon"
+    },
+    {
+      "id": "C05",
+      "category": "complexity",
+      "file": "django/middleware/csrf.py",
+      "function": "_does_token_match",
+      "difficulty": "easy",
+      "reference_tool": "radon"
+    },
+    {
+      "id": "C06",
+      "category": "complexity",
+      "file": "django/utils/text.py",
+      "function": "compress_string",
+      "difficulty": "easy",
+      "reference_tool": "radon"
+    },
+    {
+      "id": "C07",
+      "category": "complexity",
+      "file": "django/utils/text.py",
+      "function": "get_valid_filename",
+      "difficulty": "easy",
+      "reference_tool": "radon"
+    },
+    {
+      "id": "C08",
+      "category": "complexity",
+      "file": "django/core/handlers/exception.py",
+      "function": "response_for_exception",
+      "difficulty": "medium",
+      "reference_tool": "radon"
+    },
+    {
+      "id": "C09",
+      "category": "complexity",
+      "file": "django/utils/safestring.py",
+      "function": "mark_safe",
+      "difficulty": "easy",
+      "reference_tool": "radon"
+    },
+    {
+      "id": "C10",
+      "category": "complexity",
+      "file": "django/utils/crypto.py",
+      "function": "salted_hmac",
+      "difficulty": "medium",
+      "reference_tool": "radon"
+    },
+    {
+      "id": "D01",
+      "category": "data_flow",
+      "file": "django/contrib/admin/templatetags/admin_list.py",
+      "function": "_boolean_icon",
+      "variable": "icon_url",
+      "expected_flow": [
+        { "line": 182, "event": "defined", "via": "static(...)" },
+        { "line": 185, "event": "used", "via": "format_html(..., icon_url, ...)" }
+      ],
+      "difficulty": "easy",
+      "why_grep_struggles": "Grep returns all occurrences but cannot distinguish def/use or infer a def-use chain."
+    },
+    {
+      "id": "D02",
+      "category": "data_flow",
+      "file": "django/middleware/csrf.py",
+      "function": "_mask_cipher_secret",
+      "variable": "mask",
+      "expected_flow": [
+        { "line": 64, "event": "defined", "via": "_get_new_csrf_string()" },
+        { "line": 66, "event": "used", "via": "zip(..., (chars.index(x) for x in mask))" },
+        { "line": 68, "event": "used", "via": "return mask + cipher" }
+      ],
+      "difficulty": "easy",
+      "why_grep_struggles": "Grep finds all references but doesn't separate the defining assignment from later uses."
+    },
+    {
+      "id": "D03",
+      "category": "data_flow",
+      "file": "django/middleware/csrf.py",
+      "function": "_unmask_cipher_token",
+      "variable": "mask",
+      "expected_flow": [
+        { "line": 77, "event": "defined", "via": "token[:CSRF_SECRET_LENGTH]" },
+        { "line": 80, "event": "used", "via": "zip(..., (chars.index(x) for x in mask))" }
+      ],
+      "difficulty": "easy",
+      "why_grep_struggles": "The key question is origin vs use; grep can't distinguish definitions from uses."
+    },
+    {
+      "id": "D04",
+      "category": "data_flow",
+      "file": "django/utils/text.py",
+      "function": "get_valid_filename",
+      "variable": "s",
+      "expected_flow": [
+        { "line": 279, "event": "defined", "via": "str(name).strip().replace(...)" },
+        { "line": 280, "event": "defined", "via": "re.sub(..., s)" },
+        { "line": 281, "event": "used", "via": "if s in {...}" },
+        { "line": 283, "event": "used", "via": "return s" }
+      ],
+      "difficulty": "easy",
+      "why_grep_struggles": "Grep finds occurrences of 's' but can't explain that the return value is derived through the two transformations."
+    },
+    {
+      "id": "D05",
+      "category": "data_flow",
+      "file": "django/utils/text.py",
+      "function": "compress_string",
+      "variable": "filename",
+      "expected_flow": [
+        { "line": 366, "event": "defined", "via": "_get_random_filename(...)" },
+        { "line": 368, "event": "used", "via": "return bytes(header) + filename + ..." }
+      ],
+      "difficulty": "easy",
+      "why_grep_struggles": "The interesting bit is the definition-to-use chain; grep only returns a bag of line numbers."
+    },
+    {
+      "id": "D06",
+      "category": "data_flow",
+      "file": "django/core/handlers/exception.py",
+      "function": "response_for_exception",
+      "variable": "security_logger",
+      "expected_flow": [
+        { "line": 129, "event": "defined", "via": "logging.getLogger(...)" },
+        { "line": 136, "event": "used", "via": "log_response(..., logger=security_logger)" }
+      ],
+      "difficulty": "easy",
+      "why_grep_struggles": "Grep finds occurrences of 'security_logger' but doesn't tell you which assignment feeds which call."
+    },
+    {
+      "id": "D07",
+      "category": "data_flow",
+      "file": "django/middleware/csrf.py",
+      "function": "_add_new_csrf_cookie",
+      "variable": "csrf_secret",
+      "expected_flow": [
+        { "line": 86, "event": "defined", "via": "_get_new_csrf_string()" },
+        { "line": 89, "event": "used", "via": "request.META.update({\"CSRF_COOKIE\": csrf_secret, ...})" },
+        { "line": 93, "event": "used", "via": "return csrf_secret" }
+      ],
+      "difficulty": "easy",
+      "why_grep_struggles": "Grep can't reliably separate origin from later uses and returns."
+    },
+    {
+      "id": "D08",
+      "category": "data_flow",
+      "file": "django/utils/timezone.py",
+      "function": "get_fixed_timezone",
+      "variable": "name",
+      "expected_flow": [
+        { "line": 39, "event": "defined", "via": "sign + hhmm" },
+        { "line": 40, "event": "used", "via": "timezone(..., name)" }
+      ],
+      "difficulty": "easy",
+      "why_grep_struggles": "The chain is short but still semantic; grep cannot express 'this name is what's passed to timezone()'."
+    },
+    {
+      "id": "D09",
+      "category": "data_flow",
+      "file": "django/utils/dateparse.py",
+      "function": "parse_datetime",
+      "variable": "tzinfo",
+      "expected_flow": [
+        { "line": 119, "event": "defined", "via": "kw.pop(\"tzinfo\")" },
+        { "line": 129, "event": "used", "via": "datetime.datetime(..., tzinfo=tzinfo)" }
+      ],
+      "difficulty": "medium",
+      "why_grep_struggles": "Grep can find all mentions of tzinfo but cannot explain the origin-to-use chain through conditionals."
+    },
+    {
+      "id": "D10",
+      "category": "data_flow",
+      "file": "django/utils/crypto.py",
+      "function": "salted_hmac",
+      "variable": "key",
+      "expected_flow": [
+        { "line": 40, "event": "defined", "via": "hasher(key_salt + secret).digest()" },
+        { "line": 45, "event": "used", "via": "hmac.new(key, ...)" }
+      ],
+      "difficulty": "easy",
+      "why_grep_struggles": "Grep can't distinguish that the key used in hmac.new is derived from hasher(key_salt + secret)."
+    }
+  ]
+}

@@ -2,15 +2,15 @@
 
 ## The Question
 
-Does TLDR's AST-based structural analysis (impact analysis, program slicing, complexity assessment, data flow tracing) provide capabilities that an LLM agent equipped with grep/ripgrep fundamentally cannot replicate?
+Does TLDRF's AST-based structural analysis (impact analysis, program slicing, complexity assessment, data flow tracing) provide capabilities that an LLM agent equipped with grep/ripgrep fundamentally cannot replicate?
 
-We need to answer this with evidence, not claims. TLDR's README says "95% token savings" but that's measured on our own repo. The community says ripgrep is sufficient. Neither side has data on external codebases with controlled comparisons.
+We need to answer this with evidence, not claims. TLDRF's README says "95% token savings" but that's measured on our own repo. The community says ripgrep is sufficient. Neither side has data on external codebases with controlled comparisons.
 
-The key insight: benchmarking TLDR on **file retrieval** (grep's home turf) misses the point. TLDR's value proposition is in structural analysis — understanding call graphs, tracing data flow, computing complexity, slicing programs. The benchmark should test **TLDR's capabilities** and ask whether grep can approximate them, not the other way around.
+The key insight: benchmarking TLDRF on **file retrieval** (grep's home turf) misses the point. TLDRF's value proposition is in structural analysis — understanding call graphs, tracing data flow, computing complexity, slicing programs. The benchmark should test **TLDRF's capabilities** and ask whether grep can approximate them, not the other way around.
 
 ## What We're NOT Doing
 
-- **Not starting with file retrieval benchmarks.** Retrieval (semantic search vs grep for finding files) is a secondary question. If TLDR's structural tools provide capabilities grep can't match, the retrieval story follows naturally. Retrieval benchmarks can be a future phase if structural analysis shows signal.
+- **Not starting with file retrieval benchmarks.** Retrieval (semantic search vs grep for finding files) is a secondary question. If TLDRF's structural tools provide capabilities grep can't match, the retrieval story follows naturally. Retrieval benchmarks can be a future phase if structural analysis shows signal.
 - **Not starting with SWE-bench.** It's the gold standard but costs hundreds of dollars per run and has too many confounding variables to iterate quickly. It's a future phase if the structural analysis benchmarks show clear signal.
 - **Not building a framework.** Each phase is a single script that produces a JSON report. No abstractions until we need them.
 
@@ -37,11 +37,11 @@ Two important clarifications (so "token efficiency" matches real agent workflows
 - Payloads should be **LLM-consumable**. If a command returns only IDs/line numbers (e.g., slices), the strategy must specify how we materialize the corresponding code lines into the payload (deterministically, without an LLM).
 
 We measure:
-- `payload_tokens`: `tldr.stats.count_tokens(payload)`
+- `payload_tokens`: `tldrf.stats.count_tokens(payload)`
 - `payload_bytes`: `len(payload.encode("utf-8"))`
 - `wall_time_s`: end-to-end time to produce the payload (including subprocess/tool time)
 
-Tokenization is standardized via `tiktoken` using `cl100k_base` (through `tldr.stats.count_tokens()`).
+Tokenization is standardized via `tiktoken` using `cl100k_base` (through `tldrf.stats.count_tokens()`).
 
 ---
 
@@ -67,7 +67,7 @@ Two different execution paths must be measured explicitly:
 
 Important implementation detail (borrowed from the Continuous Claude benchmark scripts):
 - The daemon response must be read **until newline**, not with a single `recv()` call, so large JSON responses don't get truncated.
-- Socket identity must be derived the same way TLDR derives it (legacy vs index mode). Do not assume `md5(project_path)[:8]`.
+- Socket identity must be derived the same way TLDRF derives it (legacy vs index mode). Do not assume `md5(project_path)[:8]`.
 
 ---
 
@@ -172,7 +172,7 @@ If grep can do these things equally well, TLDR's value proposition collapses. If
 ### What We Measure
 
 For a set of structural analysis tasks against Django, compare:
-- **TLDR's structured tool output** (deterministic, AST-based) vs **ground truth**
+- **TLDRF's structured tool output** (deterministic, AST-based) vs **ground truth**
 - **Grep's best approximation** (pattern matching + heuristic extraction) vs **ground truth**
 - For each strategy, also record `payload_tokens`/`payload_bytes`/`wall_time_s` so we can report **quality-per-token** for refactoring workflows (`impact`), debugging workflows (`slice`/`dfg`), and refactor prioritization (`cfg`).
 

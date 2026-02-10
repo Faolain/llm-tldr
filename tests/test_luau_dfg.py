@@ -9,9 +9,6 @@ from Luau code, including Luau-specific features:
 The function `extract_luau_dfg` does NOT exist yet - these tests must FAIL.
 """
 
-import pytest
-
-
 # =============================================================================
 # Test 1: Basic Definition and Use
 # =============================================================================
