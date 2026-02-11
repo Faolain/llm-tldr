@@ -448,7 +448,7 @@ Open-ended judge-mode snapshot (Codex answers, Claude judge; `--trials 3`):
 
 | Suite | budget_tokens | tasks | win_rate_tldr_over_rg | report |
 | --- | --- | --- | --- | --- |
-| open_ended_full | 2000 | 18 | 0.694 | `benchmark/runs/20260210-205924Z-llm-ab-run-judge-open-ended-t3.json` |
+| open_ended_full | **2000** | **18** | **0.694** | `benchmark/runs/20260210-205924Z-llm-ab-run-judge-open-ended-t3.json` |
 | slice_only | 1000 | 7 | 0.548 | `benchmark/runs/20260210-211226Z-llm-ab-run-judge-slice-1000-t3.json` |
 | slice_only | 500 | 7 | 0.429 | `benchmark/runs/20260210-212621Z-llm-ab-run-judge-slice-500-t3.json` |
 
