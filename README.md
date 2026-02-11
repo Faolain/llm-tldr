@@ -442,7 +442,15 @@ Reproducible benchmark harness:
 - `benchmarks/README.md` (tracked inputs + commands)
 - `implementations/006-benchmarking-retrieval-quality_IMPLEMENTATION_PLAN.md` (running log + interpretation)
 
-On Django (2026-02-10), the downstream open-ended judge suite (18 tasks x 3 trials; Codex answers + Claude judge) shows TLDR context beating an `rg`-only context overall (win_rate_tldr_over_rg=`0.556`), with the strongest gains in `impact` and `data_flow` and the weakest results in `slice`. See the implementation plan running log for details and how to reproduce.
+See `benchmarks/README.md` for a pinned-run results snapshot and the exact report files under `benchmark/runs/`.
+
+Open-ended judge-mode snapshot (Codex answers, Claude judge; `--trials 3`):
+
+| Suite | budget_tokens | tasks | win_rate_tldr_over_rg | report |
+| --- | --- | --- | --- | --- |
+| open_ended_full | 2000 | 18 | 0.694 | `benchmark/runs/20260210-205924Z-llm-ab-run-judge-open-ended-t3.json` |
+| slice_only | 1000 | 7 | 0.548 | `benchmark/runs/20260210-211226Z-llm-ab-run-judge-slice-1000-t3.json` |
+| slice_only | 500 | 7 | 0.429 | `benchmark/runs/20260210-212621Z-llm-ab-run-judge-slice-500-t3.json` |
 
 ---
 

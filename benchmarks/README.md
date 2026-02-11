@@ -8,6 +8,131 @@ All **untracked** run artifacts live under the gitignored `benchmark/` directory
 - `benchmark/cache-root/`          Index-mode caches (`--cache-root benchmark/cache-root`)
 - `benchmark/runs/<timestamp>/`    JSON reports produced by scripts
 
+## Results Snapshot (Pinned Runs)
+
+Numbers below are copied from the JSON reports under `benchmark/runs/` (so they are reproducible and diffable).
+
+### Phase 1-3: TS Fixture Smoke Runs (ts-monorepo)
+
+| Phase | Report | Key result |
+| --- | --- | --- |
+| Phase 1 (TS curated recall) | `benchmark/runs/20260209-043537Z-ts-curated-recall-ts-monorepo.json` | edge recall 1.000 (9/9), build_s 1.225 |
+| Phase 2 (rg impact baseline) | `benchmark/runs/20260209-043543Z-rg-impact-baseline-ts-monorepo-match_plus_enclosing_symbol.json` | F1 0.000 at budgets 200/500 (fixture-only smoke run) |
+| Phase 3 (TS perf) | `benchmark/runs/20260209-044240Z-ts-perf-ts-monorepo.json` | build_s 1.231, patch_s 0.815, full_rebuild_after_touch_s 1.070 |
+
+### Phase 4: Django Structural Quality (Deterministic)
+
+Report: `benchmark/runs/20260210-005452Z-phase4-python-structural-django.json`
+
+| Workload | TLDR | Baseline |
+| --- | --- | --- |
+| impact (caller set) | F1 0.727 (P 0.588, R 0.952) | rg F1 0.306 (P 0.216, R 0.524) |
+| slice (line set) | P_mean 1.000, R_mean 0.884, noise_reduction_mean 0.657 | (baseline is whole-function window; see Phase 6 for token curves) |
+| data_flow | origin_accuracy 0.900, flow_completeness_mean 1.000 | grep noise_ratio_mean 2.142 |
+| complexity (cyclomatic) | acc 0.600, MAE 1.80, tau-b 0.901 | grep heuristic MAE 6.20 |
+
+### Phase 5: Django Retrieval Quality (Ranking Metrics)
+
+Report (BGE + negative guard): `benchmark/runs/20260210-001934Z-retrieval-django-bge-guard-rg-empty.json`
+
+| Strategy | MRR | Recall@5 | Recall@10 | FPR@5 | FPR@10 |
+| --- | --- | --- | --- | --- | --- |
+| rg | 0.820 | 0.877 | 0.947 | 0.000 | 0.000 |
+| semantic | 0.602 | 0.772 | 0.789 | 0.000 | 0.000 |
+| hybrid_rrf | 0.868 | 0.965 | 1.000 | 0.000 | 0.000 |
+
+Notes:
+- This run uses `--no-result-guard rg_empty` (bench-only): if `rg_pattern` yields 0 hits, semantic/hybrid are suppressed so negatives can return "no result".
+
+### Phase 6: Django Token Efficiency (Fixed Budgets)
+
+Structural report: `benchmark/runs/20260210-214935Z-token-efficiency-structural-django-multistep.json`
+
+Impact (caller set):
+
+| Budget | tldr_structured | rg_window_function | rg_match_plus_context | tldr_structured_plus_code |
+| --- | --- | --- | --- | --- |
+| 500 | F1 0.727 (P 0.588, R 0.952), tok 70.5, tok/TP 52.9 | F1 0.629 (P 0.786, R 0.524), tok 184.9, tok/TP 252.1 | F1 0.516 (P 0.800, R 0.381), tok 300.9, tok/TP 564.1 | F1 0.533 (P 0.889, R 0.381), tok 141.8, tok/TP 265.9 |
+| 1000 | F1 0.727 (P 0.588, R 0.952), tok 70.5, tok/TP 52.9 | F1 0.638 (P 0.577, R 0.714), tok 465.6, tok/TP 465.6 | F1 0.619 (P 0.619, R 0.619), tok 621.4, tok/TP 717.0 | F1 0.682 (P 0.652, R 0.714), tok 464.9, tok/TP 464.9 |
+| 2000 | F1 0.727 (P 0.588, R 0.952), tok 70.5, tok/TP 52.9 | F1 0.576 (P 0.447, R 0.809), tok 812.1, tok/TP 716.6 | F1 0.520 (P 0.448, R 0.619), tok 805.9, tok/TP 929.9 | F1 0.704 (P 0.576, R 0.905), tok 828.2, tok/TP 653.8 |
+| 5000 | F1 0.727 (P 0.588, R 0.952), tok 70.5, tok/TP 52.9 | F1 0.567 (P 0.436, R 0.809), tok 882.5, tok/TP 778.7 | F1 0.481 (P 0.394, R 0.619), tok 883.1, tok/TP 1019.0 | F1 0.727 (P 0.588, R 0.952), tok 900.1, tok/TP 675.1 |
+| 10000 | F1 0.727 (P 0.588, R 0.952), tok 70.5, tok/TP 52.9 | F1 0.567 (P 0.436, R 0.809), tok 882.5, tok/TP 778.7 | F1 0.481 (P 0.394, R 0.619), tok 883.1, tok/TP 1019.0 | F1 0.727 (P 0.588, R 0.952), tok 900.1, tok/TP 675.1 |
+
+Slice (line set):
+
+| Budget | tldr_structured | tldr_structured_plus_code | grep_window |
+| --- | --- | --- | --- |
+| 500 | P 1.000 / R 0.884 / noise 0.88 / tok 40.4 | P 0.386 / R 1.000 / noise 8.00 / tok 238.0 | P 0.386 / R 1.000 / noise 8.40 / tok 200.0 |
+| 1000 | P 1.000 / R 0.884 / noise 0.88 / tok 40.4 | P 0.385 / R 1.000 / noise 12.40 / tok 273.6 | P 0.385 / R 1.000 / noise 12.40 / tok 232.2 |
+| 2000 | P 1.000 / R 0.884 / noise 0.88 / tok 40.4 | P 0.385 / R 1.000 / noise 12.40 / tok 273.6 | P 0.385 / R 1.000 / noise 12.40 / tok 232.2 |
+| 5000 | P 1.000 / R 0.884 / noise 0.88 / tok 40.4 | P 0.385 / R 1.000 / noise 12.40 / tok 273.6 | P 0.385 / R 1.000 / noise 12.40 / tok 232.2 |
+| 10000 | P 1.000 / R 0.884 / noise 0.88 / tok 40.4 | P 0.385 / R 1.000 / noise 12.40 / tok 273.6 | P 0.385 / R 1.000 / noise 12.40 / tok 232.2 |
+
+Data flow:
+
+| Budget | tldr_structured | tldr_structured_plus_code | grep_window_function |
+| --- | --- | --- | --- |
+| 500 | flow 1.000 / noise 1.35 / tok 37.8 | flow 1.000 / noise 5.27 / tok 199.4 | flow 0.900 / noise 8.92 / tok 223.7 |
+| 1000 | flow 1.000 / noise 1.35 / tok 37.8 | flow 1.000 / noise 5.27 / tok 199.4 | flow 1.000 / noise 10.87 / tok 255.9 |
+| 2000 | flow 1.000 / noise 1.35 / tok 37.8 | flow 1.000 / noise 5.27 / tok 199.4 | flow 1.000 / noise 10.87 / tok 255.9 |
+| 5000 | flow 1.000 / noise 1.35 / tok 37.8 | flow 1.000 / noise 5.27 / tok 199.4 | flow 1.000 / noise 10.87 / tok 255.9 |
+| 10000 | flow 1.000 / noise 1.35 / tok 37.8 | flow 1.000 / noise 5.27 / tok 199.4 | flow 1.000 / noise 10.87 / tok 255.9 |
+
+Complexity (cyclomatic, vs radon):
+
+| Budget | tldr_structured | grep_heuristic |
+| --- | --- | --- |
+| 500 | acc 0.600 / MAE 1.80 / tok 28.7 | acc 0.600 / MAE 1.30 / tok 28.7 |
+| 1000 | acc 0.600 / MAE 1.80 / tok 28.7 | acc 0.600 / MAE 1.30 / tok 28.7 |
+| 2000 | acc 0.600 / MAE 1.80 / tok 28.7 | acc 0.600 / MAE 1.30 / tok 28.7 |
+| 5000 | acc 0.600 / MAE 1.80 / tok 28.7 | acc 0.600 / MAE 1.30 / tok 28.7 |
+| 10000 | acc 0.600 / MAE 1.80 / tok 28.7 | acc 0.600 / MAE 1.30 / tok 28.7 |
+
+Retrieval report (BGE + negative guard): `benchmark/runs/20260210-001934Z-token-efficiency-retrieval-django-bge-guard-rg-empty.json`
+
+| Budget | rg | semantic | hybrid_rrf |
+| --- | --- | --- | --- |
+| 500 | MRR 0.818 / FPR 0.000 / tok 111.1 | MRR 0.612 / FPR 0.000 / tok 366.9 | MRR 0.857 / FPR 0.000 / tok 375.9 |
+| 1000 | MRR 0.820 / FPR 0.000 / tok 159.0 | MRR 0.612 / FPR 0.000 / tok 404.5 | MRR 0.860 / FPR 0.000 / tok 437.5 |
+| 2000 | MRR 0.820 / FPR 0.000 / tok 220.4 | MRR 0.612 / FPR 0.000 / tok 419.4 | MRR 0.860 / FPR 0.000 / tok 504.7 |
+| 5000 | MRR 0.820 / FPR 0.000 / tok 252.8 | MRR 0.612 / FPR 0.000 / tok 419.4 | MRR 0.860 / FPR 0.000 / tok 530.5 |
+| 10000 | MRR 0.820 / FPR 0.000 / tok 252.8 | MRR 0.612 / FPR 0.000 / tok 419.4 | MRR 0.860 / FPR 0.000 / tok 530.5 |
+
+### Phase 7: Downstream A/B (LLM)
+
+Structured tasks (fixed JSON outputs, deterministically scored; `budget_tokens=2000`, `--trials 3`):
+
+Reports:
+- Codex: `benchmark/runs/20260210-030111Z-llm-ab-run-codex.json`
+- Claude: `benchmark/runs/20260210-040732Z-llm-ab-run-claude.json`
+
+| Category | Codex TLDR F1 | Codex rg F1 | Codex win_rate | Claude TLDR F1 | Claude rg F1 | Claude win_rate |
+| --- | --- | --- | --- | --- | --- | --- |
+| overall | 0.865 | 0.619 | 0.683 | 0.865 | 0.655 | 0.700 |
+| impact | 0.791 | 0.607 | 0.633 | 0.791 | 0.713 | 0.567 |
+| slice | 0.919 | 0.471 | 0.800 | 0.919 | 0.406 | 1.000 |
+| data_flow | 0.978 | 0.950 | 0.600 | 0.978 | 0.978 | 0.500 |
+
+Retrieval-type structured tasks (file paths; deterministically scored; `budget_tokens=2000`, `--trials 3`):
+
+Report: `benchmark/runs/20260210-065101Z-llm-ab-run-structured-retrieval.json`
+
+| Strategy | f1_mean (report) | f1_mean (adjusted\*) |
+| --- | --- | --- |
+| hybrid_rrf | 0.9375 | 1.0000 |
+| rg | 0.8958 | 0.9583 |
+| semantic | 0.6875 | 0.7500 |
+
+\* The run report was produced before the scorer fix that treats empty-expected + empty-predicted as F1=1.0 (one negative task in this suite).
+
+Open-ended judge-mode tasks (free-form answers, judged A/B; `--trials 3`):
+
+| Suite | Budget | Tasks | Overall win_rate | impact | slice | data_flow | Report |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| open_ended_full | 2000 | 18 | 0.694 | 0.778 | 0.595 | 0.733 | `benchmark/runs/20260210-205924Z-llm-ab-run-judge-open-ended-t3.json` |
+| slice_only | 1000 | 7 | 0.548 |  | 0.548 |  | `benchmark/runs/20260210-211226Z-llm-ab-run-judge-slice-1000-t3.json` |
+| slice_only | 500 | 7 | 0.429 |  | 0.429 |  | `benchmark/runs/20260210-212621Z-llm-ab-run-judge-slice-500-t3.json` |
+
 ## Setup
 
 ```bash
@@ -236,7 +361,7 @@ Interpreting retrieval-type results:
 - `semantic`: embedding-based ranking, then render the same snippet shape (still anchored by `rg_pattern` for determinism).
 - `hybrid_rrf`: RRF fusion of `rg` and `semantic` rankings, then snippet rendering.
 - If the retrieval queries have strong definition-ish `rg_pattern`s, `rg` is often already near-perfect and `hybrid_rrf` will mostly tie.
-- Pure `semantic` can miss “where is X defined?” lookups by returning *usages/references* rather than the defining file; if the context does not surface the defining file, the answer model (correctly) returns an empty `paths` list when instructed not to guess.
+- Pure `semantic` can miss "where is X defined?" lookups by returning *usages/references* rather than the defining file; if the context does not surface the defining file, the answer model (correctly) returns an empty `paths` list when instructed not to guess.
 
 Example retrieval structured run (Codex, Django) on 2026-02-10:
 - Prompts report: `benchmark/runs/20260210-065101Z-llm-ab-prompts-django-retrieval.json`
@@ -248,11 +373,11 @@ Example retrieval structured run (Codex, Django) on 2026-02-10:
 
 Recommendations based on retrieval-type results:
 - Default retrieval comparisons to `hybrid_rrf` rather than pure semantic.
-- If you want semantic to compete on definition lookups, add a “definition-intent” validation step (e.g., require the candidate snippet/file to contain `^def name` / `^class Name` or a symbol-index hit) so semantic doesn't keep surfacing references.
+- If you want semantic to compete on definition lookups, add a "definition-intent" validation step (e.g., require the candidate snippet/file to contain `^def name` / `^class Name` or a symbol-index hit) so semantic doesn't keep surfacing references.
 - Use the structural Phase 7 suite (`benchmarks/llm/tasks.json`) to evaluate TLDR's core advantage (impact/slice/data_flow context) rather than the retrieval suite where `rg_pattern` can already solve most tasks.
 
 What TLDR is most useful for (and what would make it more useful):
-- TLDR tends to shine on structural workflows: impact analysis (callers through indirection), slicing (“what actually influences this value”), and data-flow (def/use chains), especially under tight token budgets.
+- TLDR tends to shine on structural workflows: impact analysis (callers through indirection), slicing ("what actually influences this value"), and data-flow (def/use chains), especially under tight token budgets.
 - For open-ended debugging tasks, the biggest win is improving TLDR context packing: keep the structured summary, but include a small contiguous code window around the target and around slice/DFG-selected lines (merged windows, budgeted) so the answer model can explain behavior without missing crucial nearby lines/comments.
 
 Using Codex CLI (example model: `gpt-5.3-codex` with "medium" reasoning effort):
