@@ -33,29 +33,24 @@
 - The CLI honors `TLDR_*` env vars (e.g., `TLDR_CACHE_ROOT`, `TLDR_INDEX`, `TLDR_SCAN_ROOT`).
 - Prefer `uv run ...` for any command that depends on optional native or ML deps.
 
-## LLM Tool-Use Playbook (High-Signal, Token-Budgeted)
+## LLM Retrieval Policy (High Signal, Low Tokens)
 
-Use `tldrf` when the question is about **behavior/flow** (callers, slices, data flow). Use `rg/grep` when you need **exhaustive text search** (strings, docs, config).
+1. Exact text/symbol/import/path lookup: use `rg` first.
+   - `rg -n "<pattern>" .`
+   - If `rg` returns fewer than 50 hits, stay with `rg` + direct file reads.
+2. Refactor/change-risk questions: use `impact` first, then `context`.
+   - `uv run tldrf impact <symbol> .`
+   - `uv run tldrf context <symbol> --project . --depth 2`
+3. Line-level debugging: use `slice` + anchor window.
+   - `uv run tldrf slice <file> <function> <line>`
+   - Include one contiguous anchor around `<line>` (largest budget-fit), then 2-4 nearby slice windows.
+   - Add `uv run tldrf dfg <file> <function>` only if value provenance is still unclear.
+4. Concept/intent lookup (non-literal): use semantic retrieval.
+   - `uv run tldrf semantic search "<intent>" --path . --k 8`
+   - For literal queries with 0 lexical hits, treat as "no result" and do not guess.
+5. Budget order: anchor > slice windows > helper defs.
 
-- "Who calls X?": `uv run tldrf impact X .` (optionally `uv run tldrf context X --project .`)
-- "Explain what a function does" (best default): `uv run tldrf context <entry> --project . --depth 2`
-- "What affects this value/branch at file:function:line?":
-  1. `uv run tldrf slice <file> <function> <line>`
-  2. Always include a contiguous **anchor window** around `<line>` (largest that fits budget).
-  3. Add a few small windows (+/-3 lines) around slice-selected lines *outside* the anchor (closest-to-target first; merge overlaps).
-  4. If still unclear and budget allows, include defs/classes for 1-3 helpers referenced by those windows.
-- "Trace a specific variable": `uv run tldrf dfg <file> <function>` (+ anchor window around the relevant line)
-- "Find where something is implemented/configured":
-  1. For definition-shaped lookups, use `rg` first (fast lexical check).
-  2. For behavior/concept lookups, use `uv run tldrf semantic search "<intent>" --path . --k 8` (requires a semantic index).
-  3. Treat "0 lexical hits" as "no result" and do not guess (semantic/hybrid will otherwise return false positives on negatives).
-
-Budget heuristic:
-- Tight: anchor only.
-- Medium: anchor + 2-4 slice windows.
-- Large: anchor + slice windows + 1-3 related defs/classes.
-
-Always: answer using only gathered context; if insufficient, request the next **specific** snippet (file + line range or symbol).
+Debugging default: `slice` (+anchor), then `dfg` if needed. Refactoring default: `impact`, then `context`, then `rg` for exhaustive cleanup.
 
 ## Long-Running / TTY-Sensitive Commands
   - If a command may run >60s: decide how you will keep it alive until completion.
