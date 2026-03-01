@@ -1,6 +1,6 @@
 # Spec 007: Retrieval Optimization Implementation Plan (Feeds Spec 008 Tactical Inputs)
 
-- Status: Planned
+- Status: In Progress
 - Owner: TBD
 - Last updated: 2026-03-01
 - Canonical 008 implementation authority: [implementations/008-beat-contextplus_IMPLEMENTATION_PLAN.md](./008-beat-contextplus_IMPLEMENTATION_PLAN.md).
@@ -354,6 +354,34 @@ Final ship/no-ship remains Spec 008. These metrics track readiness and tactical 
 | Counter drift across report formats | Inconsistent diagnostics | Preserve legacy keys and enforce invariant tests. |
 | Confusing tactical thresholds with release gates | Incorrect ship/no-ship decisions | Keep precedence explicit: 008 gates decide release. |
 | Long-running judge runs interrupted | Lost artifacts | Use `tmux` + log tee for runs >5 minutes (example command below). |
+
+## Post-Review Remediation (2026-03-01)
+
+The following items close findings from the xhigh commit review of `3483700`:
+
+| Finding | Resolution | Verification |
+|---|---|---|
+| High: data-flow packer could fall back to empty context when smaller valid context existed | Replaced fixed fraction probing in `scripts/bench_llm_ab_prompts.py` with adaptive deterministic budget search (halving + binary refinement) and retained metadata contract fields. | Added regression in `tests/test_bench_llm_ab_prompts_data_flow_packing.py` (`test_data_flow_packer_adaptive_search_finds_non_empty_under_budget`). |
+| Medium: budget hard cap could be violated in fallback path | Added deterministic payload cap reducer for data-flow packets that drops optional sections in stable order and falls back to guaranteed-fit sentinels (`{}` at extreme budgets). Added zero/non-positive budget guard in `_data_flow_context_tldr_plus_code`. | Added tiny-budget tests in `tests/test_bench_llm_ab_prompts_data_flow_packing.py` (`test_data_flow_packer_tiny_budget_cap_is_deterministic_in_meta_min_path`, `test_data_flow_context_tldr_plus_code_tiny_budget_stays_under_cap`). |
+| Low: report serialization invariants not covered end-to-end | Added integration-style `main()` tests in `tests/test_bench_llm_ab_run_helpers.py` for both structured and judge modes with mocked provider calls; assertions include legacy/new counter invariants. | Added tests `test_main_structured_report_serializes_bad_json_split` and `test_main_judge_report_serializes_bad_json_split`. |
+
+Remediation verification commands:
+
+```bash
+uv run pytest \
+  tests/test_bench_llm_ab_run_helpers.py \
+  tests/test_bench_llm_ab_prompts_slice_packing.py \
+  tests/test_bench_llm_ab_prompts_data_flow_packing.py \
+  tests/test_bench_llm_open_ended_tasks_schema.py \
+  tests/test_bench_head_to_head_score_counters.py \
+  tests/test_bench_head_to_head_tool_profiles_schema.py \
+  tests/test_bench_head_to_head_suite_schema.py
+
+uv run ruff check \
+  scripts/bench_llm_ab_prompts.py \
+  tests/test_bench_llm_ab_prompts_data_flow_packing.py \
+  tests/test_bench_llm_ab_run_helpers.py
+```
 
 Long-run command pattern (when needed):
 

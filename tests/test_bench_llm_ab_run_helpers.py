@@ -1,3 +1,4 @@
+import json
 import runpy
 import sys
 from pathlib import Path
@@ -10,6 +11,10 @@ def _load_mod():
     if scripts_dir not in sys.path:
         sys.path.insert(0, scripts_dir)
     return runpy.run_path("scripts/bench_llm_ab_run.py")
+
+
+def _write_jsonl(path: Path, rows: list[dict[str, object]]) -> None:
+    path.write_text("\n".join(json.dumps(row, sort_keys=True) for row in rows) + "\n", encoding="utf-8")
 
 
 def test_extract_json_from_text_plain():
@@ -194,3 +199,149 @@ def test_claude_sdk_result_to_text_and_usage_error_raises():
     )
     with pytest.raises(RuntimeError):
         fn(msg)
+
+
+def test_main_structured_report_serializes_bad_json_split(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    mod = _load_mod()
+    globals_dict = mod["main"].__globals__
+
+    prompts_path = tmp_path / "prompts-structured.jsonl"
+    _write_jsonl(
+        prompts_path,
+        [
+            {
+                "task_id": "slice-1",
+                "category": "slice",
+                "expected": {"lines": [1, 2]},
+                "variants": [
+                    {"label": "A", "source": "rg", "prompt": "EMPTY_OUTPUT"},
+                    {"label": "B", "source": "tldr", "prompt": "MALFORMED_OUTPUT"},
+                ],
+            }
+        ],
+    )
+    out_path = tmp_path / "report-structured.json"
+    answers_out = tmp_path / "answers-structured.jsonl"
+
+    def fake_anthropic_call(*, model: str, prompt: str, max_tokens: int, temperature: float):
+        del model, max_tokens, temperature
+        if prompt == "EMPTY_OUTPUT":
+            return "   ", {"input_tokens": 1, "output_tokens": 0}
+        if prompt == "MALFORMED_OUTPUT":
+            return '{"oops": [1, 2]}', {"input_tokens": 1, "output_tokens": 1}
+        return '{"lines": [1, 2]}', {"input_tokens": 1, "output_tokens": 1}
+
+    monkeypatch.setitem(globals_dict, "_anthropic_call", fake_anthropic_call)
+    monkeypatch.setitem(globals_dict, "get_repo_root", lambda: tmp_path)
+    monkeypatch.setitem(globals_dict, "gather_meta", lambda **_: {"test_meta": True})
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "bench_llm_ab_run.py",
+            "--prompts",
+            str(prompts_path),
+            "--provider",
+            "anthropic",
+            "--model",
+            "fake-model",
+            "--out",
+            str(out_path),
+            "--answers-out",
+            str(answers_out),
+        ],
+    )
+
+    assert mod["main"]() == 0
+
+    report = json.loads(out_path.read_text(encoding="utf-8"))
+    results = report["results"]
+    assert results["empty_output_total"] == 1
+    assert results["malformed_output_total"] == 1
+    assert results["bad_json"] == 2
+    assert results["bad_json"] == results["empty_output_total"] + results["malformed_output_total"]
+
+
+def test_main_judge_report_serializes_bad_json_split(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    mod = _load_mod()
+    globals_dict = mod["main"].__globals__
+
+    prompts_path = tmp_path / "prompts-judge.jsonl"
+    _write_jsonl(
+        prompts_path,
+        [
+            {
+                "task_id": "judge-empty",
+                "task_type": "open_ended",
+                "category": "retrieval",
+                "question": "Q_EMPTY",
+                "rubric": "Use context only.",
+                "variants": [
+                    {"label": "A", "source": "rg", "context": "ctx-a", "prompt": "answer-a-empty"},
+                    {"label": "B", "source": "tldr", "context": "ctx-b", "prompt": "answer-b-empty"},
+                ],
+            },
+            {
+                "task_id": "judge-malformed",
+                "task_type": "open_ended",
+                "category": "retrieval",
+                "question": "Q_MALFORMED",
+                "rubric": "Use context only.",
+                "variants": [
+                    {"label": "A", "source": "rg", "context": "ctx-a2", "prompt": "answer-a-malformed"},
+                    {"label": "B", "source": "tldr", "context": "ctx-b2", "prompt": "answer-b-malformed"},
+                ],
+            },
+        ],
+    )
+    out_path = tmp_path / "report-judge.json"
+    answers_out = tmp_path / "answers-judge.jsonl"
+
+    def fake_anthropic_call(*, model: str, prompt: str, max_tokens: int, temperature: float):
+        del model, max_tokens, temperature
+        if prompt.startswith("You are an impartial judge."):
+            if "Q_EMPTY" in prompt:
+                return " ", {"input_tokens": 1, "output_tokens": 0}
+            if "Q_MALFORMED" in prompt:
+                return '{"winner":"C"}', {"input_tokens": 1, "output_tokens": 1}
+        return "deterministic answer", {"input_tokens": 2, "output_tokens": 3}
+
+    monkeypatch.setitem(globals_dict, "_anthropic_call", fake_anthropic_call)
+    monkeypatch.setitem(globals_dict, "get_repo_root", lambda: tmp_path)
+    monkeypatch.setitem(globals_dict, "gather_meta", lambda **_: {"test_meta": True})
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "bench_llm_ab_run.py",
+            "--prompts",
+            str(prompts_path),
+            "--mode",
+            "judge",
+            "--provider",
+            "anthropic",
+            "--model",
+            "fake-answer-model",
+            "--judge-provider",
+            "anthropic",
+            "--judge-model",
+            "fake-judge-model",
+            "--judge-retries",
+            "0",
+            "--out",
+            str(out_path),
+            "--answers-out",
+            str(answers_out),
+        ],
+    )
+
+    assert mod["main"]() == 0
+
+    report = json.loads(out_path.read_text(encoding="utf-8"))
+    results = report["results"]
+    assert results["judge_empty_verdict_total"] == 1
+    assert results["judge_malformed_verdict_total"] == 1
+    assert results["judge_bad_json"] == 2
+    assert results["judge_bad_json"] == (
+        results["judge_empty_verdict_total"] + results["judge_malformed_verdict_total"]
+    )

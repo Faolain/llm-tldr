@@ -353,6 +353,86 @@ def _line_in_windows(windows: list[tuple[int, int]], line: int) -> bool:
     return False
 
 
+def _json_plus_code_payload(meta: dict[str, Any], code_text: str) -> str:
+    payload = json.dumps(meta, sort_keys=True)
+    if code_text:
+        payload += "\n\n" + code_text
+    return payload
+
+
+def _cap_data_flow_payload_to_budget(
+    *,
+    meta: dict[str, Any],
+    code_text: str,
+    budget_tokens: int,
+    file_rel: str,
+    function: str,
+    variable: str,
+) -> tuple[dict[str, Any], str]:
+    budget = int(budget_tokens)
+
+    def _fits(meta_obj: dict[str, Any], code_obj: str) -> bool:
+        payload = _json_plus_code_payload(meta_obj, code_obj)
+        return int(count_tokens(payload)) <= int(budget)
+
+    meta2 = dict(meta)
+    code2 = str(code_text or "")
+    if _fits(meta2, code2):
+        return meta2, code2
+
+    if code2:
+        code2 = ""
+        if _fits(meta2, code2):
+            return meta2, code2
+
+    # Stable drop order: remove optional metadata before collapsing to sentinels.
+    drop_order = [
+        "dropped_lines",
+        "extra_windows",
+        "bridge_lines",
+        "semantic_roles",
+        "included_lines",
+        "target_window",
+        "function_span_lines",
+        "bridge_window_radius",
+        "code_window_radius",
+        "flow",
+    ]
+    for key in drop_order:
+        if key not in meta2:
+            continue
+        meta2.pop(key, None)
+        if _fits(meta2, code2):
+            return meta2, code2
+
+    # Deterministic guaranteed-fit sentinels for tiny budgets.
+    sentinels: list[dict[str, Any]] = [
+        {
+            "file": file_rel,
+            "function": function,
+            "strategy": "budget_min",
+            "truncated": True,
+            "variable": variable,
+        },
+        {
+            "function": function,
+            "strategy": "budget_min",
+            "truncated": True,
+            "variable": variable,
+        },
+        {"strategy": "budget_min", "truncated": True, "variable": variable},
+        {"strategy": "budget_min", "truncated": True},
+        {"strategy": "budget_min"},
+        {},
+    ]
+    for sentinel in sentinels:
+        if _fits(sentinel, ""):
+            return dict(sentinel), ""
+
+    # If budget is non-positive, no JSON object can fit; callers should emit empty payload text.
+    return {}, ""
+
+
 _CALL_NAME_RE = re.compile(r"(?<![A-Za-z0-9_.])(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*\(")
 _CLASS_DEF_RE = re.compile(r"^(?P<indent>\s*)class\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\b")
 
@@ -912,13 +992,24 @@ def _pack_open_ended_data_flow_context(
         key=lambda x: (abs(int(x) - int(anchor_line)), int(x)),
     )
 
-    best_meta: dict[str, Any] | None = None
-    best_code = ""
     needs_bridge = bool(bridge_lines)
+    eval_cache: dict[int, tuple[dict[str, Any], str] | None] = {}
 
-    fractions = [1.0, 0.9, 0.8, 0.7, 0.6, 0.5]
-    for frac in fractions:
-        base_budget = max(0, int(int(budget_tokens) * float(frac)))
+    def _cap_result(meta_obj: dict[str, Any], code_obj: str) -> tuple[dict[str, Any], str]:
+        return _cap_data_flow_payload_to_budget(
+            meta=meta_obj,
+            code_text=code_obj,
+            budget_tokens=int(budget_tokens),
+            file_rel=file_rel,
+            function=function,
+            variable=variable,
+        )
+
+    def _evaluate_base_budget(base_budget: int) -> tuple[dict[str, Any], str] | None:
+        base_budget = max(0, int(base_budget))
+        if int(base_budget) in eval_cache:
+            return eval_cache[int(base_budget)]
+
         _, _, base_win = bte._select_window_within_span(
             file_rel=file_rel,
             lines=lines,
@@ -927,7 +1018,8 @@ def _pack_open_ended_data_flow_context(
             budget_tokens=int(base_budget),
         )
         if not isinstance(base_win, dict) or "start" not in base_win or "end" not in base_win:
-            continue
+            eval_cache[int(base_budget)] = None
+            return None
 
         target_window = (int(base_win["start"]), int(base_win["end"]))
         fixed_windows = bte._merge_windows([header_window, target_window])
@@ -987,14 +1079,13 @@ def _pack_open_ended_data_flow_context(
                     "extra": [int(x) for x in dropped_arg["extra"]],
                 }
 
-            payload = json.dumps(meta, sort_keys=True)
-            if code:
-                payload += "\n\n" + code
+            payload = _json_plus_code_payload(meta, code)
             return meta, code, payload
 
-        meta0, code0, payload0 = build_payload(windows, dropped)
+        _, _, payload0 = build_payload(windows, dropped)
         if int(count_tokens(payload0)) > int(budget_tokens):
-            continue
+            eval_cache[int(base_budget)] = None
+            return None
 
         tiers: list[tuple[str, list[int], int]] = [
             ("bridge", [int(x) for x in bridge_lines], int(bridge_radius)),
@@ -1014,16 +1105,91 @@ def _pack_open_ended_data_flow_context(
                 windows = cand_windows
 
         meta_final, code_final, _payload_final = build_payload(windows, dropped)
-        if best_meta is None:
-            best_meta = meta_final
-            best_code = code_final
+        eval_cache[int(base_budget)] = (meta_final, code_final)
+        return meta_final, code_final
 
-        has_bridge = bool(meta_final.get("bridge_lines"))
-        if not needs_bridge or has_bridge:
-            return meta_final, code_final
+    def _find_max_valid_base_budget(max_budget: int) -> int | None:
+        top = int(max_budget)
+        if int(top) <= 0:
+            return None
+        if _evaluate_base_budget(int(top)) is not None:
+            return int(top)
 
-    if best_meta is not None:
-        return best_meta, best_code
+        invalid_hi = int(top)
+        probe = int(top)
+        valid_lo: int | None = None
+        while int(probe) > 1:
+            probe = max(1, int(probe) // 2)
+            if _evaluate_base_budget(int(probe)) is not None:
+                valid_lo = int(probe)
+                break
+            invalid_hi = int(probe)
+
+        if valid_lo is None:
+            return None
+
+        best = int(valid_lo)
+        lo_budget = int(valid_lo)
+        hi_budget = max(int(valid_lo), int(invalid_hi) - 1)
+        while int(lo_budget) <= int(hi_budget):
+            mid = (int(lo_budget) + int(hi_budget)) // 2
+            if _evaluate_base_budget(int(mid)) is not None:
+                best = int(mid)
+                lo_budget = int(mid) + 1
+            else:
+                hi_budget = int(mid) - 1
+        return int(best)
+
+    def _find_largest_budget_with_bridge(max_valid_budget: int) -> int | None:
+        max_candidate = _evaluate_base_budget(int(max_valid_budget))
+        if max_candidate is None:
+            return None
+        if bool(max_candidate[0].get("bridge_lines")):
+            return int(max_valid_budget)
+
+        upper_without_bridge = int(max_valid_budget)
+        bridge_budget: int | None = None
+        probe = int(max_valid_budget)
+        while int(probe) > 1:
+            probe = max(1, int(probe) // 2)
+            cand = _evaluate_base_budget(int(probe))
+            if cand is None:
+                continue
+            if bool(cand[0].get("bridge_lines")):
+                bridge_budget = int(probe)
+                break
+            upper_without_bridge = int(probe)
+
+        if bridge_budget is None:
+            return None
+
+        best_bridge = int(bridge_budget)
+        lo_budget = int(bridge_budget) + 1
+        hi_budget = max(int(bridge_budget), int(upper_without_bridge) - 1)
+        while int(lo_budget) <= int(hi_budget):
+            mid = (int(lo_budget) + int(hi_budget)) // 2
+            cand_mid = _evaluate_base_budget(int(mid))
+            if cand_mid is not None and bool(cand_mid[0].get("bridge_lines")):
+                best_bridge = int(mid)
+                lo_budget = int(mid) + 1
+            else:
+                hi_budget = int(mid) - 1
+        return int(best_bridge)
+
+    max_valid_budget = _find_max_valid_base_budget(int(budget_tokens))
+    if max_valid_budget is not None:
+        top_choice = _evaluate_base_budget(int(max_valid_budget))
+        if top_choice is not None:
+            top_meta, top_code = top_choice
+            if not needs_bridge:
+                return _cap_result(top_meta, top_code)
+            bridge_budget = _find_largest_budget_with_bridge(int(max_valid_budget))
+            if bridge_budget is not None:
+                bridge_choice = _evaluate_base_budget(int(bridge_budget))
+                if bridge_choice is not None:
+                    bridge_meta, bridge_code = bridge_choice
+                    return _cap_result(bridge_meta, bridge_code)
+            return _cap_result(top_meta, top_code)
 
     meta_min: dict[str, Any] = {
         "file": file_rel,
@@ -1036,7 +1202,7 @@ def _pack_open_ended_data_flow_context(
         "truncated": True,
         "semantic_roles": [],
     }
-    return meta_min, ""
+    return _cap_result(meta_min, "")
 
 
 def _data_flow_context_tldr_plus_code(
@@ -1047,6 +1213,10 @@ def _data_flow_context_tldr_plus_code(
     variable: str,
     budget_tokens: int,
 ) -> tuple[str, int, int]:
+    budget = max(0, int(budget_tokens))
+    if int(budget) <= 0:
+        return "", 0, 0
+
     abs_path = repo_root / file_rel
     src = abs_path.read_text(encoding="utf-8", errors="replace")
     lines = src.splitlines()
@@ -1071,12 +1241,18 @@ def _data_flow_context_tldr_plus_code(
         span=(int(lo), int(hi)),
         flow_events=events2,
         ref_lines=ref_lines,
-        budget_tokens=int(budget_tokens),
+        budget_tokens=int(budget),
+    )
+    meta, code_text = _cap_data_flow_payload_to_budget(
+        meta=meta,
+        code_text=code_text,
+        budget_tokens=int(budget),
+        file_rel=file_rel,
+        function=function,
+        variable=variable,
     )
 
-    payload = json.dumps(meta, sort_keys=True)
-    if code_text:
-        payload += "\n\n" + code_text
+    payload = _json_plus_code_payload(meta, code_text)
     return payload, int(count_tokens(payload)), len(payload.encode("utf-8"))
 
 
