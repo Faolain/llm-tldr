@@ -1,9 +1,11 @@
-# Spec 007: Retrieval Optimization Implementation Plan (Feeds Spec 008 Phases 0/3/4)
+# Spec 007: Retrieval Optimization Implementation Plan (Feeds Spec 008 Tactical Inputs)
 
 - Status: Planned
 - Owner: TBD
 - Last updated: 2026-03-01
-- Normative precedence: [specs/008-head-to-head-benchmark-llm-tldr-vs-contextplus.md](../specs/008-head-to-head-benchmark-llm-tldr-vs-contextplus.md) and `benchmarks/head_to_head/suite.v1.json` remain release-gate authority.
+- Canonical 008 implementation authority: [implementations/008-beat-contextplus_IMPLEMENTATION_PLAN.md](./008-beat-contextplus_IMPLEMENTATION_PLAN.md).
+- Benchmark contract authority: [specs/008-head-to-head-benchmark-llm-tldr-vs-contextplus.md](../specs/008-head-to-head-benchmark-llm-tldr-vs-contextplus.md) and `benchmarks/head_to_head/suite.v1.json`.
+- Supporting/legacy 008 execution reference: [implementations/008-head-to-head-benchmark-llm-tldr-vs-contextplus_IMPLEMENTATION_PLAN.md](./008-head-to-head-benchmark-llm-tldr-vs-contextplus_IMPLEMENTATION_PLAN.md).
 - Role of this spec: tactical implementation plan that hardens input integrity, output integrity, and open-ended context quality so Spec 008 gates can be passed reproducibly.
 
 ## Objective
@@ -13,7 +15,7 @@ Turn 007 from diagnostics into execution by implementing and validating:
 1. Task/suite integrity fixes first (including OE08-class mismatch prevention).
 2. Typed empty-vs-malformed counters in predictor/scorer reporting.
 3. Better context rendering for open-ended `slice` and `data_flow` tasks (contiguous windows, branch/body bridging, explanation scaffold).
-4. Handoff artifacts that feed Spec 008 Phases 0, 3, and 4 without changing 008 gate math.
+4. Handoff artifacts that feed Spec 008 tactical inputs (contract integrity, reliability diagnostics, and context-quality improvements) without changing 008 gate math.
 
 ## Scope
 
@@ -43,7 +45,7 @@ Out of scope:
 This plan explicitly incorporates the prior comparison summary:
 
 1. Overlap retained: retrieval outcomes, token-efficiency outcomes, benchmark validity.
-2. 008 remains governance/release-gate source of truth: DoD, strict deltas, rerun stability, final winner rule.
+2. Canonical 008 remains governance/release-gate source of truth: DoD, strict deltas, rerun stability, final winner rule.
 3. 007 is tactical depth: root-cause fixes, context-packing tactics, task-integrity and output-quality hardening.
 4. Tensions resolved in order:
    - Fix suite/task integrity first (OE08-class issue).
@@ -63,9 +65,9 @@ This plan explicitly incorporates the prior comparison summary:
 
 ## Phased Implementation (Execution-Ready)
 
-Phase numbering mirrors the 008 phases this spec feeds.
+This plan provides tactical inputs to 008 governance gates. It does not define release-gate semantics.
 
-### Phase 0: Suite/Task Integrity First (Feeds 008 Phase 0)
+### Phase 0: Suite/Task Integrity First
 
 Implementation tasks:
 
@@ -82,6 +84,7 @@ Acceptance criteria:
 1. `open_ended_tasks` schema/integrity tests pass with zero mismatches.
 2. `validate-suite` passes for all participating tool profiles.
 3. `materialize-tasks` produces zero warnings.
+4. `benchmarks/head_to_head/tool_profiles/contextplus.v1.json` exists (created per canonical 008 Phase 0 contract freeze).
 
 Verification:
 
@@ -97,7 +100,7 @@ uv run pytest \
 uv run python scripts/bench_head_to_head.py validate-suite \
   --suite benchmarks/head_to_head/suite.v1.json \
   --tool-profile benchmarks/head_to_head/tool_profiles/llm_tldr.v1.json \
-  --tool-profile benchmarks/head_to_head/tool_profiles/contextplus.v1.template.json
+  --tool-profile benchmarks/head_to_head/tool_profiles/contextplus.v1.json
 
 uv run python scripts/bench_head_to_head.py materialize-tasks \
   --suite benchmarks/head_to_head/suite.v1.json \
@@ -216,6 +219,8 @@ Acceptance criteria:
    - slice mean `>= 0.55`
    - data_flow mean `>= 0.60`
 5. Sustained check: criterion (4) passes in at least 2 independent reruns with identical config.
+
+Important: Phase 4 judge-based tactical thresholds are non-gating and MUST NOT be used as a substitute for Spec 008 common-lane winner gates.
 
 Verification:
 
@@ -346,10 +351,10 @@ tmux new-session -d -s phase4-judge \
 
 007 is a feeder plan; 008 is release-gate authority.
 
-| 007 output | Consumed by 008 phase | Gate relevance |
+| 007 output | Consumed by 008 capability | Gate relevance |
 |---|---|---|
-| Task integrity checks + zero-warning manifest | Phase 0 | Protects fairness and input validity. |
-| Empty-vs-malformed counter instrumentation | Phase 3 | Improves reliability diagnosis for validity gates. |
-| Context rendering and scaffold improvements | Phase 4 | Improves quality under constrained budgets without changing gate math. |
+| Task integrity checks + zero-warning manifest | Contract/input freeze | Protects fairness and input validity. |
+| Empty-vs-malformed counter instrumentation | Run-validity diagnostics | Improves reliability diagnosis for validity gates. |
+| Context rendering and scaffold improvements | Retrieval/context quality hardening | Improves quality under constrained budgets without changing gate math. |
 
 Mandatory release-gate commands and final pass/fail decisions remain those in Spec 008.
