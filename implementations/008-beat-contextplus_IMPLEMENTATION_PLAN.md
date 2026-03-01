@@ -9,24 +9,44 @@
 
 Make `llm-tldr` measurably better than `contextplus` using the existing neutral head-to-head harness, with hard pass/fail criteria and reproducible artifacts.
 
+## Next Steps Checklist (008 Implementation Start)
+
+- [ ] Create artifact directories for deterministic reruns and audit outputs:
+  - `mkdir -p benchmark/runs benchmark/logs benchmark/runs/stitch_audits`
+- [ ] Write and run failing reliability-policy tests before implementation changes:
+  - `uv run pytest tests/test_bench_head_to_head_predict_helpers.py tests/test_bench_head_to_head_assert.py`
+- [ ] Add explicit failure classification output for each run:
+  - `benchmark/runs/h2h-failure-classification-<run>.json`
+- [ ] Add partial rerun stitch output + audit artifacts for each tool/run:
+  - `benchmark/runs/h2h-<tool>-predictions-<run>-stitched.json`
+  - `benchmark/runs/stitch_audits/h2h-<tool>-stitch-audit-<run>.json`
+- [ ] Re-run baseline (`run1..run3`) using unchanged suite seeds and persist run metadata sidecar:
+  - `benchmark/runs/h2h-run-metadata-<run>.json`
+- [ ] Keep strict quality/effectiveness thresholds unchanged and enforce them on completed judgments after deterministic stitching.
+
 ## Definition Of Done (Program-Level)
 
 A release is considered successful only if all conditions below are true:
 
-1. Run validity gates pass for both tools:
+1. Run validity gates pass for both tools on completed judgments after deterministic stitching:
    - `timeout_rate <= 0.02`
    - `error_rate <= 0.01`
    - `budget_violation_rate == 0.0`
-2. Head-to-head winner at primary budget (`2000`) is `llm-tldr` using suite winner rule (win at least 3 common-lane primary metrics).
-3. Additional margin gates at budget `2000`:
+2. Provider operational failures are non-gating for sign-off only when all are true:
+   - Affected rows are explicitly classified as `provider_transport_runtime` (for example: Claude transport timeout, upstream `5xx`, connection reset, provider runtime cancellation) in `benchmark/runs/h2h-failure-classification-<run>.json`.
+   - Eligible reruns exist and are stitchable under the deterministic merge protocol in this plan.
+   - Stitch audit artifacts are present under `benchmark/runs/stitch_audits/`.
+3. Head-to-head winner at primary budget (`2000`) is `llm-tldr` using suite winner rule (win at least 3 common-lane primary metrics).
+4. Additional margin gates at budget `2000`:
    - `mrr_mean_delta (llm-tldr - contextplus) >= +0.05`
    - `recall@5_mean_delta >= +0.08`
    - `precision@5_mean_delta >= +0.05`
-4. Efficiency safety gates at budget `2000`:
+5. Efficiency safety gates at budget `2000`:
    - `payload_tokens_median(llm-tldr) <= 0.90 * payload_tokens_median(contextplus)`
    - `latency_ms_p50(llm-tldr) <= 1.10 * latency_ms_p50(contextplus)`
-5. Stability gate:
-   - Criteria 1-4 pass in at least `2/3` full reruns with suite seeds unchanged.
+6. Stability gate:
+   - Criteria 1-5 pass in at least `2/3` full reruns with suite seeds unchanged.
+   - The same deterministic stitch rules are used in each rerun.
 
 ## Program Delivery Mode: Test-First With Benchmark Confirmation
 
@@ -36,6 +56,107 @@ This plan uses a hybrid method:
 2. Benchmark runs for system-level acceptance and superiority evidence.
 
 Phase rule: implementation changes for a phase start only after that phase's "Tests To Write First" list exists and fails for the intended behavior change.
+
+## Reliability Policy: Product Failures vs Provider Operational Failures
+
+### Failure Classes
+
+- `product_failure` (gating):
+  - Any failure attributable to local runner/harness/tool behavior, including invalid output parsing, bad schema rows, budget violations, local crashes, or deterministic logic defects.
+- `provider_transport_runtime` (non-gating if stitched per policy):
+  - Upstream provider operational failures such as transport timeout, provider-side runtime timeout/cancel, transient `5xx`, or connection reset while calling hosted models (for example, Claude).
+- `unclassified` (treated as gating):
+  - Any row without explicit classification defaults to `product_failure` for gating.
+
+### Gating Semantics
+
+- Quality and effectiveness thresholds remain strict and unchanged.
+- Only `provider_transport_runtime` rows may be excluded from blocking release gates, and only after deterministic rerun stitching artifacts are produced.
+- `product_failure` and `unclassified` rows always count in run-validity gate math and can block sign-off.
+
+### Required Reliability Artifacts
+
+- `benchmark/runs/h2h-failure-classification-<run>.json`:
+  - Per row key (`tool`, `task_id`, `budget`, `trial`) with `failure_class`, `reason`, and raw-log pointer.
+- `benchmark/runs/h2h-run-metadata-<run>.json`:
+  - Immutable run identity (`suite_hash`, `task_manifest_hash`, `tool_profile_hash`, `seed`, `model_id`).
+- `benchmark/runs/stitch_audits/h2h-<tool>-stitch-audit-<run>.json`:
+  - Deterministic merge decisions for every replaced or unresolved row.
+
+## Stitching Protocol For Partial Reruns
+
+### Eligibility
+
+A rerun row is eligible to replace a base row only if all identity fields match:
+
+- `suite_hash`
+- `task_manifest_hash`
+- `tool_profile_hash`
+- `tool`
+- `task_id`
+- `budget`
+- `trial`
+- `seed`
+- prompt hash and provider `model_id`
+
+Only base rows classified as `provider_transport_runtime` are eligible for replacement.
+
+### Artifact Requirements
+
+- Base predictions file:
+  - `benchmark/runs/h2h-<tool>-predictions-<run>.json`
+- Partial rerun predictions file(s):
+  - `benchmark/runs/h2h-<tool>-predictions-<run>-rerun<N>.json`
+- Classification file:
+  - `benchmark/runs/h2h-failure-classification-<run>.json`
+- Output merged predictions file:
+  - `benchmark/runs/h2h-<tool>-predictions-<run>-stitched.json`
+- Output audit file:
+  - `benchmark/runs/stitch_audits/h2h-<tool>-stitch-audit-<run>.json`
+
+### Deterministic Merge Rules
+
+For each key (`tool`, `task_id`, `budget`, `trial`):
+
+1. Keep base row unless base row is classified `provider_transport_runtime`.
+2. For eligible keys, sort rerun candidates by `(rerun_index asc, completed_at_utc asc)`.
+3. Select the first candidate whose classification is not `provider_transport_runtime`.
+4. If no such candidate exists, keep base row and mark unresolved provider operational failure.
+5. Do not merge by best score/quality; merge is identity + ordering based only.
+
+### Audit Trail
+
+- Every replacement must record:
+  - `row_key`
+  - `base_artifact`
+  - `replacement_artifact`
+  - `base_failure_class`
+  - `replacement_failure_class`
+  - `decision_rule`
+  - `decision_timestamp_utc`
+- Every unresolved provider operational failure must record:
+  - `row_key`
+  - attempted rerun artifact list
+  - final unresolved reason
+- Audit files are immutable artifacts and must be archived with compare outputs.
+
+### Example Commands
+
+```bash
+uv run python scripts/bench_h2h_predict.py \
+  --suite benchmarks/head_to_head/suite.v1.json \
+  --tasks benchmark/runs/h2h-task-manifest.json \
+  --tool-profile benchmarks/head_to_head/tool_profiles/llm_tldr.v1.json \
+  --out benchmark/runs/h2h-llm-tldr-predictions-run1-rerun1.json
+
+uv run python scripts/bench_h2h_stitch.py \
+  --base benchmark/runs/h2h-llm-tldr-predictions-run1.json \
+  --rerun benchmark/runs/h2h-llm-tldr-predictions-run1-rerun1.json \
+  --classification benchmark/runs/h2h-failure-classification-run1.json \
+  --run-metadata benchmark/runs/h2h-run-metadata-run1.json \
+  --out benchmark/runs/h2h-llm-tldr-predictions-run1-stitched.json \
+  --audit benchmark/runs/stitch_audits/h2h-llm-tldr-stitch-audit-run1.json
+```
 
 ## Phase 0: Freeze Contract And Reproducible Baseline Inputs
 
@@ -196,7 +317,7 @@ uv run python scripts/bench_head_to_head.py compare \
 ### Pass/Fail Thresholds
 
 - Each run passes fairness gates (`task_manifest_hash`, tokenizer, budgets).
-- At least `2/3` runs have both tools pass run-validity gates.
+- At least `2/3` runs have both tools pass run-validity gates on completed judgments after deterministic stitching.
 - Baseline variance at budget `2000` is bounded:
   - `stdev(mrr_mean) <= 0.02`
   - `stdev(recall@5_mean) <= 0.03`
@@ -440,8 +561,9 @@ uv run python scripts/bench_h2h_assert.py \
 ### Pass/Fail Thresholds
 
 - PR smoke runtime `<= 20 minutes` and must pass on default branch before merge.
-- Nightly full run must pass strict superiority gates for `7` consecutive nights before claiming completion.
-- Any nightly failure opens a blocking regression issue with attached run artifacts.
+- Nightly full run must pass strict superiority gates for `7` consecutive nights before claiming completion (using deterministic stitched artifacts when provider operational failures occur).
+- Any nightly failure classified as `product_failure` or `unclassified` opens a blocking regression issue with attached run artifacts.
+- Nightly failures classified exclusively as `provider_transport_runtime` require rerun + stitch + audit artifacts, and remain non-blocking unless classification or stitch requirements are missing.
 
 ## Long-Running Execution Notes
 
@@ -456,7 +578,9 @@ tmux new-session -d -s h2h-full \
 ## Final Exit Checklist
 
 - [ ] Phase 0-6 deliverables merged.
-- [ ] All phase pass/fail thresholds met.
+- [ ] All phase pass/fail thresholds met on completed judgments after deterministic stitching.
 - [ ] `llm-tldr` wins head-to-head by suite rule and strict margin gates.
-- [ ] Results reproduced in at least 2 of 3 full reruns.
-- [ ] Benchmark artifacts archived under `benchmark/runs/` with hashes.
+- [ ] Results reproduced in at least 2 of 3 full reruns with identical stitch rules.
+- [ ] All provider operational failures (if any) are explicitly classified as `provider_transport_runtime` and have rerun + stitch audit artifacts.
+- [ ] No `unclassified` failures remain in release-candidate runs.
+- [ ] Benchmark artifacts archived under `benchmark/runs/` with hashes, including stitch audit files.
