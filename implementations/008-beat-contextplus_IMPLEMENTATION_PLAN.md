@@ -28,6 +28,15 @@ A release is considered successful only if all conditions below are true:
 5. Stability gate:
    - Criteria 1-4 pass in at least `2/3` full reruns with suite seeds unchanged.
 
+## Program Delivery Mode: Test-First With Benchmark Confirmation
+
+This plan uses a hybrid method:
+
+1. Test-first (`red -> green`) for deterministic logic, schema contracts, counters, and packing/ranking behavior.
+2. Benchmark runs for system-level acceptance and superiority evidence.
+
+Phase rule: implementation changes for a phase start only after that phase's "Tests To Write First" list exists and fails for the intended behavior change.
+
 ## Phase 0: Freeze Contract And Reproducible Baseline Inputs
 
 ### Goals
@@ -41,6 +50,16 @@ A release is considered successful only if all conditions below are true:
 - `benchmarks/head_to_head/suite.v1.json` and query files confirmed pinned to Django `5.1.13` SHA `c04a09ddb3bb1fe8157292fcd902b35cad9a5e10`.
 - Optional stricter gate config file for this program:
   - `benchmarks/head_to_head/gates.strict.v1.json`.
+
+### Tests To Write First (Before Implementation)
+
+- `tests/test_bench_head_to_head_tool_profiles_schema.py::test_contextplus_profile_is_real_profile_not_template`
+- `tests/test_bench_head_to_head_tool_profiles_schema.py::test_contextplus_retrieval_template_has_no_placeholder_text`
+- `tests/test_bench_head_to_head_suite_schema.py::test_head_to_head_suite_django_pin_matches_corpora_manifest`
+- `tests/test_bench_head_to_head_materialize_helpers.py::test_materialize_tasks_is_deterministic_for_identical_inputs`
+- `tests/test_bench_llm_open_ended_tasks_schema.py::test_open_ended_task_query_alignment_and_anchor_consistency`
+- `tests/test_bench_llm_open_ended_tasks_schema.py::test_oe08_regression_guard_maps_to_b10_configure`
+- `tests/test_bench_head_to_head_materialize_tasks.py::test_materialize_tasks_valid_fixture_has_zero_warnings_and_stable_hash` (new)
 
 ### Commands
 
@@ -91,6 +110,16 @@ uv run python scripts/bench_head_to_head.py materialize-tasks \
   - `tests/test_bench_head_to_head_predict_helpers.py`
   - `tests/test_bench_head_to_head_predict_schema.py`
 
+### Tests To Write First (Before Implementation)
+
+- `tests/test_bench_head_to_head_predict_helpers.py::test_render_command_template_raises_on_missing_placeholder`
+- `tests/test_bench_head_to_head_predict_helpers.py::test_timeout_maps_to_timeout_status_not_error`
+- `tests/test_bench_head_to_head_predict_helpers.py::test_raw_log_path_is_tool_trial_task_layout`
+- `tests/test_bench_head_to_head_predict_schema.py::test_predictions_schema_rejects_duplicate_task_budget_trial_rows`
+- `tests/test_bench_llm_ab_run_helpers.py::test_structured_failure_classes_mutually_exclusive`
+- `tests/test_bench_llm_ab_run_helpers.py::test_structured_bad_json_reconciliation`
+- `tests/test_bench_llm_ab_run_helpers.py::test_judge_bad_json_reconciliation`
+
 ### Commands
 
 ```bash
@@ -129,6 +158,13 @@ uv run python scripts/bench_h2h_predict.py \
 - Three full baseline runs (same machine class, same seeds, same suite).
 - Baseline summary artifact:
   - `benchmark/runs/h2h-baseline-summary.json`
+
+### Tests To Write First (Before Implementation)
+
+- `tests/test_bench_head_to_head_baseline_helpers.py::test_baseline_summary_rejects_mixed_task_manifest_hashes`
+- `tests/test_bench_head_to_head_baseline_helpers.py::test_baseline_summary_requires_two_of_three_valid_runs`
+- `tests/test_bench_head_to_head_baseline_helpers.py::test_baseline_variance_uses_budget_2000_mrr_and_recall5`
+- `tests/test_bench_head_to_head_score_counters.py::test_score_emits_typed_parse_diagnostics_without_gate_math_drift` (new)
 
 ### Commands
 
@@ -181,6 +217,13 @@ uv run python scripts/bench_head_to_head.py compare \
 - Tests:
   - Extend `tests/test_bench_token_efficiency_helpers.py` (budget packing invariants).
   - Add retrieval ranking helper tests for any new scoring logic.
+
+### Tests To Write First (Before Implementation)
+
+- `tests/test_bench_retrieval_quality_helpers.py::test_rrf_fuse_boosts_docs_supported_by_multiple_rankers`
+- `tests/test_bench_retrieval_quality_helpers.py::test_rrf_fuse_tie_break_is_deterministic`
+- `tests/test_bench_retrieval_quality_helpers.py::test_no_result_guard_rg_empty_forces_empty_semantic_and_hybrid`
+- `tests/test_bench_token_efficiency_helpers.py::test_apply_budget_keeps_anchor_context_before_optional_windows`
 
 ### Commands
 
@@ -239,6 +282,14 @@ uv run python scripts/bench_head_to_head.py compare \
 - De-duplication and chunk prioritization updates to reduce wasted tokens.
 - Guardrails ensuring no hard budget overruns.
 
+### Tests To Write First (Before Implementation)
+
+- `tests/test_bench_token_efficiency_helpers.py::test_apply_budget_never_exceeds_budget_including_join_separators`
+- `tests/test_bench_token_efficiency_helpers.py::test_apply_budget_deduplicates_duplicate_chunks`
+- `tests/test_bench_head_to_head_score_helpers.py::test_score_budget_violation_rate_counts_over_budget_ok_predictions`
+- `tests/test_bench_llm_ab_prompts_slice_packing.py::test_slice_open_ended_context_metadata_contract_and_determinism`
+- `tests/test_bench_llm_ab_prompts_data_flow_packing.py::test_data_flow_budget_hard_cap_and_deterministic_drop_order` (new)
+
 ### Commands
 
 ```bash
@@ -278,6 +329,13 @@ uv run python scripts/bench_token_efficiency.py \
 - Structural quality improvements for `impact`, `slice`, `data_flow`, `complexity`.
 - TS callgraph quality checks on pinned curated corpora.
 - Daemon-vs-CLI latency improvements for repeated-query workflows.
+
+### Tests To Write First (Before Implementation)
+
+- `tests/test_bench_structural_analysis_helpers.py::test_data_flow_origin_accuracy_requires_exact_origin_line`
+- `tests/test_bench_structural_analysis_helpers.py::test_python_function_span_resolves_class_method_names`
+- `tests/test_bench_ts_curated_recall_helpers.py::test_load_graph_cache_rejects_language_mismatch`
+- `tests/test_bench_perf_daemon_vs_cli_helpers.py::test_speedup_metric_uses_p50_latency_for_gate_alignment`
 
 ### Commands
 
@@ -350,6 +408,14 @@ uv run python scripts/bench_perf_daemon_vs_cli.py \
   - Nightly full: full suite, both tools, all budgets.
 - Documentation update:
   - `benchmarks/head_to_head/README.md` with strict-gate workflow.
+
+### Tests To Write First (Before Implementation)
+
+- `tests/test_bench_head_to_head_assert.py::test_assert_fails_when_compare_winner_is_not_llm_tldr`
+- `tests/test_bench_head_to_head_assert.py::test_assert_fails_when_margin_gates_are_below_threshold`
+- `tests/test_bench_head_to_head_assert.py::test_assert_fails_on_validity_or_efficiency_gate_failure`
+- `tests/test_bench_head_to_head_assert.py::test_assert_requires_stability_two_of_three_runs`
+- `tests/test_bench_head_to_head_assert.py::test_assert_passes_only_when_all_strict_gates_pass`
 
 ### Commands
 

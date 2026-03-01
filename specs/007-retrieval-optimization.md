@@ -28,6 +28,16 @@ Spec 007 `MUST NOT`:
 
 Any ship/no-ship decision remains under Spec 008 authority.
 
+## 2.1 Delivery Method: Test-First, Then Benchmark
+
+Spec 007 work `MUST` be delivered in test-first order:
+
+1. Write failing tests that encode the invariant or contract being changed.
+2. Implement the minimum code change to pass those tests.
+3. Run benchmark/judge workflows only after invariant tests pass.
+
+Benchmark outcomes are acceptance evidence, not a substitute for invariant tests.
+
 ## 3. Scope of Work
 
 ### 3.1 Task Integrity
@@ -47,6 +57,24 @@ Any ship/no-ship decision remains under Spec 008 authority.
 1. Improve `slice` and `data_flow` rendering using contiguous windows and branch/body bridging.
 2. Emit deterministic context metadata (`strategy`, coverage/truncation fields, included lines).
 3. Enforce deterministic budget arbitration and drop order; no hard budget overruns.
+
+### 3.4 Test-First Backlog (Write Before Implementation)
+
+1. Task integrity (maps primarily to 008 Phase 0)
+- `tests/test_bench_llm_open_ended_tasks_schema.py::test_open_ended_task_query_alignment_and_anchor_consistency`
+- `tests/test_bench_llm_open_ended_tasks_schema.py::test_oe08_regression_guard_maps_to_b10_configure`
+- `tests/test_bench_head_to_head_materialize_tasks.py::test_materialize_tasks_valid_fixture_has_zero_warnings_and_stable_hash` (new)
+- `tests/test_bench_head_to_head_tool_profiles_schema.py::test_contextplus_profile_is_real_contract_input`
+
+2. Output integrity (maps primarily to 008 Phases 1, 2, and 6)
+- `tests/test_bench_llm_ab_run_helpers.py::test_structured_failure_classes_mutually_exclusive`
+- `tests/test_bench_llm_ab_run_helpers.py::test_structured_bad_json_reconciliation`
+- `tests/test_bench_llm_ab_run_helpers.py::test_judge_bad_json_reconciliation`
+- `tests/test_bench_head_to_head_score_counters.py::test_score_emits_typed_parse_diagnostics_without_gate_math_drift` (new)
+
+3. Open-ended rendering integrity (maps primarily to 008 Phases 4, 5, and 6)
+- `tests/test_bench_llm_ab_prompts_slice_packing.py::test_slice_open_ended_context_metadata_contract_and_determinism`
+- `tests/test_bench_llm_ab_prompts_data_flow_packing.py::test_data_flow_budget_hard_cap_and_deterministic_drop_order` (new)
 
 ## 4. Required Invariants and Acceptance Signals
 
