@@ -1,0 +1,122 @@
+{
+  "schema_version": 1,
+  "suite_id": "h2h_llm_tldr_vs_contextplus_v1",
+  "title": "Neutral Head-to-Head Benchmark: llm-tldr vs contextplus",
+  "updated": "2026-03-01",
+  "dataset": {
+    "corpus_manifest": "benchmarks/corpora.json",
+    "corpus_id": "django",
+    "required_git_sha": "c04a09ddb3bb1fe8157292fcd902b35cad9a5e10",
+    "required_ref": "5.1.13"
+  },
+  "sources": {
+    "retrieval_queries": "benchmarks/retrieval/django_queries.json",
+    "structural_queries": "benchmarks/python/django_structural_queries.json"
+  },
+  "lanes": [
+    {
+      "id": "common_retrieval",
+      "required_for_all_tools": true,
+      "categories": ["retrieval"],
+      "description": "Common denominator lane: natural-language file retrieval tasks every tool must run."
+    },
+    {
+      "id": "structural_optional",
+      "required_for_all_tools": false,
+      "categories": ["impact", "slice", "complexity", "data_flow"],
+      "description": "Optional lane: only scored for tools that actually expose these capabilities."
+    }
+  ],
+  "protocol": {
+    "trials": 3,
+    "seeds": [11, 29, 47],
+    "query_order": "shuffle_with_seed",
+    "warmup_per_category": 2,
+    "cold_start_iterations": 1,
+    "warm_start_iterations": 3,
+    "timeout_s_per_query": 30,
+    "timeout_s_per_run": 7200,
+    "retry_on_timeout": 1
+  },
+  "budgets": {
+    "tokenizer": "cl100k_base",
+    "token_budgets": [500, 1000, 2000, 5000],
+    "max_payload_tokens_hard": 5000,
+    "max_payload_bytes_hard": 65536,
+    "retrieval_top_k": 10,
+    "retrieval_ks": [1, 5, 10]
+  },
+  "metrics": {
+    "primary": {
+      "retrieval": [
+        "mrr",
+        "recall@5",
+        "precision@5",
+        "fpr@5",
+        "latency_ms_p50",
+        "payload_tokens_median"
+      ],
+      "impact": ["f1", "precision", "recall", "latency_ms_p50", "payload_tokens_median"],
+      "slice": ["f1", "precision", "recall", "noise_reduction_mean", "latency_ms_p50"],
+      "complexity": ["accuracy", "mae", "kendall_tau_b"],
+      "data_flow": ["origin_accuracy", "flow_completeness_mean", "latency_ms_p50"]
+    },
+    "secondary": [
+      "timeout_rate",
+      "error_rate",
+      "unsupported_rate",
+      "budget_violation_rate",
+      "common_lane_coverage",
+      "capability_coverage"
+    ]
+  },
+  "gates": {
+    "run_validity": {
+      "max_timeout_rate": 0.02,
+      "max_error_rate": 0.01,
+      "max_budget_violation_rate": 0.0
+    },
+    "fairness": {
+      "require_identical_task_manifest_hash": true,
+      "require_same_tokenizer": "cl100k_base",
+      "require_same_budgets": true
+    },
+    "tool_quality": {
+      "common_lane_min_coverage": 1.0,
+      "retrieval_min_mrr_at_budget_2000": 0.55,
+      "retrieval_max_fpr5_at_budget_2000": 0.05,
+      "impact_min_f1_at_budget_2000_if_supported": 0.5,
+      "slice_min_recall_at_budget_2000_if_supported": 0.7,
+      "data_flow_min_origin_accuracy_at_budget_2000_if_supported": 0.7,
+      "complexity_max_mae_at_budget_2000_if_supported": 3.0
+    },
+    "head_to_head": {
+      "primary_budget": 2000,
+      "winner_rule": "win_at_least_three_primary_metrics_in_common_lane",
+      "tie_breakers": [
+        "lower_timeout_rate",
+        "lower_payload_tokens_median",
+        "lower_latency_ms_p50"
+      ]
+    }
+  },
+  "anti_bias_controls": [
+    "Freeze corpus SHA, query files, and gate thresholds before running either tool.",
+    "Use identical task order per trial via fixed seed list; do not hand-tune prompts per query.",
+    "Blind tool identity during scoring and comparison (report tool_a/tool_b, reveal mapping later).",
+    "Run both tools on the same machine class and pinned dependency/runtime versions.",
+    "Use the same tokenizer and budget envelopes for both tools; enforce hard budget violations.",
+    "Log raw outputs and command lines for every query to permit post-hoc audit.",
+    "Keep unsupported capabilities as N/A rather than converting to improvised proxy workflows.",
+    "Include negative retrieval queries and failure accounting (timeouts/errors) in final scoring."
+  ],
+  "required_artifacts": [
+    "task_manifest.json (materialized tasks + hashes)",
+    "tool_profile.json for each tool (capabilities + command templates)",
+    "predictions.json for each tool (per task/budget/trial canonical outputs)",
+    "score.json for each tool (metrics + gate results)",
+    "compare.json (winner decision + metric deltas)",
+    "env.json (OS/CPU/Python/Node/tool versions)",
+    "raw_logs/<tool>/<trial>/<task>.log"
+  ]
+}

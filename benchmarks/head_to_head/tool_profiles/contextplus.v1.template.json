@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "suite_id": "h2h_llm_tldr_vs_contextplus_v1",
+  "tool_id": "contextplus",
+  "display_name": "contextplus",
+  "version_capture": {
+    "command": ["contextplus", "--version"],
+    "fallback_command": ["contextplus", "version"]
+  },
+  "capabilities": {
+    "retrieval": true,
+    "impact": false,
+    "slice": false,
+    "complexity": false,
+    "data_flow": false
+  },
+  "commands": {
+    "retrieval": {
+      "description": "Replace with the real contextplus retrieval command.",
+      "template": "contextplus search --repo {repo_root} --query \"{query}\" --top-k {top_k}"
+    }
+  },
+  "budget_policy": {
+    "max_payload_tokens": "enforced_by_benchmark_harness",
+    "max_payload_bytes": "enforced_by_benchmark_harness"
+  },
+  "notes": [
+    "Fill this template with real commands before running head-to-head.",
+    "Declare unsupported capabilities as false instead of mapping to ad-hoc proxies."
+  ]
+}
