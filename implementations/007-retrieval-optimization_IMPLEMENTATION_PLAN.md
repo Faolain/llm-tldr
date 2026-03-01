@@ -63,6 +63,22 @@ This plan explicitly incorporates the prior comparison summary:
 | Output-integrity counters are coarse | `bench_llm_ab_run.py` tracks `bad_json`/`judge_bad_json` but not explicit empty vs malformed splits. | Root-cause diagnosis and regressions are harder to isolate. |
 | Scorer parse diagnostics are not fully typed by failure class | `bench_head_to_head.py` has status and parse errors but lacks dedicated empty/malformed payload class accounting. | Harder to distinguish transport/status failures from payload-shape failures. |
 
+## Execution-Readiness Remediation (Blocking)
+
+The following blockers must be closed before this plan is execution-ready:
+
+1. Missing `benchmarks/head_to_head/tool_profiles/contextplus.v1.json`.
+2. Missing `tests/test_bench_head_to_head_score_counters.py`.
+3. Missing `tests/fixtures/head_to_head/predictions.malformed.json`.
+4. Phase 3 verification currently assumes `benchmark/runs/h2h-task-manifest.json` already exists.
+
+Remediation order:
+
+1. Instantiate `contextplus.v1.json` from `contextplus.v1.template.json` with runnable retrieval command(s).
+2. Add malformed scorer fixture + dedicated score-counter tests.
+3. Add typed scorer counters in `bench_head_to_head.py` as telemetry.
+4. Make Phase 3 verification self-contained by materializing tasks in the same block.
+
 ## Phased Implementation (Execution-Ready)
 
 This plan provides tactical inputs to 008 governance gates. It does not define release-gate semantics.
@@ -78,6 +94,7 @@ Implementation tasks:
    - Note: `query_id` existence and category matching are already enforced.
 3. Keep [benchmarks/llm/open_ended_tasks.json](../benchmarks/llm/open_ended_tasks.json) synchronized with [benchmarks/python/django_structural_queries.json](../benchmarks/python/django_structural_queries.json).
 4. Require `materialize-tasks` warnings to remain zero.
+5. Create [benchmarks/head_to_head/tool_profiles/contextplus.v1.json](../benchmarks/head_to_head/tool_profiles/contextplus.v1.json) from the template and treat it as required benchmark contract input (not an optional local artifact).
 
 Acceptance criteria:
 
@@ -140,6 +157,10 @@ Classification policy (mutually exclusive):
 - `malformed`: non-empty payload that fails JSON parse or required-shape validation.
 - `transport/status failure`: timeout/provider/runner exception (tracked separately; never counted as empty/malformed).
 
+Scorer guardrail (mandatory):
+
+- In `bench_head_to_head.py`, typed shape counters are diagnostic telemetry only. They must not change 008 scoring/gating semantics (`status_counts`, `rates`, gate formulas, winner rule) unless Spec 008 is explicitly updated.
+
 Acceptance criteria:
 
 1. New counter keys are present in run reports.
@@ -150,6 +171,13 @@ Verification:
 
 ```bash
 set -euo pipefail
+
+uv run python scripts/bench_fetch_corpora.py --corpus django
+
+uv run python scripts/bench_head_to_head.py materialize-tasks \
+  --suite benchmarks/head_to_head/suite.v1.json \
+  --corpus-root benchmark/corpora/django \
+  --out benchmark/runs/h2h-task-manifest.json
 
 uv run pytest \
   tests/test_bench_llm_ab_run_helpers.py \
