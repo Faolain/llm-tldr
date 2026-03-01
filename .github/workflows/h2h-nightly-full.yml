@@ -1,0 +1,122 @@
+name: h2h-nightly-full
+
+on:
+  schedule:
+    - cron: '0 7 * * *'
+  workflow_dispatch:
+
+jobs:
+  contract-and-gates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dev dependencies
+        run: uv sync --extra dev
+
+      - name: Validate suite and strict gate tooling
+        run: |
+          uv run python scripts/bench_head_to_head.py validate-suite \
+            --suite benchmarks/head_to_head/suite.v1.json \
+            --tool-profile benchmarks/head_to_head/tool_profiles/llm_tldr.v1.json \
+            --tool-profile benchmarks/head_to_head/tool_profiles/contextplus.v1.json
+          uv run pytest tests/test_bench_head_to_head_assert.py
+
+  full-h2h:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    needs: [contract-and-gates]
+    if: ${{ secrets.H2H_NIGHTLY_ENABLED == '1' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dev dependencies
+        run: uv sync --extra dev
+
+      - name: Prepare benchmark dirs
+        run: mkdir -p benchmark/runs benchmark/logs benchmark/runs/stitch_audits
+
+      - name: Fetch pinned corpus and materialize tasks
+        run: |
+          uv run python scripts/bench_fetch_corpora.py --corpus django
+          uv run python scripts/bench_head_to_head.py materialize-tasks \
+            --suite benchmarks/head_to_head/suite.v1.json \
+            --corpus-root benchmark/corpora/django \
+            --out benchmark/runs/h2h-task-manifest.json
+
+      - name: Generate predictions (llm-tldr)
+        run: |
+          uv run python scripts/bench_h2h_predict.py \
+            --suite benchmarks/head_to_head/suite.v1.json \
+            --tasks benchmark/runs/h2h-task-manifest.json \
+            --tool-profile benchmarks/head_to_head/tool_profiles/llm_tldr.v1.json \
+            --out benchmark/runs/h2h-llm-tldr-predictions-run1.json \
+            --classification-out benchmark/runs/h2h-failure-classification-run1.json \
+            --run-metadata-out benchmark/runs/h2h-run-metadata-run1.json
+
+      - name: Generate predictions (contextplus)
+        run: |
+          uv run python scripts/bench_h2h_predict.py \
+            --suite benchmarks/head_to_head/suite.v1.json \
+            --tasks benchmark/runs/h2h-task-manifest.json \
+            --tool-profile benchmarks/head_to_head/tool_profiles/contextplus.v1.json \
+            --out benchmark/runs/h2h-contextplus-predictions-run1.json \
+            --classification-out benchmark/runs/h2h-failure-classification-run1-contextplus.json \
+            --run-metadata-out benchmark/runs/h2h-run-metadata-run1-contextplus.json
+
+      - name: Score + compare + strict assert
+        run: |
+          uv run python scripts/bench_head_to_head.py score \
+            --suite benchmarks/head_to_head/suite.v1.json \
+            --tasks benchmark/runs/h2h-task-manifest.json \
+            --tool-profile benchmarks/head_to_head/tool_profiles/llm_tldr.v1.json \
+            --predictions benchmark/runs/h2h-llm-tldr-predictions-run1.json \
+            --out benchmark/runs/h2h-llm-tldr-score-run1.json
+          uv run python scripts/bench_head_to_head.py score \
+            --suite benchmarks/head_to_head/suite.v1.json \
+            --tasks benchmark/runs/h2h-task-manifest.json \
+            --tool-profile benchmarks/head_to_head/tool_profiles/contextplus.v1.json \
+            --predictions benchmark/runs/h2h-contextplus-predictions-run1.json \
+            --out benchmark/runs/h2h-contextplus-score-run1.json
+          uv run python scripts/bench_head_to_head.py compare \
+            --suite benchmarks/head_to_head/suite.v1.json \
+            --score-a benchmark/runs/h2h-llm-tldr-score-run1.json \
+            --score-b benchmark/runs/h2h-contextplus-score-run1.json \
+            --label-a llm-tldr \
+            --label-b contextplus \
+            --out benchmark/runs/h2h-compare-run1.json
+          uv run python scripts/bench_h2h_assert.py \
+            --suite benchmarks/head_to_head/suite.v1.json \
+            --score-a benchmark/runs/h2h-llm-tldr-score-run1.json \
+            --score-b benchmark/runs/h2h-contextplus-score-run1.json \
+            --compare benchmark/runs/h2h-compare-run1.json \
+            --label-a llm-tldr \
+            --label-b contextplus \
+            --strict-gates benchmarks/head_to_head/gates.strict.v1.json \
+            --out benchmark/runs/h2h-assert-strict-run1.json
+
+      - name: Upload benchmark artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: h2h-nightly-artifacts
+          path: benchmark/runs/
+          if-no-files-found: warn

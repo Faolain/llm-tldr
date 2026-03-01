@@ -103,3 +103,39 @@ def test_windows_around_lines_merge_and_render():
     payload, included = render_windows("x.py", lines=lines, windows=windows)
     assert payload.startswith("# x.py:4-8")
     assert included == {4, 5, 6, 7, 8}
+
+
+def test_apply_budget_keeps_anchor_context_before_optional_windows(monkeypatch):
+    mod = _load_mod()
+    apply_budget = mod["_apply_budget"]
+    monkeypatch.setitem(apply_budget.__globals__, "count_tokens", lambda s: len(s))
+
+    pieces = ["# anchor", "window-a", "window-b"]
+    budget = len("# anchor\n\nwindow-a")
+    payload, toks, _bytes, used = apply_budget(pieces, budget_tokens=budget)
+
+    assert used == 2
+    assert payload == "# anchor\n\nwindow-a"
+    assert toks <= budget
+    assert payload.split("\n\n", 1)[0] == "# anchor"
+
+
+def test_apply_budget_never_exceeds_budget_including_join_separators(monkeypatch):
+    mod = _load_mod()
+    apply_budget = mod["_apply_budget"]
+    monkeypatch.setitem(apply_budget.__globals__, "count_tokens", lambda s: len(s))
+
+    payload, toks, _bytes, used = apply_budget(["aaaa", "bbbb"], budget_tokens=8)
+    assert used == 1
+    assert payload == "aaaa"
+    assert toks <= 8
+
+
+def test_apply_budget_deduplicates_duplicate_chunks(monkeypatch):
+    mod = _load_mod()
+    apply_budget = mod["_apply_budget"]
+    monkeypatch.setitem(apply_budget.__globals__, "count_tokens", lambda s: len(s))
+
+    payload, _toks, _bytes, used = apply_budget(["dup", "dup", "other"], budget_tokens=100)
+    assert used == 2
+    assert payload == "dup\n\nother"

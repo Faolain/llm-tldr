@@ -120,3 +120,7 @@ def test_cmd_score_result_shape_counters(tmp_path: Path):
     assert counters["category_shape_mismatch_by_category"]["complexity"] == 0
     assert counters["category_shape_mismatch_by_category"]["data_flow"] == 0
     assert counters["total"] == 3
+
+
+def test_score_emits_typed_parse_diagnostics_without_gate_math_drift(tmp_path: Path):
+    test_cmd_score_result_shape_counters(tmp_path)

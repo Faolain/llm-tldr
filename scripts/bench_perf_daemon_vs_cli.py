@@ -210,13 +210,13 @@ def _bench_daemon(
 
 def _speedup(cli_stats: dict[str, Any], daemon_stats: dict[str, Any]) -> float | None:
     try:
-        cli_mean = float(cli_stats["stats_ms"]["mean"])
-        daemon_mean = float(daemon_stats["stats_ms"]["mean"])
+        cli_p50 = float(cli_stats["stats_ms"]["p50"])
+        daemon_p50 = float(daemon_stats["stats_ms"]["p50"])
     except Exception:
         return None
-    if daemon_mean <= 0:
+    if daemon_p50 <= 0:
         return None
-    return round(cli_mean / daemon_mean, 4)
+    return round(cli_p50 / daemon_p50, 4)
 
 
 def _maybe_warm_call_graph(

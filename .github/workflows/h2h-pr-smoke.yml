@@ -1,0 +1,33 @@
+name: h2h-pr-smoke
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dev dependencies
+        run: uv sync --extra dev
+
+      - name: Head-to-head smoke tests
+        run: |
+          uv run pytest \
+            tests/test_bench_head_to_head_suite_schema.py \
+            tests/test_bench_head_to_head_tool_profiles_schema.py \
+            tests/test_bench_head_to_head_predict_helpers.py \
+            tests/test_bench_head_to_head_predict_schema.py \
+            tests/test_bench_head_to_head_assert.py

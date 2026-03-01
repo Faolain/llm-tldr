@@ -1,6 +1,6 @@
 # llm-tldr Measurable Superiority Over contextplus Implementation Plan
 
-- Status: Proposed
+- Status: In Progress (implementation complete for Phases 0-6; benchmark reruns pending)
 - Owner: TBD
 - Last updated: 2026-03-01
 - Related spec: `specs/008-head-to-head-benchmark-llm-tldr-vs-contextplus.md`
@@ -11,18 +11,100 @@ Make `llm-tldr` measurably better than `contextplus` using the existing neutral 
 
 ## Next Steps Checklist (008 Implementation Start)
 
-- [ ] Create artifact directories for deterministic reruns and audit outputs:
+- [x] Create artifact directories for deterministic reruns and audit outputs:
   - `mkdir -p benchmark/runs benchmark/logs benchmark/runs/stitch_audits`
-- [ ] Write and run failing reliability-policy tests before implementation changes:
+- [x] Write and run failing reliability-policy tests before implementation changes:
   - `uv run pytest tests/test_bench_head_to_head_predict_helpers.py tests/test_bench_head_to_head_assert.py`
-- [ ] Add explicit failure classification output for each run:
+- [x] Add explicit failure classification output for each run:
   - `benchmark/runs/h2h-failure-classification-<run>.json`
-- [ ] Add partial rerun stitch output + audit artifacts for each tool/run:
+- [x] Add partial rerun stitch output + audit artifacts for each tool/run:
   - `benchmark/runs/h2h-<tool>-predictions-<run>-stitched.json`
   - `benchmark/runs/stitch_audits/h2h-<tool>-stitch-audit-<run>.json`
 - [ ] Re-run baseline (`run1..run3`) using unchanged suite seeds and persist run metadata sidecar:
   - `benchmark/runs/h2h-run-metadata-<run>.json`
-- [ ] Keep strict quality/effectiveness thresholds unchanged and enforce them on completed judgments after deterministic stitching.
+- [x] Keep strict quality/effectiveness thresholds unchanged and enforce them on completed judgments after deterministic stitching.
+- [ ] Run end-to-end 3-run benchmark artifacts and gate assertions using new tooling:
+  - `scripts/bench_h2h_predict.py`, `scripts/bench_h2h_stitch.py`, `scripts/bench_h2h_baseline.py`, `scripts/bench_h2h_assert.py`
+- [ ] Enable nightly full job with secrets/feature flag:
+  - set `H2H_NIGHTLY_ENABLED=1` in CI environment before relying on nightly full gating.
+
+## Implementation Progress (2026-03-01)
+
+### Completed Delivery (Code + Tests)
+
+- Reliability + stitching tooling:
+  - Added `scripts/bench_h2h_stitch.py` with deterministic first-non-provider candidate replacement and stitch audit output.
+  - Added `tests/test_bench_head_to_head_stitch_helpers.py` (4 tests).
+- Phase 0:
+  - Added schema/pin/materialization tests and deterministic fixtures:
+    - `tests/test_bench_head_to_head_materialize_helpers.py`
+    - `tests/test_bench_head_to_head_materialize_tasks.py`
+    - updates in `tests/test_bench_head_to_head_suite_schema.py`
+    - updates in `tests/test_bench_llm_open_ended_tasks_schema.py`
+- Phase 1:
+  - Added `scripts/bench_h2h_predict.py` (prediction runner, timeout mapping, raw logs, duplicate-row guard, optional classification/run-metadata sidecars).
+  - Added `tests/test_bench_head_to_head_predict_helpers.py`
+  - Added `tests/test_bench_head_to_head_predict_schema.py`
+  - Added explicit plan-named compatibility tests in `tests/test_bench_llm_ab_run_helpers.py`.
+- Phase 2:
+  - Added `scripts/bench_h2h_baseline.py` (manifest consistency, `2/3` run-validity requirement, 2000-budget variance summary).
+  - Added `tests/test_bench_head_to_head_baseline_helpers.py`.
+- Phase 3-5:
+  - Added helper validation suites:
+    - `tests/test_bench_retrieval_quality_helpers.py`
+    - `tests/test_bench_head_to_head_score_helpers.py`
+    - `tests/test_bench_structural_analysis_helpers.py`
+    - `tests/test_bench_ts_curated_recall_helpers.py`
+    - `tests/test_bench_perf_daemon_vs_cli_helpers.py`
+  - Updated `scripts/bench_token_efficiency.py` to deduplicate duplicate chunks in `_apply_budget`.
+  - Updated `scripts/bench_perf_daemon_vs_cli.py` to compute speedup using `p50` latency (gate-aligned).
+- Phase 6:
+  - Added `scripts/bench_h2h_assert.py` with strict gate assertions (winner, margin, validity, efficiency, stability).
+  - Added `benchmarks/head_to_head/gates.strict.v1.json`.
+  - Added `tests/test_bench_head_to_head_assert.py`.
+  - Updated `benchmarks/head_to_head/README.md` with strict-gate workflow.
+  - Added CI workflows:
+    - `.github/workflows/h2h-pr-smoke.yml`
+    - `.github/workflows/h2h-nightly-full.yml`
+
+### Validation Evidence
+
+- Consolidated 008 implementation validation command (run on 2026-03-01):
+
+```bash
+uv run pytest \
+  tests/test_bench_head_to_head_suite_schema.py \
+  tests/test_bench_head_to_head_materialize_helpers.py \
+  tests/test_bench_head_to_head_materialize_tasks.py \
+  tests/test_bench_llm_open_ended_tasks_schema.py \
+  tests/test_bench_head_to_head_predict_helpers.py \
+  tests/test_bench_head_to_head_predict_schema.py \
+  tests/test_bench_llm_ab_run_helpers.py \
+  tests/test_bench_head_to_head_baseline_helpers.py \
+  tests/test_bench_head_to_head_score_counters.py \
+  tests/test_bench_retrieval_quality_helpers.py \
+  tests/test_bench_token_efficiency_helpers.py \
+  tests/test_bench_head_to_head_score_helpers.py \
+  tests/test_bench_structural_analysis_helpers.py \
+  tests/test_bench_ts_curated_recall_helpers.py \
+  tests/test_bench_perf_daemon_vs_cli_helpers.py \
+  tests/test_bench_head_to_head_assert.py \
+  tests/test_bench_head_to_head_stitch_helpers.py
+```
+
+- Result:
+  - `58 passed`
+
+### Gotchas / Learnings Logged During Implementation
+
+- `runpy.run_path()` monkeypatching:
+  - Patch function `__globals__` for imported symbols (for example `count_tokens`), not just the module dict returned by `runpy`.
+- Token packing:
+  - Deduplicating repeated chunks before budgeting prevents silent budget waste and improves deterministic behavior.
+- Perf gate alignment:
+  - Speedup gate semantics should match `p50` latency (not mean) to align with phase pass/fail thresholds.
+- Markdown lint command caveat:
+  - `ruff check` should be run on Python files only; passing `README.md` to ruff treats Markdown as Python input.
 
 ## Definition Of Done (Program-Level)
 

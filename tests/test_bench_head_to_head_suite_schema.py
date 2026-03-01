@@ -62,3 +62,27 @@ def test_head_to_head_suite_schema():
     assert isinstance(gates.get("run_validity"), dict)
     assert isinstance(gates.get("tool_quality"), dict)
     assert isinstance(gates.get("head_to_head"), dict)
+
+
+def test_head_to_head_suite_django_pin_matches_corpora_manifest():
+    repo_root = Path(__file__).resolve().parents[1]
+    suite_path = repo_root / "benchmarks" / "head_to_head" / "suite.v1.json"
+    suite = json.loads(suite_path.read_text())
+
+    dataset = suite.get("dataset")
+    assert isinstance(dataset, dict)
+    assert dataset.get("corpus_id") == "django"
+    assert dataset.get("required_git_sha") == "c04a09ddb3bb1fe8157292fcd902b35cad9a5e10"
+    assert dataset.get("required_ref") == "5.1.13"
+
+    corpus_manifest_rel = dataset.get("corpus_manifest")
+    assert isinstance(corpus_manifest_rel, str) and corpus_manifest_rel
+    corpus_manifest_path = repo_root / corpus_manifest_rel
+    manifest = json.loads(corpus_manifest_path.read_text())
+
+    corpora = manifest.get("corpora")
+    assert isinstance(corpora, list)
+    django = next((c for c in corpora if isinstance(c, dict) and c.get("id") == "django"), None)
+    assert isinstance(django, dict)
+    assert django.get("pinned_sha") == dataset.get("required_git_sha")
+    assert django.get("pinned_ref") == dataset.get("required_ref")

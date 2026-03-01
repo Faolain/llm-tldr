@@ -84,6 +84,11 @@ def test_bench_llm_open_ended_tasks_schema_and_refs():
             assert q_file.lower() in q_lower, f"task {tid}: impact question missing file anchor {q_file!r}"
 
 
+def test_open_ended_task_query_alignment_and_anchor_consistency():
+    # Explicit test entrypoint required by Phase 0 implementation plan.
+    test_bench_llm_open_ended_tasks_schema_and_refs()
+
+
 def test_oe08_regression_guard_maps_to_b10_configure():
     repo_root = Path(__file__).resolve().parents[1]
     tasks_path = repo_root / "benchmarks" / "llm" / "open_ended_tasks.json"

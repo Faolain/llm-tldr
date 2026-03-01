@@ -11,7 +11,7 @@ It explicitly separates:
 - Suite contract: `benchmarks/head_to_head/suite.v1.json`
 - Tool profiles:
   - `benchmarks/head_to_head/tool_profiles/llm_tldr.v1.json`
-  - `benchmarks/head_to_head/tool_profiles/contextplus.v1.template.json`
+  - `benchmarks/head_to_head/tool_profiles/contextplus.v1.json`
 - Query datasets:
   - `benchmarks/retrieval/django_queries.json`
   - `benchmarks/python/django_structural_queries.json`
@@ -30,7 +30,7 @@ uv run python scripts/bench_fetch_corpora.py --corpus django
 uv run python scripts/bench_head_to_head.py validate-suite \
   --suite benchmarks/head_to_head/suite.v1.json \
   --tool-profile benchmarks/head_to_head/tool_profiles/llm_tldr.v1.json \
-  --tool-profile benchmarks/head_to_head/tool_profiles/contextplus.v1.template.json
+  --tool-profile benchmarks/head_to_head/tool_profiles/contextplus.v1.json
 ```
 
 3. Materialize canonical task manifest (frozen task IDs + ground truth + hashes):
@@ -76,6 +76,38 @@ uv run python scripts/bench_head_to_head.py compare \
   --label-a llm-tldr \
   --label-b contextplus \
   --out benchmark/runs/h2h-compare.json
+```
+
+7. Assert strict superiority gates (winner + margins + validity + efficiency + stability):
+
+```bash
+# Single-run assertion (stability gate will fail unless strict config allows 1 run).
+uv run python scripts/bench_h2h_assert.py \
+  --suite benchmarks/head_to_head/suite.v1.json \
+  --score-a benchmark/runs/h2h-llm-tldr-score.json \
+  --score-b benchmark/runs/h2h-contextplus-score.json \
+  --compare benchmark/runs/h2h-compare.json \
+  --label-a llm-tldr \
+  --label-b contextplus \
+  --strict-gates benchmarks/head_to_head/gates.strict.v1.json \
+  --out benchmark/runs/h2h-assert-strict.json
+
+# Multi-run assertion (repeat --score-a/--score-b/--compare for run1..run3).
+uv run python scripts/bench_h2h_assert.py \
+  --suite benchmarks/head_to_head/suite.v1.json \
+  --score-a benchmark/runs/h2h-llm-tldr-score-run1.json \
+  --score-a benchmark/runs/h2h-llm-tldr-score-run2.json \
+  --score-a benchmark/runs/h2h-llm-tldr-score-run3.json \
+  --score-b benchmark/runs/h2h-contextplus-score-run1.json \
+  --score-b benchmark/runs/h2h-contextplus-score-run2.json \
+  --score-b benchmark/runs/h2h-contextplus-score-run3.json \
+  --compare benchmark/runs/h2h-compare-run1.json \
+  --compare benchmark/runs/h2h-compare-run2.json \
+  --compare benchmark/runs/h2h-compare-run3.json \
+  --label-a llm-tldr \
+  --label-b contextplus \
+  --strict-gates benchmarks/head_to_head/gates.strict.v1.json \
+  --out benchmark/runs/h2h-assert-strict-3runs.json
 ```
 
 ## Required Reproducibility Artifacts

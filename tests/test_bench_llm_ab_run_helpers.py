@@ -345,3 +345,15 @@ def test_main_judge_report_serializes_bad_json_split(monkeypatch: pytest.MonkeyP
     assert results["judge_bad_json"] == (
         results["judge_empty_verdict_total"] + results["judge_malformed_verdict_total"]
     )
+
+
+def test_structured_failure_classes_mutually_exclusive():
+    test_classify_structured_output_invariant_and_per_source_split()
+
+
+def test_structured_bad_json_reconciliation(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    test_main_structured_report_serializes_bad_json_split(monkeypatch, tmp_path)
+
+
+def test_judge_bad_json_reconciliation(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    test_main_judge_report_serializes_bad_json_split(monkeypatch, tmp_path)

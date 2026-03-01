@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "repo": "fixture",
+  "queries": [
+    {
+      "id": "R02",
+      "query": "Where is use_helper called?",
+      "rg_pattern": "use_helper\\b",
+      "relevant_files": ["pkg/sample.py"]
+    },
+    {
+      "id": "R01",
+      "query": "Negative fixture query for missing symbol",
+      "rg_pattern": "missing_fixture_symbol_12345",
+      "relevant_files": []
+    }
+  ]
+}
