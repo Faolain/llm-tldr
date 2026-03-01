@@ -5,7 +5,7 @@
 - Last updated: 2026-03-01
 - Canonical 008 implementation authority: [implementations/008-beat-contextplus_IMPLEMENTATION_PLAN.md](./008-beat-contextplus_IMPLEMENTATION_PLAN.md).
 - Benchmark contract authority: [specs/008-head-to-head-benchmark-llm-tldr-vs-contextplus.md](../specs/008-head-to-head-benchmark-llm-tldr-vs-contextplus.md) and `benchmarks/head_to_head/suite.v1.json`.
-- Supporting/legacy 008 execution reference: [implementations/008-head-to-head-benchmark-llm-tldr-vs-contextplus_IMPLEMENTATION_PLAN.md](./008-head-to-head-benchmark-llm-tldr-vs-contextplus_IMPLEMENTATION_PLAN.md).
+- Supporting/legacy 008 execution reference: [implementations/008-head-to-head-benchmark-llm-tldr-vs-contextplus_SUPPORTING_PLAN.md](./008-head-to-head-benchmark-llm-tldr-vs-contextplus_SUPPORTING_PLAN.md).
 - Role of this spec: tactical implementation plan that hardens input integrity, output integrity, and open-ended context quality so Spec 008 gates can be passed reproducibly.
 
 ## Objective

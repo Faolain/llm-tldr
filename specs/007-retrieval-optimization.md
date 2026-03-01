@@ -67,7 +67,7 @@ Precedence order for conflicts:
 1. Canonical 008 implementation authority: `implementations/008-beat-contextplus_IMPLEMENTATION_PLAN.md`.
 2. Canonical benchmark contract authority: `specs/008-head-to-head-benchmark-llm-tldr-vs-contextplus.md` and `benchmarks/head_to_head/suite.v1.json`.
 3. Spec 007 (this document): tactical optimization and reliability hardening constraints.
-4. `implementations/008-head-to-head-benchmark-llm-tldr-vs-contextplus_IMPLEMENTATION_PLAN.md`: supporting/legacy execution reference unless merged into canonical 008 authority.
+4. `implementations/008-head-to-head-benchmark-llm-tldr-vs-contextplus_SUPPORTING_PLAN.md`: supporting/legacy execution reference unless merged into canonical 008 authority.
 
 If guidance conflicts, higher-precedence documents govern.
 
