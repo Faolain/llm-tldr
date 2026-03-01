@@ -69,6 +69,82 @@ def test_extract_judge_winner():
     assert fn("nope") is None
 
 
+def test_classify_structured_output_empty_and_malformed():
+    mod = _load_mod()
+    fn = mod["_classify_structured_output"]
+
+    status_empty, got_empty = fn("slice", "  \n\t ")
+    assert status_empty == "empty"
+    assert got_empty is None
+
+    status_malformed, got_malformed = fn("slice", '{"oops": [1, 2]}')
+    assert status_malformed == "malformed"
+    assert got_malformed is None
+
+
+def test_classify_structured_output_invariant_and_per_source_split():
+    mod = _load_mod()
+    classify = mod["_classify_structured_output"]
+
+    samples = [
+        ("rg", "slice", "   "),
+        ("tldr", "slice", '{"oops": [1]}'),
+        ("rg", "slice", '{"lines": [1, 2, 3]}'),
+    ]
+
+    empty_output_total = 0
+    malformed_output_total = 0
+    empty_output_by_source = {"rg": 0, "tldr": 0}
+    malformed_output_by_source = {"rg": 0, "tldr": 0}
+
+    for source, category, text in samples:
+        status, _ = classify(category, text)
+        if status == "empty":
+            empty_output_total += 1
+            empty_output_by_source[source] += 1
+        elif status == "malformed":
+            malformed_output_total += 1
+            malformed_output_by_source[source] += 1
+
+    bad_json = empty_output_total + malformed_output_total
+    assert bad_json == 2
+    assert bad_json == empty_output_total + malformed_output_total
+    assert empty_output_by_source == {"rg": 1, "tldr": 0}
+    assert malformed_output_by_source == {"rg": 0, "tldr": 1}
+
+
+def test_classify_judge_verdict_empty_and_malformed():
+    mod = _load_mod()
+    fn = mod["_classify_judge_verdict"]
+
+    status_empty, winner_empty, _ = fn("   ")
+    assert status_empty == "empty"
+    assert winner_empty is None
+
+    status_malformed, winner_malformed, _ = fn('{"winner": "C"}')
+    assert status_malformed == "malformed"
+    assert winner_malformed is None
+
+
+def test_classify_judge_verdict_invariant():
+    mod = _load_mod()
+    classify = mod["_classify_judge_verdict"]
+
+    statuses = [
+        classify(" ")[0],
+        classify('{"winner":"C","scores":{"A":{},"B":{}},"notes":"x"}')[0],
+        classify('{"winner":"A"}')[0],
+    ]
+
+    judge_empty_verdict_total = statuses.count("empty")
+    judge_malformed_verdict_total = statuses.count("malformed")
+    judge_bad_json = judge_empty_verdict_total + judge_malformed_verdict_total
+
+    assert statuses == ["empty", "malformed", "ok"]
+    assert judge_bad_json == 2
+    assert judge_bad_json == judge_empty_verdict_total + judge_malformed_verdict_total
+
+
 def test_claude_sdk_result_to_text_and_usage_structured():
     try:
         from claude_agent_sdk import ResultMessage

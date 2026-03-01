@@ -28,7 +28,16 @@ def test_head_to_head_tool_profiles_schema():
     repo_root = Path(__file__).resolve().parents[1]
 
     llm_tldr = repo_root / "benchmarks" / "head_to_head" / "tool_profiles" / "llm_tldr.v1.json"
-    contextplus = (
+    contextplus = repo_root / "benchmarks" / "head_to_head" / "tool_profiles" / "contextplus.v1.json"
+
+    _assert_profile_shape(llm_tldr)
+    _assert_profile_shape(contextplus)
+
+
+def test_contextplus_profile_is_real_profile_not_template():
+    repo_root = Path(__file__).resolve().parents[1]
+    profile_path = repo_root / "benchmarks" / "head_to_head" / "tool_profiles" / "contextplus.v1.json"
+    template_path = (
         repo_root
         / "benchmarks"
         / "head_to_head"
@@ -36,5 +45,29 @@ def test_head_to_head_tool_profiles_schema():
         / "contextplus.v1.template.json"
     )
 
-    _assert_profile_shape(llm_tldr)
-    _assert_profile_shape(contextplus)
+    assert profile_path.exists()
+    assert template_path.exists()
+
+    profile = json.loads(profile_path.read_text())
+    assert profile.get("tool_id") == "contextplus"
+    assert profile.get("capabilities", {}).get("retrieval") is True
+    assert profile.get("capabilities", {}).get("impact") is False
+    assert profile.get("capabilities", {}).get("slice") is False
+    assert profile.get("capabilities", {}).get("complexity") is False
+    assert profile.get("capabilities", {}).get("data_flow") is False
+
+
+def test_contextplus_retrieval_template_has_no_placeholder_text():
+    repo_root = Path(__file__).resolve().parents[1]
+    profile_path = repo_root / "benchmarks" / "head_to_head" / "tool_profiles" / "contextplus.v1.json"
+    profile = json.loads(profile_path.read_text())
+
+    retrieval = profile.get("commands", {}).get("retrieval", {})
+    description = retrieval.get("description")
+    template = retrieval.get("template")
+
+    assert isinstance(description, str) and "Replace with the real" not in description
+    assert isinstance(template, str) and template
+    assert "{repo_root}" in template
+    assert "{query}" in template
+    assert "{top_k}" in template

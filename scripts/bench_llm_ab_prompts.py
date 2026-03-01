@@ -676,30 +676,7 @@ def _data_flow_context_tldr(
     abs_path = repo_root / file_rel
     dfg = get_dfg_context(str(abs_path), function, language="python")
 
-    # Keep variable-specific events compact.
-    events: list[dict[str, Any]] = []
-    edges = dfg.get("edges")
-    if isinstance(edges, list):
-        for e in edges:
-            if not isinstance(e, dict):
-                continue
-            if e.get("var") != variable:
-                continue
-            dl = e.get("def_line")
-            ul = e.get("use_line")
-            if isinstance(dl, int):
-                events.append({"line": dl, "event": "defined"})
-            if isinstance(ul, int):
-                events.append({"line": ul, "event": "used"})
-    # Dedup (line,event) deterministically.
-    seen = set()
-    events2: list[dict[str, Any]] = []
-    for ev in sorted(events, key=lambda x: (int(x.get("line") or 0), str(x.get("event") or ""))):
-        key = (ev.get("line"), ev.get("event"))
-        if key in seen:
-            continue
-        seen.add(key)
-        events2.append(ev)
+    events2 = _collect_data_flow_events(dfg=dfg, variable=variable, line_span=None)
 
     selected: list[dict[str, Any]] = []
     for ev in events2:
@@ -711,6 +688,355 @@ def _data_flow_context_tldr(
 
     payload = json.dumps({"flow": selected}, sort_keys=True)
     return payload, int(count_tokens(payload)), len(payload.encode("utf-8"))
+
+
+_DATA_FLOW_ROLE_ALLOWED = {"input", "predicate", "transform", "use", "return"}
+_DATA_FLOW_PREDICATE_RE = re.compile(r"^\s*(if|elif|while|for|match|case|except)\b")
+_DATA_FLOW_RETURN_RE = re.compile(r"^\s*return\b")
+_DATA_FLOW_ASSIGN_RE = re.compile(r"(?<![<>=!])=(?!=)")
+
+
+def _collect_data_flow_events(
+    *,
+    dfg: dict[str, Any],
+    variable: str,
+    line_span: tuple[int, int] | None,
+) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    lo = hi = None
+    if line_span is not None:
+        lo, hi = (int(line_span[0]), int(line_span[1]))
+
+    edges = dfg.get("edges")
+    if isinstance(edges, list):
+        for e in edges:
+            if not isinstance(e, dict):
+                continue
+            if e.get("var") != variable:
+                continue
+            dl = e.get("def_line")
+            ul = e.get("use_line")
+            if isinstance(dl, int) and (lo is None or (int(lo) <= int(dl) <= int(hi))):
+                events.append({"line": int(dl), "event": "defined"})
+            if isinstance(ul, int) and (lo is None or (int(lo) <= int(ul) <= int(hi))):
+                events.append({"line": int(ul), "event": "used"})
+
+    seen = set()
+    out: list[dict[str, Any]] = []
+    for ev in sorted(events, key=lambda x: (int(x.get("line") or 0), str(x.get("event") or ""))):
+        key = (int(ev.get("line") or 0), str(ev.get("event") or ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"line": int(key[0]), "event": str(key[1])})
+    return out
+
+
+def _collect_data_flow_ref_lines(
+    *,
+    dfg: dict[str, Any],
+    variable: str,
+    line_span: tuple[int, int] | None,
+) -> list[int]:
+    lo = hi = None
+    if line_span is not None:
+        lo, hi = (int(line_span[0]), int(line_span[1]))
+
+    out: set[int] = set()
+    refs = dfg.get("refs")
+    if isinstance(refs, list):
+        for r in refs:
+            if not isinstance(r, dict):
+                continue
+            if r.get("name") != variable:
+                continue
+            ln = r.get("line")
+            if not isinstance(ln, int):
+                continue
+            if lo is not None and not (int(lo) <= int(ln) <= int(hi)):
+                continue
+            out.add(int(ln))
+
+    for ev in _collect_data_flow_events(dfg=dfg, variable=variable, line_span=line_span):
+        ln = ev.get("line")
+        if isinstance(ln, int):
+            out.add(int(ln))
+    return sorted(out)
+
+
+def _pick_data_flow_anchor_line(*, flow_events: list[dict[str, Any]], lo: int, hi: int) -> int:
+    defined_lines = [int(ev["line"]) for ev in flow_events if ev.get("event") == "defined" and isinstance(ev.get("line"), int)]
+    if defined_lines:
+        return max(int(lo), min(int(hi), min(defined_lines)))
+    flow_lines = [int(ev["line"]) for ev in flow_events if isinstance(ev.get("line"), int)]
+    if flow_lines:
+        return max(int(lo), min(int(hi), min(flow_lines)))
+    return max(int(lo), min(int(hi), int(lo)))
+
+
+def _data_flow_bridge_lines(
+    *,
+    lines: list[str],
+    lo: int,
+    hi: int,
+    seed_lines: list[int],
+) -> list[int]:
+    ordered = sorted({int(x) for x in seed_lines if int(lo) <= int(x) <= int(hi)})
+    if len(ordered) < 2:
+        return []
+
+    branch_tokens = ("if ", "elif ", "else", "for ", "while ", "try", "except", "with ", "match ", "case ")
+    out: list[int] = []
+    for left, right in zip(ordered, ordered[1:]):
+        if int(right) - int(left) <= 2:
+            continue
+        mid = (int(left) + int(right)) // 2
+        chosen: int | None = None
+        cand: list[int] = []
+        for ln in range(int(left) + 1, int(right)):
+            text = lines[int(ln) - 1].lstrip()
+            if text.startswith(branch_tokens):
+                cand.append(int(ln))
+        if cand:
+            chosen = sorted(cand, key=lambda ln: (abs(int(ln) - int(mid)), int(ln)))[0]
+            out.append(int(chosen))
+            body_ln = int(chosen) + 1
+            if int(body_ln) <= int(hi):
+                out.append(int(body_ln))
+            continue
+        out.append(int(mid))
+    return sorted({int(x) for x in out if int(lo) <= int(x) <= int(hi)})
+
+
+def _data_flow_semantic_roles(
+    *,
+    variable: str,
+    lines: list[str],
+    included_lines: list[int],
+    flow_events: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not included_lines:
+        return []
+
+    first_def_line: int | None = None
+    event_by_line: dict[int, str] = {}
+    for ev in flow_events:
+        ln = ev.get("line")
+        kind = ev.get("event")
+        if not isinstance(ln, int) or kind not in {"defined", "used"}:
+            continue
+        if first_def_line is None and kind == "defined":
+            first_def_line = int(ln)
+        prev = event_by_line.get(int(ln))
+        if prev is None or kind == "defined":
+            event_by_line[int(ln)] = str(kind)
+
+    var_pat = re.compile(rf"\b{re.escape(variable)}\b")
+    roles: list[dict[str, Any]] = []
+    for ln in sorted({int(x) for x in included_lines if 1 <= int(x) <= len(lines)}):
+        text = lines[int(ln) - 1]
+        stripped = text.strip()
+        ev = event_by_line.get(int(ln))
+        if _DATA_FLOW_RETURN_RE.match(stripped):
+            role = "return"
+            rationale = "Return path that emits a value derived from the tracked variable."
+        elif _DATA_FLOW_PREDICATE_RE.match(stripped):
+            role = "predicate"
+            rationale = "Control-flow guard that gates how the value propagates."
+        elif ev == "defined" and first_def_line is not None and int(ln) == int(first_def_line):
+            role = "input"
+            rationale = "First observed definition introducing the tracked value."
+        elif ev == "defined":
+            role = "transform"
+            rationale = "Re-definition or update transforming the tracked value."
+        elif ev == "used":
+            if _DATA_FLOW_ASSIGN_RE.search(stripped):
+                role = "transform"
+                rationale = "Value is read while computing another assignment."
+            else:
+                role = "use"
+                rationale = "Value is consumed without redefining it."
+        elif _DATA_FLOW_ASSIGN_RE.search(stripped) and var_pat.search(stripped):
+            role = "transform"
+            rationale = "Bridge computation involving the tracked variable."
+        else:
+            role = "use"
+            rationale = "Bridge/context line needed to follow the data-flow path."
+        if role not in _DATA_FLOW_ROLE_ALLOWED:
+            role = "use"
+            rationale = "Fallback role."
+        roles.append({"line": int(ln), "role": str(role), "rationale": str(rationale)})
+    return roles
+
+
+def _pack_open_ended_data_flow_context(
+    *,
+    file_rel: str,
+    lines: list[str],
+    function: str,
+    variable: str,
+    span: tuple[int, int] | None,
+    flow_events: list[dict[str, Any]],
+    ref_lines: list[int],
+    budget_tokens: int,
+) -> tuple[dict[str, Any], str]:
+    window_radius = 3
+    bridge_radius = 1
+    extra_radius = 2
+
+    lo = 1
+    hi = len(lines)
+    if span is not None:
+        lo, hi = span
+    lo = max(1, int(lo))
+    hi = min(int(hi), len(lines))
+
+    flow_events2 = [
+        {"line": int(ev["line"]), "event": str(ev["event"])}
+        for ev in flow_events
+        if isinstance(ev.get("line"), int)
+        and ev.get("event") in {"defined", "used"}
+        and int(lo) <= int(ev["line"]) <= int(hi)
+    ]
+    flow_lines = sorted({int(ev["line"]) for ev in flow_events2})
+    ref_lines2 = sorted({int(ln) for ln in ref_lines if int(lo) <= int(ln) <= int(hi)})
+
+    anchor_line = _pick_data_flow_anchor_line(flow_events=flow_events2, lo=int(lo), hi=int(hi))
+    header_window = (int(lo), min(int(hi), int(lo) + 3))
+
+    bridge_seed = flow_lines if flow_lines else ref_lines2
+    bridge_lines = _data_flow_bridge_lines(lines=lines, lo=int(lo), hi=int(hi), seed_lines=bridge_seed)
+    flow_by_distance = sorted(flow_lines, key=lambda x: (abs(int(x) - int(anchor_line)), int(x)))
+    extra_lines = sorted(
+        {int(x) for x in ref_lines2 if int(x) not in set(flow_lines) and int(x) not in set(bridge_lines)},
+        key=lambda x: (abs(int(x) - int(anchor_line)), int(x)),
+    )
+
+    best_meta: dict[str, Any] | None = None
+    best_code = ""
+    needs_bridge = bool(bridge_lines)
+
+    fractions = [1.0, 0.9, 0.8, 0.7, 0.6, 0.5]
+    for frac in fractions:
+        base_budget = max(0, int(int(budget_tokens) * float(frac)))
+        _, _, base_win = bte._select_window_within_span(
+            file_rel=file_rel,
+            lines=lines,
+            span=(int(lo), int(hi)),
+            target_line=int(anchor_line),
+            budget_tokens=int(base_budget),
+        )
+        if not isinstance(base_win, dict) or "start" not in base_win or "end" not in base_win:
+            continue
+
+        target_window = (int(base_win["start"]), int(base_win["end"]))
+        fixed_windows = bte._merge_windows([header_window, target_window])
+        windows = list(fixed_windows)
+        dropped: dict[str, list[int]] = {"bridge": [], "flow": [], "extra": []}
+
+        def build_payload(windows_arg: list[tuple[int, int]], dropped_arg: dict[str, list[int]]) -> tuple[dict[str, Any], str, str]:
+            merged = bte._merge_windows(windows_arg)
+            code_pieces = [bte._render_code_block(file_rel, start=s, end=e, lines=lines) for s, e in merged]
+            code = "\n\n".join([p for p in code_pieces if p.strip()])
+
+            included_flow_events = [ev for ev in flow_events2 if _line_in_windows(merged, int(ev["line"]))]
+            included_flow_lines = sorted({int(ev["line"]) for ev in included_flow_events})
+            included_bridge = [int(ln) for ln in bridge_lines if _line_in_windows(merged, int(ln))]
+            included_extra = [int(ln) for ln in extra_lines if _line_in_windows(merged, int(ln))]
+            included_lines = sorted({int(anchor_line), *included_flow_lines, *included_bridge, *included_extra})
+
+            semantic_roles = _data_flow_semantic_roles(
+                variable=variable,
+                lines=lines,
+                included_lines=included_lines,
+                flow_events=included_flow_events,
+            )
+
+            nonfixed_windows = [w for w in merged if not any(int(w[0]) == int(fw[0]) and int(w[1]) == int(fw[1]) for fw in fixed_windows)]
+
+            truncated = bool(
+                int(target_window[0]) > int(lo)
+                or int(target_window[1]) < int(hi)
+                or dropped_arg["bridge"]
+                or dropped_arg["flow"]
+                or dropped_arg["extra"]
+                or len(included_flow_lines) < len(flow_lines)
+            )
+            meta: dict[str, Any] = {
+                "file": file_rel,
+                "function": function,
+                "variable": variable,
+                "flow": included_flow_events,
+                "strategy": "anchor_window_plus_bridge_plus_flow_windows",
+                "target_window": {"start": int(target_window[0]), "end": int(target_window[1])},
+                "bridge_window_radius": int(bridge_radius),
+                "code_window_radius": int(window_radius),
+                "included_lines": [int(x) for x in included_lines],
+                "function_span_lines": {"start": int(lo), "end": int(hi)},
+                "truncated": bool(truncated),
+                "semantic_roles": semantic_roles,
+            }
+            if included_bridge:
+                meta["bridge_lines"] = [int(x) for x in included_bridge]
+            if nonfixed_windows:
+                meta["extra_windows"] = [{"start": int(s), "end": int(e)} for s, e in nonfixed_windows]
+            if any(dropped_arg.values()):
+                meta["dropped_lines"] = {
+                    "bridge": [int(x) for x in dropped_arg["bridge"]],
+                    "flow": [int(x) for x in dropped_arg["flow"]],
+                    "extra": [int(x) for x in dropped_arg["extra"]],
+                }
+
+            payload = json.dumps(meta, sort_keys=True)
+            if code:
+                payload += "\n\n" + code
+            return meta, code, payload
+
+        meta0, code0, payload0 = build_payload(windows, dropped)
+        if int(count_tokens(payload0)) > int(budget_tokens):
+            continue
+
+        tiers: list[tuple[str, list[int], int]] = [
+            ("bridge", [int(x) for x in bridge_lines], int(bridge_radius)),
+            ("flow", [int(x) for x in flow_by_distance], int(window_radius)),
+            ("extra", [int(x) for x in extra_lines], int(extra_radius)),
+        ]
+        for tier_name, tier_lines, tier_radius in tiers:
+            for ln in tier_lines:
+                if _line_in_windows(windows, int(ln)):
+                    continue
+                w = (max(int(lo), int(ln) - int(tier_radius)), min(int(hi), int(ln) + int(tier_radius)))
+                cand_windows = bte._merge_windows([*windows, w])
+                _, _, payload2 = build_payload(cand_windows, dropped)
+                if int(count_tokens(payload2)) > int(budget_tokens):
+                    dropped[tier_name].append(int(ln))
+                    continue
+                windows = cand_windows
+
+        meta_final, code_final, _payload_final = build_payload(windows, dropped)
+        if best_meta is None:
+            best_meta = meta_final
+            best_code = code_final
+
+        has_bridge = bool(meta_final.get("bridge_lines"))
+        if not needs_bridge or has_bridge:
+            return meta_final, code_final
+
+    if best_meta is not None:
+        return best_meta, best_code
+
+    meta_min: dict[str, Any] = {
+        "file": file_rel,
+        "function": function,
+        "variable": variable,
+        "flow": [],
+        "strategy": "anchor_window_plus_bridge_plus_flow_windows",
+        "included_lines": [],
+        "function_span_lines": {"start": int(lo), "end": int(hi)},
+        "truncated": True,
+        "semantic_roles": [],
+    }
+    return meta_min, ""
 
 
 def _data_flow_context_tldr_plus_code(
@@ -734,78 +1060,21 @@ def _data_flow_context_tldr_plus_code(
 
     dfg = get_dfg_context(str(abs_path), function, language="python")
 
-    events: list[dict[str, Any]] = []
-    edges = dfg.get("edges")
-    if isinstance(edges, list):
-        for e in edges:
-            if not isinstance(e, dict):
-                continue
-            if e.get("var") != variable:
-                continue
-            dl = e.get("def_line")
-            ul = e.get("use_line")
-            if isinstance(dl, int):
-                events.append({"line": dl, "event": "defined"})
-            if isinstance(ul, int):
-                events.append({"line": ul, "event": "used"})
+    events2 = _collect_data_flow_events(dfg=dfg, variable=variable, line_span=(int(lo), int(hi)))
+    ref_lines = _collect_data_flow_ref_lines(dfg=dfg, variable=variable, line_span=(int(lo), int(hi)))
 
-    # Dedup (line,event) deterministically.
-    seen = set()
-    events2: list[dict[str, Any]] = []
-    for ev in sorted(events, key=lambda x: (int(x.get("line") or 0), str(x.get("event") or ""))):
-        key = (ev.get("line"), ev.get("event"))
-        if key in seen:
-            continue
-        seen.add(key)
-        events2.append(ev)
-
-    selected: list[dict[str, Any]] = []
-    code_text = ""
-    window_radius = 3
-    for ev in events2:
-        cand = [*selected, ev]
-        line_nos = [
-            int(x.get("line") or 0)
-            for x in cand
-            if isinstance(x.get("line"), int) and lo <= int(x.get("line") or 0) <= hi
-        ]
-        windows = [(int(lo), min(int(hi), int(lo) + 3))]
-        windows.extend(
-            [
-                (max(int(lo), int(x) - int(window_radius)), min(int(hi), int(x) + int(window_radius)))
-                for x in line_nos
-            ]
-        )
-        merged = bte._merge_windows(windows)
-        code_pieces = [bte._render_code_block(file_rel, start=s, end=e, lines=lines) for s, e in merged]
-        code2 = "\n\n".join([p for p in code_pieces if p.strip()])
-        payload2 = json.dumps(
-            {
-                "file": file_rel,
-                "function": function,
-                "variable": variable,
-                "flow": cand,
-                "code_window_radius": int(window_radius),
-            },
-            sort_keys=True,
-        )
-        if code2:
-            payload2 += "\n\n" + code2
-        if int(count_tokens(payload2)) > budget_tokens:
-            continue
-        selected = cand
-        code_text = code2
-
-    payload = json.dumps(
-        {
-            "file": file_rel,
-            "function": function,
-            "variable": variable,
-            "flow": selected,
-            "code_window_radius": int(window_radius),
-        },
-        sort_keys=True,
+    meta, code_text = _pack_open_ended_data_flow_context(
+        file_rel=file_rel,
+        lines=lines,
+        function=function,
+        variable=variable,
+        span=(int(lo), int(hi)),
+        flow_events=events2,
+        ref_lines=ref_lines,
+        budget_tokens=int(budget_tokens),
     )
+
+    payload = json.dumps(meta, sort_keys=True)
     if code_text:
         payload += "\n\n" + code_text
     return payload, int(count_tokens(payload)), len(payload.encode("utf-8"))

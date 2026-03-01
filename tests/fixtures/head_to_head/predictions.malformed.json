@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "suite_id": "h2h_llm_tldr_vs_contextplus_v1",
+  "tool_id": "malformed-tool",
+  "task_manifest_sha256": null,
+  "tokenizer": "cl100k_base",
+  "predictions": [
+    {
+      "task_id": "retrieval:R01",
+      "trial": 1,
+      "budget_tokens": 2000,
+      "status": "ok",
+      "latency_ms": 7.2,
+      "payload_tokens": 12,
+      "payload_bytes": 80,
+      "result": {}
+    },
+    {
+      "task_id": "impact:A01",
+      "trial": 1,
+      "budget_tokens": 2000,
+      "status": "ok",
+      "latency_ms": 9.3,
+      "payload_tokens": 10,
+      "payload_bytes": 64,
+      "result": [
+        "not",
+        "an",
+        "object"
+      ]
+    },
+    {
+      "task_id": "slice:B01",
+      "trial": 1,
+      "budget_tokens": 2000,
+      "status": "ok",
+      "latency_ms": 11.1,
+      "payload_tokens": 15,
+      "payload_bytes": 96,
+      "result": {
+        "callers": []
+      }
+    }
+  ]
+}

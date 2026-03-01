@@ -821,6 +821,22 @@ def _score_data_flow_entry(gt: dict[str, Any], result: dict[str, Any]) -> dict[s
     return out
 
 
+def _result_shape_matches_category(category: str, result: dict[str, Any]) -> bool:
+    if category == "retrieval":
+        return isinstance(result.get("ranked_files"), list)
+    if category == "impact":
+        return isinstance(result.get("callers"), list)
+    if category == "slice":
+        return isinstance(result.get("lines"), list)
+    if category == "complexity":
+        return _coerce_int(result.get("cyclomatic_complexity")) is not None
+    if category == "data_flow":
+        has_flow_lines = isinstance(result.get("flow_lines"), list)
+        has_origin_line = _coerce_int(result.get("origin_line")) is not None
+        return has_flow_lines or has_origin_line
+    return True
+
+
 def _append_latency_and_payload(cat_acc: dict[str, list[float]], pred: dict[str, Any]) -> None:
     latency_ms = pred.get("latency_ms")
     payload_tokens = pred.get("payload_tokens")
@@ -1117,6 +1133,13 @@ def cmd_score(args: argparse.Namespace) -> int:
         "budget_violations": 0,
     }
     ok_by_category: dict[str, int] = {k: 0 for k in CATEGORY_KEYS}
+    shape_mismatch_by_category: dict[str, int] = {k: 0 for k in CATEGORY_KEYS}
+    result_shape_counters: dict[str, Any] = {
+        "non_object_result": 0,
+        "empty_result_object": 0,
+        "category_shape_mismatch": 0,
+        "category_shape_mismatch_by_category": shape_mismatch_by_category,
+    }
 
     parse_errors: list[str] = []
 
@@ -1165,9 +1188,16 @@ def cmd_score(args: argparse.Namespace) -> int:
 
         result = pred.get("result")
         if not isinstance(result, dict):
+            result_shape_counters["non_object_result"] += 1
             status_counts["error"] += 1
             parse_errors.append(f"{tid}@{budget}/trial{trial}: result must be object")
             continue
+        if not result:
+            result_shape_counters["empty_result_object"] += 1
+        elif not _result_shape_matches_category(category, result):
+            result_shape_counters["category_shape_mismatch"] += 1
+            if category in shape_mismatch_by_category:
+                shape_mismatch_by_category[category] += 1
 
         try:
             metrics: dict[str, float]
@@ -1199,6 +1229,12 @@ def cmd_score(args: argparse.Namespace) -> int:
     for key in pred_map:
         if key not in expected_keys:
             status_counts["extra"] += 1
+
+    result_shape_counters["total"] = (
+        int(result_shape_counters["non_object_result"])
+        + int(result_shape_counters["empty_result_object"])
+        + int(result_shape_counters["category_shape_mismatch"])
+    )
 
     summary_by_budget: dict[str, Any] = {}
     for budget in budgets:
@@ -1441,6 +1477,9 @@ def cmd_score(args: argparse.Namespace) -> int:
         "metrics": {
             "by_budget": summary_by_budget,
             "overall": summary_overall,
+        },
+        "diagnostics": {
+            "result_shape_counters": result_shape_counters,
         },
         "parse_errors": parse_errors[:200],
         "gate_checks": gates,

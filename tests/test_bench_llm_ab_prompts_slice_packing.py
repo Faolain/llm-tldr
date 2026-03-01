@@ -80,3 +80,45 @@ def test_pack_open_ended_slice_context_includes_related_definition_snippets():
     # The snippet should include the helper definition.
     assert "# x.py:1-2" in code
     assert "def helper" in code
+
+
+def test_slice_open_ended_context_metadata_contract_and_determinism():
+    mod = _load_mod()
+    pack = mod["_pack_open_ended_slice_context"]
+
+    lines = [
+        "def helper(v):",
+        "    if v:",
+        "        return v + 1",
+        "    return 0",
+        "",
+        "def foo(flag, x):",
+        "    y = helper(x)",
+        "    if flag:",
+        "        y = y + 2",
+        "    else:",
+        "        y = y - 1",
+        "    return y",
+    ]
+    kwargs = dict(
+        file_rel="x.py",
+        lines=lines,
+        function="foo",
+        span=(6, 12),
+        target_line=12,
+        slice_lines=[7, 8, 9, 11, 12],
+        budget_tokens=600,
+    )
+
+    meta1, code1 = pack(**kwargs)
+    meta2, code2 = pack(**kwargs)
+
+    assert meta1 == meta2
+    assert code1 == code2
+
+    assert meta1["strategy"] == "target_window_plus_slice_windows"
+    assert isinstance(meta1.get("target_window"), dict)
+    assert isinstance(meta1.get("slice_lines"), list)
+    assert isinstance(meta1.get("slice_window_radius"), int)
+    assert isinstance(meta1.get("extra_windows"), list)
+    assert meta1["target_window"]["start"] <= 12 <= meta1["target_window"]["end"]
