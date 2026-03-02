@@ -2,10 +2,11 @@
 
 - Status note: Supporting/legacy execution reference.
 - Canonical 008 implementation authority: `implementations/008-beat-contextplus_IMPLEMENTATION_PLAN.md`.
+- Canonical benchmark matrix for feature-porting decisions: see `008-beat-contextplus_IMPLEMENTATION_PLAN.md` section `Canonical Benchmark Matrix (Feature-Porting Decisions)`.
 
 - Status: Planned
 - Owner: TBD
-- Last updated: 2026-03-01
+- Last updated: 2026-03-02
 - Source: `specs/008-head-to-head-benchmark-llm-tldr-vs-contextplus.md`
 
 ## Objective

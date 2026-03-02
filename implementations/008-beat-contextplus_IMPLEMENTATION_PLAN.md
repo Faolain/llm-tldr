@@ -230,6 +230,50 @@ A release is considered successful only if all conditions below are true:
    - Criteria 1-5 pass in at least `2/3` full reruns with suite seeds unchanged.
    - The same deterministic stitch rules are used in each rerun.
 
+## Canonical Benchmark Matrix (Feature-Porting Decisions)
+
+This section is the canonical decision surface for feature-porting. Supporting plans may reference it, but must not define separate matrix thresholds or alternate tool comparisons.
+
+Why this matrix is required:
+
+- It forces feature comparisons to evaluate quality, latency, and token-cost proxies together instead of optimizing one metric in isolation.
+- It keeps `contextplus` and future tools comparable using one schema and artifact contract.
+- It makes porting decisions auditable by tying each row to pinned run artifacts.
+
+How this matrix is used:
+
+1. Add one row per `tool x feature lane x budget` under the same harness and suite version.
+2. Fill values from pinned artifacts only (`score`, `compare`, `assert`, plus run metadata/classification where applicable).
+3. Port a feature only when the candidate row improves the target tradeoff without violating run-validity gates.
+
+| Tool | Feature lane | Budget tokens | Quality metrics (higher is better) | Latency p50 ms (lower is better) | Cost proxy: payload_tokens_median (lower is better) | Run-validity snapshot (`timeout/error/budget_violation`) | Evidence artifact(s) | Porting decision |
+| --- | --- | --- | --- | ---: | ---: | --- | --- | --- |
+| `llm-tldr` | Retrieval (common lane) | `2000` | `mrr_mean=0.6119`, `recall@5=0.7895`, `precision@5=0.1579` | `5021.415` | `53.5` | `0 / 0 / 0` (run1-fixed) | `benchmark/runs/h2h-llm-tldr-score-run1-fixed-stitched-allowlist-20260302T062602Z.json`; `benchmark/runs/h2h-assert-run1-fixed-stitched-allowlist-20260302T062602Z.json` | Keep as baseline winner lane (provisional until `2/3` full-run stability pass) |
+| `contextplus` | Retrieval (common lane) | `2000` | `mrr_mean=0.2156`, `recall@5=0.2982`, `precision@5=0.0596` | `7717.107` | `329` | strict-gate failure on `error_rate` in run1-fixed | `benchmark/runs/h2h-contextplus-score-run1-fixed.json`; `benchmark/runs/h2h-assert-run1-fixed-stitched-allowlist-20260302T062602Z.json` | Port only ideas that improve quality/efficiency without inheriting reliability failures |
+| `future-tool-A` (placeholder) | Retrieval (common lane) | `2000` | `TBD from pinned score artifact` | `TBD` | `TBD` | `TBD` | `benchmark/runs/h2h-future-tool-A-score-<run>.json`; `benchmark/runs/h2h-assert-<run>.json` | Evaluate against same gates before any porting decision |
+| `future-tool-A` (placeholder) | Non-common lane feature (for example semantic navigation) | `2000` | lane-specific metric + mapped proxy to common-lane quality | `TBD` | `TBD` | `TBD` | `benchmark/runs/<feature>-future-tool-A-<run>.json` + mapped h2h compare note | Port only if differentiated value is measurable and does not regress common-lane gates |
+
+### Feature-Porting Benchmark Matrix (Hypotheses + Tradeoffs)
+
+Use this matrix to decide what to implement next and how to judge whether a port actually improved the product.
+
+| Feature lane | Why | Hypothesis | Measure | Drawbacks to track |
+| --- | --- | --- | --- | --- |
+| Hybrid retrieval in product path | Move benchmark-winning fusion behavior into real CLI/runtime. | `mrr_mean` and `recall@5` increase or stay flat, `fpr@5` stays low; slight latency/token increase risk. | `scripts/bench_retrieval_quality.py` (`agg_positive.*`, `agg_negative.*`) and h2h score fields `metrics.by_budget["2000"].retrieval.*`. | Latency increase, payload growth, fusion determinism drift. |
+| Confidence abstention + optional rerank | Protect quality while adding richer retrieval behavior. | Hold `fpr@5 <= 0.05` (target `0.0`), with small precision/MRR lift on ambiguous queries and bounded MRR downside. | Negative-query `fpr@5`, positive-query `mrr/precision/recall`, h2h gates `retrieval_max_fpr5` and `retrieval_min_mrr`. | Over-abstention recall loss, rerank latency/cost. |
+| Budget-aware retrieval behavior | Current retrieval behavior is effectively flat across `500/1000/2000/5000`; budget should affect output. | `payload_tokens_median` scales with budget; quality is non-decreasing with budget; no budget violations. | `metrics.by_budget[*].retrieval.{mrr_mean,recall@5_mean,precision@5_mean,fpr@5_mean,payload_tokens_median,latency_ms_p50}` and `rates.budget_violation_rate`. | Packing complexity, high-budget false positives. |
+| Compound semantic+impact command/API | Turn two strong primitives into one faster evidence workflow; `contextplus` does not cover this lane. | Lower time-to-evidence versus sequential calls, while keeping retrieval and impact quality stable. | Compare compound `p50` versus sequential baseline; track payload and `error/timeout` rates; reuse score fields at budget `2000`. | `O(k)` impact expansion latency, schema and partial-failure complexity. |
+| Semantic navigation/clustering (`tldrf navigate`) | Add differentiated exploration workflow not captured by current h2h categories. | High cluster coverage and determinism, with possible retrieval spillover gains. | New artifact for cluster coverage, determinism, and query-cluster recall; plus retrieval regression checks on h2h score fields. | Cluster instability, index invalidation complexity, label/token overhead. |
+| Optional Ollama backend | Improve local onboarding and provider flexibility. | Better first-run reliability for Ollama users, near-parity quality, variable latency by host/model. | Same h2h score fields at budget `2000`, run-validity rates, and `overlap@5` parity report versus `sentence-transformers`. | Provider matrix complexity, local resource pressure, model mismatch/index rebuild issues. |
+
+### Execution Board Seed (Next Fill-In)
+
+For each feature lane above, add and maintain:
+1. Owner.
+2. Test-first files.
+3. Implementation PR/artifact paths.
+4. Before/after metrics row links from this matrix.
+
 ## Program Delivery Mode: Test-First With Benchmark Confirmation
 
 This plan uses a hybrid method:
