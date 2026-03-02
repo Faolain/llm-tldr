@@ -39,6 +39,10 @@ Make `llm-tldr` measurably better than `contextplus` using the existing neutral 
 - [ ] Promote canonical row identity to include tool revision axes (`tool`, `tool_version`, `feature_set_id`, `embedding_backend`, `embedding_model`, `budget_tokens`, `run_id`).
 - [ ] Populate holistic metric columns (below) for existing run1 rows at budgets `500/1000/2000/5000`.
 - [ ] Export canonical long-format matrix artifact (`csv`/`json`) for all rows so dashboards and pivots are deterministic.
+- [ ] After each completed run or stitched refresh, update human-readable matrix views:
+  - `implementations/008-canonical-matrix-run1-snapshot.md`
+  - `implementations/008-canonical-matrix-run1-pivot-by-budget.md`
+  - and append a new run-stamped matrix artifact under `benchmark/runs/matrix/`.
 - [ ] For each new feature implementation, append a before/after delta row with explicit keep/rollback decision.
 
 Note:
@@ -303,6 +307,10 @@ Required comparison views (from the same long-format source):
 Governance:
 - Visualization must be data-only from pinned artifacts; no manual edits.
 - Every chart/table cell links back to source artifact paths in `benchmark/runs/`.
+- Human-readable summaries are required refresh artifacts after each completed run:
+  - `implementations/008-canonical-matrix-run1-snapshot.md` (detailed source-linked snapshot)
+  - `implementations/008-canonical-matrix-run1-pivot-by-budget.md` (compact per-budget pivot view)
+- Any row change in those markdown views must be traceable to a corresponding run-stamped artifact in `benchmark/runs/matrix/`.
 
 ### Feature-Porting Benchmark Matrix (Hypotheses + Tradeoffs)
 
