@@ -439,6 +439,34 @@ Use this matrix to decide what to implement next and how to judge whether a port
     - rationale (intra-tool): versus `llm-tldr` baseline, hybrid wins `3/5` primary metrics with substantial quality lift (`mrr +0.2444`, `recall@5 +0.1404`, `precision@5 +0.0281`) and unchanged `fpr@5=0.0`, with expected tradeoff of higher payload/latency.
     - remaining gate: `stability.two_of_three` only (`insufficient_runs_for_stability_check`) under deliberate single-bundle segment confirmation scope.
     - canonical decision record + 3-way comparison table (`hybrid` vs `llm-tldr baseline` vs `contextplus`): `implementations/008-canonical-matrix-lane-decisions.md`.
+  - final verbatim clarification (requested):
+    ```text
+    1. Hybrid added behavior that did not exist before
+    - New retrieval path in `tldr/semantic.py`:
+      - lexical rank via `rg`
+      - semantic rank via embeddings
+      - deterministic RRF fusion (tie-break by filepath)
+    - Optional `rg_empty` guard (return empty if lexical finds nothing), which is a strong false-positive control.
+    - `semantic_search()` now supports `retrieval_mode` (`semantic` or `hybrid`).
+
+    2. Default vs selectable
+    - It is selectable, not forced.
+    - Default remains baseline semantic (`retrieval_mode="semantic"`).
+    - CLI opt-in is `--hybrid` (plus optional guard/pattern flags).
+    - In benchmarks, baseline vs hybrid is selected by tool profile:
+      - baseline profile: `benchmarks/head_to_head/tool_profiles/llm_tldr.v1.json`
+      - hybrid profile: `benchmarks/head_to_head/tool_profiles/llm_tldr.hybrid_lane1.v1.json`
+
+    3. Why it works well
+    - Fusion helps positives: lexical catches exact/symbol anchors, semantic catches intent/paraphrase; fused ranking improves top-k relevance.
+    - Guard helps negatives: `rg_empty` prevents semantic-only hallucinated hits on "no-result" cases, which crushes FPR.
+    - That matches your numbers: hybrid beats baseline on quality metrics, but with higher payload/latency (expected tradeoff).
+
+    4. Why it can outperform contextplus even if inspired by it
+    - "Inspired by" means same high-level idea, not identical implementation.
+    - Your lane1 run used stricter controls (deterministic fusion + explicit guard + query `rg_pattern`), and in this suite contextplus has much worse negative behavior (`fpr@5`), so llm-tldr can win decisively.
+    - So: concept borrowed, implementation/tuning/guards differ, and those details drive the gap.
+    ```
 - [ ] Confidence abstention + optional rerank (active next loop):
   - owner: `retrieval-quality`
   - test-first files: retrieval negative-query + rerank helper tests
