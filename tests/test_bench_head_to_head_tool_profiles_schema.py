@@ -30,9 +30,11 @@ def test_head_to_head_tool_profiles_schema():
 
     llm_tldr = repo_root / "benchmarks" / "head_to_head" / "tool_profiles" / "llm_tldr.v1.json"
     contextplus = repo_root / "benchmarks" / "head_to_head" / "tool_profiles" / "contextplus.v1.json"
+    rg_native = repo_root / "benchmarks" / "head_to_head" / "tool_profiles" / "rg_native.v1.json"
 
     _assert_profile_shape(llm_tldr)
     _assert_profile_shape(contextplus)
+    _assert_profile_shape(rg_native)
 
 
 def test_lane1_llm_tldr_profile_schema():
@@ -117,3 +119,24 @@ def test_contextplus_retrieval_template_has_no_placeholder_text():
     assert "{repo_root}" in template
     assert "{query}" in template
     assert "{top_k}" in template
+
+
+def test_rg_native_profile_is_retrieval_only_and_uses_no_tldrf():
+    repo_root = Path(__file__).resolve().parents[1]
+    profile_path = repo_root / "benchmarks" / "head_to_head" / "tool_profiles" / "rg_native.v1.json"
+    profile = json.loads(profile_path.read_text())
+
+    caps = profile.get("capabilities", {})
+    assert caps.get("retrieval") is True
+    assert caps.get("impact") is False
+    assert caps.get("slice") is False
+    assert caps.get("complexity") is False
+    assert caps.get("data_flow") is False
+
+    template = profile.get("commands", {}).get("retrieval", {}).get("template")
+    assert isinstance(template, str) and template
+    assert "rg_search_adapter.py" in template
+    assert "{rg_pattern}" in template
+    assert "{top_k}" in template
+    assert "tldrf" not in template
+    assert "uv run" not in template

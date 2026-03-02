@@ -2,7 +2,7 @@
 
 - Generated: 2026-03-02
 - Scope: Existing run1 artifacts only (no new LLM execution)
-- Canonical matrix artifacts: `benchmark/runs/matrix/h2h-matrix-long-run1-abstain-rerank-lane2-retrieval-b2000-t123-vs-contextplus-run1-segment-20260302T185207Z.csv` and `benchmark/runs/matrix/h2h-matrix-long-run1-abstain-rerank-lane2-retrieval-b2000-t123-vs-contextplus-run1-segment-20260302T185207Z.json`
+- Canonical matrix artifacts: `benchmark/runs/matrix/h2h-matrix-long-run1-abstain-rerank-lane2-retrieval-b2000-t123-vs-contextplus-run1-segment-20260302T185207Z.csv` and `benchmark/runs/matrix/h2h-matrix-long-run1-abstain-rerank-lane2-retrieval-b2000-t123-vs-contextplus-run1-segment-20260302T185207Z.json` plus `rg-native` retrieval segment addendum artifacts listed below
 - Canonical identity axes: `tool`, `tool_version`, `feature_set_id`, `embedding_backend`, `embedding_model`, `budget_tokens`, `run_id`
 
 ## Source Artifacts
@@ -15,12 +15,18 @@
 - run metadata (contextplus): `benchmark/runs/h2h-run-metadata-run1-contextplus.json`
 - tool profile (llm-tldr): `benchmarks/head_to_head/tool_profiles/llm_tldr.abstain_rerank_lane2.v1.json`
 - tool profile (contextplus): `benchmarks/head_to_head/tool_profiles/contextplus.v1.json`
+- rg-native score: `benchmark/runs/h2h-rg-native-score-run1-retrieval-b2000-t123-segment.json`
+- compare (rg-native vs contextplus): `benchmark/runs/h2h-compare-run1-rg-native-retrieval-b2000-t123-segment-vs-contextplus-run1-segment.json`
+- compare (rg-native vs llm-tldr baseline): `benchmark/runs/h2h-compare-run1-rg-native-retrieval-b2000-t123-segment-vs-llm-tldr-baseline-segment.json`
+- run metadata (rg-native): `benchmark/runs/h2h-run-metadata-run1-rg-native-retrieval-b2000-t123-segment.json`
+- tool profile (rg-native): `benchmarks/head_to_head/tool_profiles/rg_native.v1.json`
 
 ## Important Caveat
 
 This snapshot combines:
 - llm-tldr from `run1-fixed` stitched allowlist artifacts
 - contextplus from `run1` artifacts
+- rg-native from retrieval-only run1 segment artifacts (`retrieval@2000`, `trials=1..3`)
 
 ## Canonical Row Identity (Budget 2000 Rows)
 
@@ -28,6 +34,7 @@ This snapshot combines:
 | --- | --- | --- | --- | --- | --- |
 | llm-tldr | `0ead1a11739004a2b12b1d439f10a29a03c64296` | `feature.abstain-rerank.v1` | `sentence-transformers` | `profile_unpinned` | `run1-abstain-rerank-lane2-retrieval-b2000-t123-segment` |
 | contextplus | `4d7a6c37847c698c850d4b412ddb603dfc47257e` | `baseline.run1` | `unknown` | `unknown` | `run1-segment-retrieval-b2000` |
+| rg-native | `unknown` | `baseline.native-rg.v1` | `unknown` | `unknown` | `run1-rg-native-retrieval-b2000-t123-segment` |
 
 ## Budget Row Policy
 
@@ -41,6 +48,7 @@ This snapshot combines:
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | llm-tldr | 2000 | 0.8741228070175439 | 0.8771929824561403 | 0.9649122807017544 | 0.1754385964912281 | 0.0 | 78.0 | 4989.021500000001 |
 | contextplus | 2000 | 0.21564327485380116 | 0.2982456140350877 | 0.3333333333333333 | 0.05964912280701755 | 1.0 | 329.0 | 7717.107 |
+| rg-native | 2000 | 0.8126218323586745 | 0.8771929824561403 | 0.9473684210526315 | 0.1754385964912281 | 0.0 | 12.0 | 216.22050000000002 |
 
 ## Holistic Metrics At Budget 2000 (Required Rows)
 
@@ -48,15 +56,21 @@ This snapshot combines:
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | llm-tldr | null | null | null | null | null | null | 0.0 | 0.0 | 0.0 | 0 | 0 |
 | contextplus | null | null | null | null | null | null | 0.0 | 0.0 | 0.0 | 0 | 0 |
+| rg-native | null | null | null | null | null | null | 0.0 | 0.0 | 0.0 | 0 | 0 |
 
 ## Compare / Assert Snapshot (Budget 2000)
 
-- compare winner: `llm-tldr`
-- compare wins: `llm-tldr=5`, `contextplus=0`
-- deltas at budget 2000:
-  - `mrr_mean_delta = 0.6584795321637427`
-  - `recall@5_mean_delta = 0.5789473684210527`
-  - `precision@5_mean_delta = 0.11578947368421054`
-- strict assert overall: `false`
-- failed strict gate(s): `stability.two_of_three`
-- stability gate: `stability.two_of_three = false` (`insufficient_runs_for_stability_check`)
+- llm-tldr lane2 vs contextplus:
+  - winner: `llm-tldr`
+  - wins: `llm-tldr=5`, `contextplus=0`
+  - deltas: `mrr +0.6585`, `recall@5 +0.5789`, `precision@5 +0.1158`
+  - strict assert overall: `false` (failing gate: `stability.two_of_three`)
+- rg-native vs contextplus:
+  - winner: `rg-native`
+  - wins: `rg-native=5`, `contextplus=0`
+  - deltas: `mrr +0.5970`, `recall@5 +0.5789`, `precision@5 +0.1158`
+  - strict assert: not run in this addendum (compare + score only)
+- rg-native vs llm-tldr baseline:
+  - winner: `rg-native`
+  - wins: `rg-native=5`, `llm-tldr-baseline=0`
+  - deltas: `mrr +0.2008`, `recall@5 +0.0877`, `precision@5 +0.0175`

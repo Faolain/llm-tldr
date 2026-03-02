@@ -280,6 +280,7 @@ How this matrix is used:
 | --- | --- | --- | --- | ---: | ---: | --- | --- | --- |
 | `llm-tldr` | Retrieval (common lane) | `2000` | `mrr_mean=0.6119`, `recall@5=0.7895`, `precision@5=0.1579` | `5021.415` | `53.5` | `0 / 0 / 0` (run1-fixed) | `benchmark/runs/h2h-llm-tldr-score-run1-fixed-stitched-allowlist-20260302T062602Z.json`; `benchmark/runs/h2h-assert-run1-fixed-stitched-allowlist-20260302T062602Z.json` | Keep as baseline winner lane (provisional until `2/3` full-run stability pass) |
 | `contextplus` | Retrieval (common lane) | `2000` | `mrr_mean=0.2156`, `recall@5=0.2982`, `precision@5=0.0596` | `7717.107` | `329` | strict-gate failure on `error_rate` in run1-fixed comparison bundle | `benchmark/runs/h2h-contextplus-score-run1.json`; `benchmark/runs/h2h-assert-run1-fixed-stitched-allowlist-20260302T062602Z.json` | Port only ideas that improve quality/efficiency without inheriting reliability failures |
+| `rg-native` | Retrieval lexical baseline (common lane) | `2000` | `mrr_mean=0.8126`, `recall@5=0.8772`, `precision@5=0.1754` | `216.221` | `12` | `0 / 0 / 0` (run1 retrieval segment) | `benchmark/runs/h2h-rg-native-score-run1-retrieval-b2000-t123-segment.json`; `benchmark/runs/h2h-compare-run1-rg-native-retrieval-b2000-t123-segment-vs-contextplus-run1-segment.json`; `benchmark/runs/h2h-compare-run1-rg-native-retrieval-b2000-t123-segment-vs-llm-tldr-baseline-segment.json` | Keep as external native baseline comparator for regression tracking (not a product replacement lane) |
 | `future-tool-A` (placeholder) | Retrieval (common lane) | `2000` | `TBD from pinned score artifact` | `TBD` | `TBD` | `TBD` | `benchmark/runs/h2h-future-tool-A-score-<run>.json`; `benchmark/runs/h2h-assert-<run>.json` | Evaluate against same gates before any porting decision |
 | `future-tool-A` (placeholder) | Non-common lane feature (for example semantic navigation) | `2000` | lane-specific metric + mapped proxy to common-lane quality | `TBD` | `TBD` | `TBD` | `benchmark/runs/<feature>-future-tool-A-<run>.json` + mapped h2h compare note | Port only if differentiated value is measurable and does not regress common-lane gates |
 
@@ -289,6 +290,7 @@ Primary required rows (`budget_tokens=2000`):
 
 - `llm-tldr|bbfee65bc8cc5d5051edb447d689e7ebed987a7c|baseline.run1.fixed.stitched.allowlist|sentence-transformers|profile_unpinned|2000|run1-fixed-stitched-allowlist-20260302T062602Z`
 - `contextplus|b42853d7c2a2018f2d4376c664db30d65ea1af23|baseline.run1|unknown|unknown|2000|run1`
+- `rg-native|unknown|baseline.native-rg.v1|unknown|unknown|2000|run1-rg-native-retrieval-b2000-t123-segment`
 
 Optional sensitivity rows (`budget_tokens` in `500/1000/5000`) are explicitly marked with:
 

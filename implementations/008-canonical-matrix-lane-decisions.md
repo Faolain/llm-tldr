@@ -134,8 +134,14 @@ This log records keep/rollback outcomes for feature lanes using pinned matrix ro
     - `benchmark/runs/h2h-compare-run1-llm-tldr-budget-aware-lane3-vs-baseline-retrieval-b2000-t123-segment.json`
     - `benchmark/runs/h2h-compare-run1-llm-tldr-budget-aware-lane3-vs-hybrid-lane1-retrieval-b2000-t123-segment.json`
     - `benchmark/runs/h2h-compare-run1-llm-tldr-budget-aware-lane3-vs-abstain-rerank-lane2-retrieval-b2000-t123-segment.json`
+    - `benchmark/runs/h2h-compare-run1-rg-native-retrieval-b2000-t123-segment-vs-contextplus-run1-segment.json`
+    - `benchmark/runs/h2h-compare-run1-rg-native-retrieval-b2000-t123-segment-vs-llm-tldr-baseline-segment.json`
   - strict assert:
     - `benchmark/runs/h2h-assert-run1-budget-aware-lane3-retrieval-b2000-t123-vs-contextplus-run1-segment-normalized-labels.json`
+  - native lexical baseline:
+    - `benchmark/runs/h2h-rg-native-score-run1-retrieval-b2000-t123-segment.json`
+    - `benchmark/runs/h2h-run-metadata-run1-rg-native-retrieval-b2000-t123-segment.json`
+    - `benchmarks/head_to_head/tool_profiles/rg_native.v1.json`
   - matrix export:
     - `benchmark/runs/matrix/h2h-matrix-long-run1-budget-aware-lane3-retrieval-b2000-t123-vs-contextplus-run1-segment-20260302-202648Z.json`
     - `benchmark/runs/matrix/h2h-matrix-long-run1-budget-aware-lane3-retrieval-b2000-t123-vs-contextplus-run1-segment-20260302-202648Z.csv`
@@ -147,20 +153,21 @@ This log records keep/rollback outcomes for feature lanes using pinned matrix ro
 
 ### Lane3 Comparison Table (Retrieval Segment, Budget 2000, Trials 1..3)
 
-| Metric | llm-tldr lane3 | llm-tldr lane2 | llm-tldr lane1 | llm-tldr baseline | contextplus baseline | lane3 - lane2 | lane3 - lane1 | lane3 - baseline | lane3 - contextplus |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `mrr_mean` | 0.8741 | 0.8741 | 0.8563 | 0.6119 | 0.2156 | +0.0000 | +0.0178 | +0.2623 | +0.6585 |
-| `recall@5_mean` | 0.8772 | 0.8772 | 0.9298 | 0.7895 | 0.2982 | +0.0000 | -0.0526 | +0.0877 | +0.5789 |
-| `precision@5_mean` | 0.1754 | 0.1754 | 0.1860 | 0.1579 | 0.0596 | +0.0000 | -0.0105 | +0.0175 | +0.1158 |
-| `fpr@5_mean` | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 1.0000 | +0.0000 | +0.0000 | +0.0000 | -1.0000 |
-| `payload_tokens_median` | 78.0 | 78.0 | 78.0 | 53.5 | 329.0 | +0.0 | +0.0 | +24.5 | -251.0 |
-| `latency_ms_p50` | 4912.824 | 4989.022 | 5426.209 | 5021.415 | 7717.107 | -76.198 | -513.385 | -108.591 | -2804.283 |
+| Metric | llm-tldr lane3 | llm-tldr lane2 | llm-tldr lane1 | llm-tldr baseline | contextplus baseline | rg-native baseline | lane3 - lane2 | lane3 - lane1 | lane3 - baseline | lane3 - contextplus | lane3 - rg-native |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `mrr_mean` | 0.8741 | 0.8741 | 0.8563 | 0.6119 | 0.2156 | 0.8126 | +0.0000 | +0.0178 | +0.2623 | +0.6585 | +0.0615 |
+| `recall@5_mean` | 0.8772 | 0.8772 | 0.9298 | 0.7895 | 0.2982 | 0.8772 | +0.0000 | -0.0526 | +0.0877 | +0.5789 | +0.0000 |
+| `precision@5_mean` | 0.1754 | 0.1754 | 0.1860 | 0.1579 | 0.0596 | 0.1754 | +0.0000 | -0.0105 | +0.0175 | +0.1158 | +0.0000 |
+| `fpr@5_mean` | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 1.0000 | 0.0000 | +0.0000 | +0.0000 | +0.0000 | -1.0000 | +0.0000 |
+| `payload_tokens_median` | 78.0 | 78.0 | 78.0 | 53.5 | 329.0 | 12.0 | +0.0 | +0.0 | +24.5 | -251.0 | +66.0 |
+| `latency_ms_p50` | 4912.824 | 4989.022 | 5426.209 | 5021.415 | 7717.107 | 216.221 | -76.198 | -513.385 | -108.591 | -2804.283 | +4696.604 |
 
 - Rationale summary:
   - Versus `contextplus`: lane3 wins all primary retrieval metrics (`5/5`) with clean run-validity (`timeout/error/budget_violation=0`).
   - Versus llm baseline: lane3 wins `4/5` primary metrics (all except payload), while keeping `fpr@5=0`.
   - Versus lane1: lane3 improves `mrr_mean` and latency, with flat payload/`fpr@5`, but gives up `recall@5` and `precision@5`.
   - Versus lane2: lane3 is quality/payload-equivalent at budget `2000` and improves latency (`-76.198ms`).
+  - Versus `rg-native`: lane3 improves `mrr_mean` while matching `recall@5`, `precision@5`, and `fpr@5`, but it is much slower and carries higher payload.
   - Budget-sensitivity diagnostic: lane3 retrieval-quality run showed budget-varying `effective_k` (`500->3`, `1000->5`, `2000->10`, `5000->25`) with `fpr@5=0.0` across budgets.
   - Drawback observed: matrix export currently depends on compare/assert label alignment with snapshot defaults (`llm-tldr`/`contextplus`), so a normalized-label compare/assert artifact was required.
 

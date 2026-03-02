@@ -12,6 +12,7 @@ It explicitly separates:
 - Tool profiles:
   - `benchmarks/head_to_head/tool_profiles/llm_tldr.v1.json`
   - `benchmarks/head_to_head/tool_profiles/contextplus.v1.json`
+  - `benchmarks/head_to_head/tool_profiles/rg_native.v1.json` (retrieval-only lexical baseline)
 - Query datasets:
   - `benchmarks/retrieval/django_queries.json`
   - `benchmarks/python/django_structural_queries.json`
@@ -30,7 +31,8 @@ uv run python scripts/bench_fetch_corpora.py --corpus django
 uv run python scripts/bench_head_to_head.py validate-suite \
   --suite benchmarks/head_to_head/suite.v1.json \
   --tool-profile benchmarks/head_to_head/tool_profiles/llm_tldr.v1.json \
-  --tool-profile benchmarks/head_to_head/tool_profiles/contextplus.v1.json
+  --tool-profile benchmarks/head_to_head/tool_profiles/contextplus.v1.json \
+  --tool-profile benchmarks/head_to_head/tool_profiles/rg_native.v1.json
 ```
 
 3. Materialize canonical task manifest (frozen task IDs + ground truth + hashes):
@@ -47,6 +49,26 @@ uv run python scripts/bench_head_to_head.py materialize-tasks \
 - required file per tool, e.g.:
   - `benchmark/runs/h2h-llm-tldr-predictions.json`
   - `benchmark/runs/h2h-contextplus-predictions.json`
+
+### Optional: Native `rg`/`grep` Retrieval Baseline (No `tldrf`)
+
+Use the `rg_native` profile to benchmark a pure lexical retrieval baseline. This profile executes only `scripts/rg_search_adapter.py`, which shells out to `rg` (or `grep` fallback) and never calls `tldrf`.
+
+```bash
+uv run python scripts/bench_h2h_predict.py \
+  --suite benchmarks/head_to_head/suite.v1.json \
+  --tasks benchmark/runs/h2h-task-manifest.json \
+  --tool-profile benchmarks/head_to_head/tool_profiles/rg_native.v1.json \
+  --category retrieval \
+  --out benchmark/runs/h2h-rg-native-predictions.json
+
+uv run python scripts/bench_head_to_head.py score \
+  --suite benchmarks/head_to_head/suite.v1.json \
+  --tasks benchmark/runs/h2h-task-manifest.json \
+  --tool-profile benchmarks/head_to_head/tool_profiles/rg_native.v1.json \
+  --predictions benchmark/runs/h2h-rg-native-predictions.json \
+  --out benchmark/runs/h2h-rg-native-score.json
+```
 
 5. Score each tool independently:
 
