@@ -1,6 +1,6 @@
 # llm-tldr Measurable Superiority Over contextplus Implementation Plan
 
-- Status: In Progress (run1-fixed artifacts complete; stability reruns waived for provisional track)
+- Status: In Progress (run1-only provisional track updated; llm-tldr run1 quality blockers cleared, final 008 still blocked by contextplus reliability + 2/3 stability)
 - Owner: TBD
 - Last updated: 2026-03-02
 - Related spec: `specs/008-head-to-head-benchmark-llm-tldr-vs-contextplus.md`
@@ -53,13 +53,31 @@ This track allows progress without executing run2/run3 immediately. It is explic
 - Current run1-fixed outcome summary:
   - `llm-tldr` wins compare at budget 2000 with required margin deltas.
   - `llm-tldr` run-validity rates are clean (`timeout/error/budget_violation = 0`).
+  - `llm-tldr` run1 quality blockers are now cleared after targeted segment rerun + stitch refresh:
+    - `tool_quality.retrieval_max_fpr5_at_budget_2000 = 0.0` (pass).
+    - `tool_quality.data_flow_min_origin_accuracy_at_budget_2000_if_supported = 1.0` (pass).
   - Strict assert is still failing overall due to contextplus run-validity and stability (`2/3`) requirements.
 - Run1-fixed numeric snapshot (frozen):
-  - `llm-tldr` retrieval @2000: `mrr_mean=0.6119`, `recall@5=0.7895`, `precision@5=0.1579`, `payload_tokens_median=54`, `latency_ms_p50=5000.823`.
+  - `llm-tldr` retrieval @2000 (refreshed stitched run1-fixed): `mrr_mean=0.6119`, `recall@5=0.7895`, `precision@5=0.1579`, `payload_tokens_median=53.5`, `latency_ms_p50=5021.415`.
   - `contextplus` retrieval @2000: `mrr_mean=0.2156`, `recall@5=0.2982`, `precision@5=0.0596`, `payload_tokens_median=329`, `latency_ms_p50=7717.107`.
   - Strict assert failing gates are currently limited to:
     - `validity.contextplus.error_rate`
     - `stability.two_of_three` (insufficient runs under waiver mode)
+- Run1-fixed refreshed artifacts (`r3d10`, 2026-03-02T06:08:47Z):
+  - `benchmark/runs/h2h-llm-tldr-predictions-run1-fixed-r3d10-20260302T060847Z.json`
+  - `benchmark/runs/h2h-failure-classification-run1-llm-tldr-fixed-r3d10-20260302T060847Z.json`
+  - `benchmark/runs/h2h-run-metadata-run1-llm-tldr-fixed-r3d10-20260302T060847Z.json`
+  - `benchmark/runs/h2h-failure-classification-run1-llm-tldr-fixed-stitch-allow-r3d10-20260302T060847Z.json`
+  - `benchmark/runs/stitch_audits/h2h-llm-tldr-stitch-audit-run1-fixed-r3d10-20260302T060847Z.json`
+  - `benchmark/runs/h2h-llm-tldr-score-run1-fixed-stitched-r3d10-20260302T060847Z.json`
+  - `benchmark/runs/h2h-compare-run1-fixed-stitched-r3d10-20260302T060847Z.json`
+  - `benchmark/runs/h2h-assert-run1-fixed-stitched-r3d10-20260302T060847Z.json`
+- Run1-fixed allowlist-mode stitch validation artifacts (`allowlist`, 2026-03-02T06:26:02Z, no classification remap):
+  - `benchmark/runs/h2h-llm-tldr-predictions-run1-fixed-stitched-allowlist-20260302T062602Z.json`
+  - `benchmark/runs/stitch_audits/h2h-llm-tldr-stitch-audit-run1-fixed-allowlist-20260302T062602Z.json`
+  - `benchmark/runs/h2h-llm-tldr-score-run1-fixed-stitched-allowlist-20260302T062602Z.json`
+  - `benchmark/runs/h2h-compare-run1-fixed-stitched-allowlist-20260302T062602Z.json`
+  - `benchmark/runs/h2h-assert-run1-fixed-stitched-allowlist-20260302T062602Z.json`
 - Rerun policy for this track:
   - No additional run1 rerun is required just to adopt/record this waiver.
   - Re-run run1 (or affected segments) only if prediction-shaping logic, tool profile commands, or scoring logic changes.
@@ -68,13 +86,17 @@ This track allows progress without executing run2/run3 immediately. It is explic
 
 - [x] Document waiver status in release notes / implementation summary:
   - mark 008 as provisional with explicit stability waiver.
-- [ ] Fix remaining llm-tldr quality blockers seen in run1-fixed score:
+- [x] Fix remaining llm-tldr quality blockers seen in run1-fixed score:
   - retrieval `fpr@5` gate (`tool_quality.retrieval_max_fpr5_at_budget_2000`).
   - data-flow origin metric completeness (`tool_quality.data_flow_min_origin_accuracy_at_budget_2000_if_supported`).
-- [ ] After each quality fix, run only the minimal affected segment reruns and regenerate:
+- [x] After each quality fix, run only the minimal affected segment reruns and regenerate:
   - score, compare, assert artifacts for run1-fixed.
+- [x] Add first-class stitch allowlist mode for logic-change segment refreshes:
+  - `scripts/bench_h2h_stitch.py` now supports explicit row allowlists (`task_id`, `trial`, `budget_tokens`) without failure-class remapping.
+- [ ] Execute final 008 sign-off runs when provider reliability window is acceptable:
+  - full `run1..run3` strict assertions, or explicit multi-run waiver policy update approved in plan/spec.
 
-## Implementation Progress (2026-03-01)
+## Implementation Progress (2026-03-02)
 
 ### Completed Delivery (Code + Tests)
 
@@ -104,6 +126,9 @@ This track allows progress without executing run2/run3 immediately. It is explic
     - `tests/test_bench_perf_daemon_vs_cli_helpers.py`
   - Updated `scripts/bench_token_efficiency.py` to deduplicate duplicate chunks in `_apply_budget`.
   - Updated `scripts/bench_perf_daemon_vs_cli.py` to compute speedup using `p50` latency (gate-aligned).
+  - Closed run1 quality blockers with targeted rerun scope and refreshed stitched artifacts:
+    - targeted rows: retrieval (`R12`,`R59`,`R60`) + data-flow (`D01..D10`) across 4 budgets x 3 trials (`156` rows total).
+    - refreshed llm-tldr gates now pass for retrieval `fpr@5` and data-flow origin accuracy at budget `2000`.
 - Phase 6:
   - Added `scripts/bench_h2h_assert.py` with strict gate assertions (winner, margin, validity, efficiency, stability).
   - Added `benchmarks/head_to_head/gates.strict.v1.json`.
@@ -140,6 +165,19 @@ uv run pytest \
 
 - Result:
   - `58 passed`
+- Targeted rerun + artifact refresh (run1-fixed, 2026-03-02):
+  - Preflight probes passed (semantic search + `impact` with explicit `--lang python`).
+  - `bench_h2h_predict.py` rerun completed for `156` selected identities.
+  - Refreshed score gate outcomes for llm-tldr:
+    - `tool_quality.retrieval_max_fpr5_at_budget_2000`: pass (`0.0`)
+    - `tool_quality.data_flow_min_origin_accuracy_at_budget_2000_if_supported`: pass (`1.0`)
+  - `compare` winner remains `llm-tldr` (5/5 primary metrics at budget 2000).
+  - Strict assert remaining failures are unchanged and external to llm-tldr quality improvements:
+    - `validity.contextplus.error_rate`
+    - `stability.two_of_three`
+- Allowlist-mode stitch validation (2026-03-02):
+  - `bench_h2h_stitch.py` explicit allowlist filters successfully replaced all `156` targeted rows with `eligibility_source=explicit_allowlist` and `unresolved=0`.
+  - Refreshed llm-tldr quality gates remained passing (`retrieval_max_fpr5=0.0`, `data_flow_origin_accuracy=1.0`) and compare winner stayed `llm-tldr`.
 
 ### Gotchas / Learnings Logged During Implementation
 
@@ -163,6 +201,10 @@ uv run pytest \
 - Stitch eligibility caveat:
   - Missing semantic index failures can surface as generic `error/product_failure` rows unless classified explicitly.
   - Stitch policy now allows deterministic replacement for explicit `preflight_semantic_index_missing` rows and a narrow fallback (`status=error` + reason contains `Semantic index not found`), while keeping unrelated product failures non-eligible.
+- Quality-fix segment refresh caveat:
+  - Historically, stitch replacement required provider/preflight eligibility only.
+  - For the first run1 quality refresh (`r3d10`), a dedicated stitch-allow classification artifact was used to replace targeted rows.
+  - This is now addressed with first-class explicit allowlist filters in `bench_h2h_stitch.py`, so logic-change row replacement can be performed without temporary classification remapping.
 
 ## Definition Of Done (Program-Level)
 
