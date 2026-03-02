@@ -1,6 +1,6 @@
 # llm-tldr Measurable Superiority Over contextplus Implementation Plan
 
-- Status: In Progress (run1-only provisional track updated; llm-tldr run1 quality blockers cleared, final 008 still blocked by contextplus reliability + 2/3 stability)
+- Status: In Progress (comparison-first metric board active; run1 baseline seeded; full 008 sign-off track deferred/optional pending provider window and multi-run stability)
 - Owner: TBD
 - Last updated: 2026-03-02
 - Related spec: `specs/008-head-to-head-benchmark-llm-tldr-vs-contextplus.md`
@@ -9,7 +9,7 @@
 
 Make `llm-tldr` measurably better than `contextplus` using the existing neutral head-to-head harness, with hard pass/fail criteria and reproducible artifacts.
 
-## Next Steps Checklist (008 Implementation Start)
+## Current Priority Checklist (Comparison-First)
 
 - [x] Create artifact directories for deterministic reruns and audit outputs:
   - `mkdir -p benchmark/runs benchmark/logs benchmark/runs/stitch_audits`
@@ -20,8 +20,6 @@ Make `llm-tldr` measurably better than `contextplus` using the existing neutral 
 - [x] Add partial rerun stitch output + audit artifacts for each tool/run:
   - `benchmark/runs/h2h-<tool>-predictions-<run>-stitched.json`
   - `benchmark/runs/stitch_audits/h2h-<tool>-stitch-audit-<run>.json`
-- [ ] Re-run baseline (`run1..run3`) using unchanged suite seeds and persist run metadata sidecar (waived in run1-only provisional mode; still required for final 008 sign-off):
-  - `benchmark/runs/h2h-run-metadata-<run>.json`
 - [x] Pin structural language in llm-tldr tool profile before reruns on mixed-language corpora:
   - For Django runs, structural commands are pinned with `--lang python` in `benchmarks/head_to_head/tool_profiles/llm_tldr.v1.json`.
 - [x] Add official segment-scoped rerun support in `scripts/bench_h2h_predict.py` (stitch-safe):
@@ -34,10 +32,15 @@ Make `llm-tldr` measurably better than `contextplus` using the existing neutral 
   - Run one retrieval probe and one impact probe with explicit language pin.
   - Why needed: missing semantic index and auto-language drift can invalidate entire run segments (for example 720 retrieval errors + systematic impact timeouts).
 - [x] Keep strict quality/effectiveness thresholds unchanged and enforce them on completed judgments after deterministic stitching.
-- [ ] Run end-to-end 3-run benchmark artifacts and gate assertions using new tooling (waived in run1-only provisional mode; still required for final 008 sign-off):
-  - `scripts/bench_h2h_predict.py`, `scripts/bench_h2h_stitch.py`, `scripts/bench_h2h_baseline.py`, `scripts/bench_h2h_assert.py`
-- [ ] Enable nightly full job with secrets/feature flag:
-  - set `H2H_NIGHTLY_ENABLED=1` in CI environment before relying on nightly full gating.
+- [x] Seed canonical benchmark matrix with run1-fixed baseline values + pinned artifact references for `llm-tldr` and `contextplus`.
+- [x] Add feature-porting hypothesis matrix for six candidate lanes (hybrid, abstention/rerank, budget-aware retrieval, compound semantic+impact, navigate/clustering, Ollama backend).
+- [x] Add row-eligibility integrity + deterministic stitch policies that keep matrix rows auditable and comparable.
+- [ ] Add per-feature execution ownership in this plan (`owner`, `test-first files`, `implementation artifacts`, `before/after row IDs`).
+- [ ] Populate holistic metric columns (below) for existing run1 rows at budgets `500/1000/2000/5000`.
+- [ ] For each new feature implementation, append a before/after delta row with explicit keep/rollback decision.
+
+Note:
+- Full-signoff items (`run2/run3`, nightly strict gating, release checklist) are intentionally moved to the optional section at the end for now.
 
 ## Run1 Waiver Mode (Current Track)
 
@@ -93,8 +96,7 @@ This track allows progress without executing run2/run3 immediately. It is explic
   - score, compare, assert artifacts for run1-fixed.
 - [x] Add first-class stitch allowlist mode for logic-change segment refreshes:
   - `scripts/bench_h2h_stitch.py` now supports explicit row allowlists (`task_id`, `trial`, `budget_tokens`) without failure-class remapping.
-- [ ] Execute final 008 sign-off runs when provider reliability window is acceptable:
-  - full `run1..run3` strict assertions, or explicit multi-run waiver policy update approved in plan/spec.
+- [x] Defer full 008 sign-off reruns (`run2/run3`) to optional section while comparison-first feature benchmarking continues.
 
 ## Implementation Progress (2026-03-02)
 
@@ -253,6 +255,26 @@ How this matrix is used:
 | `future-tool-A` (placeholder) | Retrieval (common lane) | `2000` | `TBD from pinned score artifact` | `TBD` | `TBD` | `TBD` | `benchmark/runs/h2h-future-tool-A-score-<run>.json`; `benchmark/runs/h2h-assert-<run>.json` | Evaluate against same gates before any porting decision |
 | `future-tool-A` (placeholder) | Non-common lane feature (for example semantic navigation) | `2000` | lane-specific metric + mapped proxy to common-lane quality | `TBD` | `TBD` | `TBD` | `benchmark/runs/<feature>-future-tool-A-<run>.json` + mapped h2h compare note | Port only if differentiated value is measurable and does not regress common-lane gates |
 
+### Canonical Holistic Metrics Matrix ("Benchmark Bible")
+
+This is the single reference for deciding whether a change is better or worse across quality, reliability, efficiency, and latency.
+
+Rules:
+1. These metrics are additive comparison qualifiers and do not replace suite winner logic or strict 008 gate math.
+2. Every feature row should report the relevant subset below plus artifact pointers.
+3. Missing required integrity/reliability fields block a "feature improved" decision.
+
+| Dimension | Required fields/metrics | Why it matters |
+| --- | --- | --- |
+| Reproducibility identity | `suite_id`, `task_manifest_hash`, `tool_profile_hash`, `tldr_git_sha`, `corpus_git_sha`, `corpus_id`, tokenizer, embedding backend/model | Prevents drift and invalid comparisons across runs. |
+| Workload comparability | `category`, `strategy`, query-mix counts (`named/behavioral/cross_file/negative`), `tasks_total`, `tasks_judged`, `trials`, budget ladder | Ensures rows compare like-for-like workloads. |
+| Retrieval quality | `mrr_mean`, `recall@5_mean`, `recall@10_mean`, `precision@5_mean`, `fpr@5_mean`, `fpr@10_mean` | Captures ranking quality plus false-positive behavior. |
+| Structural quality | `impact_f1_mean`, `slice_recall_mean`, `slice_noise_reduction_mean`, `data_flow_origin_accuracy_mean`, `flow_completeness_mean`, `complexity_mae`, `complexity_tau_b` | Tracks the non-common lanes where llm-tldr differentiates. |
+| Reliability + parse integrity | `timeout_rate`, `error_rate`, `unsupported_rate`, `budget_violation_rate`, `bad_json`, `judge_bad_json`, `answer_errors_total`, `judge_errors_total`, `unclassified_failures_total` | Distinguishes real product quality from transport/runtime noise. |
+| Efficiency / cost proxies | `payload_tokens_median`, `tok`, `tok_per_tp`, `noise_ratio_mean`, `noise_reduction_mean`, index/cache size | Surfaces cost and context-efficiency tradeoffs. |
+| Latency / operational performance | `latency_ms_p50`, `latency_ms_p95`, daemon-vs-CLI p50 speedup, `build_s`, `patch_s`, `full_rebuild_after_touch_s` | Prevents quality gains that are too slow to ship. |
+| Decision rollups | winner `>=3/5` primary metrics, margin deltas (`mrr`, `recall@5`, `precision@5`), run-validity gates, stability (`2/3` when used) | Produces a clear ship/rollback decision with traceable evidence. |
+
 ### Feature-Porting Benchmark Matrix (Hypotheses + Tradeoffs)
 
 Use this matrix to decide what to implement next and how to judge whether a port actually improved the product.
@@ -266,13 +288,35 @@ Use this matrix to decide what to implement next and how to judge whether a port
 | Semantic navigation/clustering (`tldrf navigate`) | Add differentiated exploration workflow not captured by current h2h categories. | High cluster coverage and determinism, with possible retrieval spillover gains. | New artifact for cluster coverage, determinism, and query-cluster recall; plus retrieval regression checks on h2h score fields. | Cluster instability, index invalidation complexity, label/token overhead. |
 | Optional Ollama backend | Improve local onboarding and provider flexibility. | Better first-run reliability for Ollama users, near-parity quality, variable latency by host/model. | Same h2h score fields at budget `2000`, run-validity rates, and `overlap@5` parity report versus `sentence-transformers`. | Provider matrix complexity, local resource pressure, model mismatch/index rebuild issues. |
 
-### Execution Board Seed (Next Fill-In)
+### Feature-Porting Execution Board (Comparison-First)
 
-For each feature lane above, add and maintain:
-1. Owner.
-2. Test-first files.
-3. Implementation PR/artifact paths.
-4. Before/after metrics row links from this matrix.
+- [x] Define hypotheses/tradeoffs and measurable checks for all six lanes (table above).
+- [x] Seed canonical retrieval baseline rows for `llm-tldr` and `contextplus` at budget `2000`.
+- [ ] Hybrid retrieval in product path:
+  - owner: `TBD`
+  - test-first files: `tests/test_semantic*.py`, `tests/test_cli*.py`
+  - before/after artifacts: `phase3-retrieval-quality` + h2h score/compare rows by budget
+- [ ] Confidence abstention + optional rerank:
+  - owner: `TBD`
+  - test-first files: retrieval negative-query + rerank helper tests
+  - before/after artifacts: retrieval quality + h2h gate rows (`retrieval_max_fpr5`, `retrieval_min_mrr`)
+- [ ] Budget-aware retrieval behavior:
+  - owner: `TBD`
+  - test-first files: `tests/test_bench_token_efficiency_helpers.py`
+  - before/after artifacts: by-budget retrieval metrics (`500/1000/2000/5000`) + budget violation rates
+- [ ] Compound semantic+impact command/API:
+  - owner: `TBD`
+  - test-first files: impact/semantic compound schema and fixture tests
+  - before/after artifacts: compound latency/timeout/error plus budget-2000 quality rows
+- [ ] Semantic navigation/clustering (`tldrf navigate`):
+  - owner: `TBD`
+  - test-first files: deterministic cluster fixture tests
+  - before/after artifacts: cluster coverage/determinism artifact + retrieval regression rows
+- [ ] Optional Ollama backend:
+  - owner: `TBD`
+  - test-first files: provider-selection and fallback tests
+  - before/after artifacts: budget-2000 h2h rows + overlap@5 parity report
+- [ ] For each lane, append a final keep/rollback decision row with explicit drawbacks observed.
 
 ## Program Delivery Mode: Test-First With Benchmark Confirmation
 
@@ -833,8 +877,16 @@ tmux new-session -d -s h2h-full \
    PYTHONUNBUFFERED=1 NO_COLOR=1 uv run python scripts/bench_h2h_predict.py ... 2>&1 | tee benchmark/logs/h2h-full.log'
 ```
 
-## Final Exit Checklist
+## Optional / Deferred: Full 008 Sign-Off Track
 
+These are intentionally deferred while comparison-first feature implementation is in progress.
+
+- [ ] Re-run baseline (`run1..run3`) using unchanged suite seeds and persist run metadata sidecars:
+  - `benchmark/runs/h2h-run-metadata-<run>.json`
+- [ ] Run end-to-end 3-run benchmark artifacts and gate assertions using:
+  - `scripts/bench_h2h_predict.py`, `scripts/bench_h2h_stitch.py`, `scripts/bench_h2h_baseline.py`, `scripts/bench_h2h_assert.py`
+- [ ] Execute final 008 sign-off runs when provider reliability window is acceptable.
+- [ ] Enable nightly full job with secrets/feature flag (`H2H_NIGHTLY_ENABLED=1`) before relying on nightly full gating.
 - [ ] Phase 0-6 deliverables merged.
 - [ ] All phase pass/fail thresholds met on completed judgments after deterministic stitching.
 - [ ] `llm-tldr` wins head-to-head by suite rule and strict margin gates.
