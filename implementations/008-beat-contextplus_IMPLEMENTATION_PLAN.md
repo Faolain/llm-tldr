@@ -438,7 +438,7 @@ Use this matrix to decide what to implement next and how to judge whether a port
     - rationale: versus `contextplus`, quality wins `5/5` with large positive deltas (`mrr`, `recall@5`, `precision@5`), lower latency (`0.7031x`), lower payload (`0.2371x`), and clean segment run-validity rates (`timeout/error/budget_violation=0` for both tools).
     - rationale (intra-tool): versus `llm-tldr` baseline, hybrid wins `3/5` primary metrics with substantial quality lift (`mrr +0.2444`, `recall@5 +0.1404`, `precision@5 +0.0281`) and unchanged `fpr@5=0.0`, with expected tradeoff of higher payload/latency.
     - remaining gate: `stability.two_of_three` only (`insufficient_runs_for_stability_check`) under deliberate single-bundle segment confirmation scope.
-    - canonical decision record: `implementations/008-canonical-matrix-lane-decisions.md`.
+    - canonical decision record + 3-way comparison table (`hybrid` vs `llm-tldr baseline` vs `contextplus`): `implementations/008-canonical-matrix-lane-decisions.md`.
 - [ ] Confidence abstention + optional rerank (active next loop):
   - owner: `retrieval-quality`
   - test-first files: retrieval negative-query + rerank helper tests
