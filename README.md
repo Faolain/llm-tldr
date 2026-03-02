@@ -168,6 +168,11 @@ tldrf impact login .                 # Who calls this? (reverse call graph)
 tldrf change-impact                  # Which tests need to run?
 ```
 
+For mixed-language repositories, pin `--lang` on structural commands (`impact`, `slice`, `cfg`, `dfg`) when you expect a specific language. `auto` picks the first detected language and can pick JavaScript before Python, which may cause wrong-graph analysis and benchmark timeouts.
+```bash
+tldrf impact login . --lang python
+```
+
 ### Debugging
 ```bash
 tldrf slice src/auth.py login 42     # What affects line 42?
@@ -204,6 +209,33 @@ tldrf context main --project .   # Get context for a function
 tldrf impact helper_func .       # See who calls it
 tldrf semantic "error handling"  # Find by behavior
 ```
+
+---
+
+## Benchmark Quick TLDR (Required Before Full H2H Runs)
+
+Use this preflight before running `bench_h2h_predict.py` on a corpus. It prevents wasting full runs on missing index state or wrong language resolution.
+
+```bash
+# 1) Build semantic index for the corpus language
+uv run tldrf semantic index benchmark/corpora/django --lang python --rebuild
+
+# 2) Warm structural cache for the same language
+uv run tldrf warm benchmark/corpora/django --lang python --rebuild
+
+# 3) Probe retrieval path (must return non-empty JSON results)
+uv run tldrf semantic search "Where is CSRF middleware implemented?" --path benchmark/corpora/django --k 10
+
+# 4) Probe impact path with explicit language (must return non-empty JSON)
+uv run tldrf impact items_for_result benchmark/corpora/django --file django/contrib/admin/templatetags/admin_list.py --lang python
+```
+
+Pass criteria before full run:
+- Retrieval probe does not print `Semantic index not found`.
+- Impact probe completes without timeout.
+- For mixed-language repos, structural commands in benchmark profiles pin `--lang` explicitly.
+
+If any preflight step fails, fix preconditions first and do not launch full run.
 
 ---
 
