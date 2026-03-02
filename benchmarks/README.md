@@ -8,6 +8,24 @@ All **untracked** run artifacts live under the gitignored `benchmark/` directory
 - `benchmark/cache-root/`          Index-mode caches (`--cache-root benchmark/cache-root`)
 - `benchmark/runs/<timestamp>/`    JSON reports produced by scripts
 
+## Why We Run Multiple Benchmark Families
+
+Yes, ultimate goal is one thing: better real outcomes.
+But we split tests so we can tell why results changed.
+
+1. `h2h` isolates tool quality.
+   It answers: "Is retrieval/analysis output itself better than contextplus?"
+2. `llm_ab` isolates end-to-end answer quality with a judge.
+   It answers: "Does this context actually produce better final answers?"
+3. `token_efficiency` isolates budget tradeoffs.
+   It answers: "How much quality do we gain per extra token/cost?"
+
+If you only run one combined test, you cannot tell whether a change came from:
+
+1. Better retrieval.
+2. Better packing.
+3. LLM/judge variance.
+
 ## Results Snapshot (Pinned Runs)
 
 Numbers below are copied from the JSON reports under `benchmark/runs/` (so they are reproducible and diffable).
