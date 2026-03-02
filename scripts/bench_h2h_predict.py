@@ -542,6 +542,138 @@ def _failure_class(status: str) -> str:
     return "none"
 
 
+def _parse_filter_values(raw_values: list[str] | None) -> list[str]:
+    values: list[str] = []
+    for raw in raw_values or []:
+        for token in str(raw).split(","):
+            item = token.strip()
+            if item:
+                values.append(item)
+    return values
+
+
+def _parse_positive_int_filter(raw_values: list[str] | None, *, label: str) -> list[int]:
+    out: list[int] = []
+    for raw in _parse_filter_values(raw_values):
+        try:
+            value = int(raw)
+        except Exception as exc:
+            raise ValueError(f"{label} values must be integers: {raw!r}") from exc
+        if value <= 0:
+            raise ValueError(f"{label} values must be positive: {raw!r}")
+        out.append(value)
+    return sorted(set(out))
+
+
+def _normalize_segment_filters(
+    *,
+    categories_raw: list[str] | None,
+    task_ids_raw: list[str] | None,
+    trials_raw: list[str] | None,
+    budget_tokens_raw: list[str] | None,
+) -> dict[str, list[Any]]:
+    categories = sorted(set(_parse_filter_values(categories_raw)))
+    unknown_categories = sorted(set(categories) - set(CATEGORY_KEYS))
+    if unknown_categories:
+        raise ValueError(f"unknown category filters: {', '.join(unknown_categories)}")
+
+    return {
+        "categories": categories,
+        "task_ids": sorted(set(_parse_filter_values(task_ids_raw))),
+        "trials": _parse_positive_int_filter(trials_raw, label="trial"),
+        "budget_tokens": _parse_positive_int_filter(budget_tokens_raw, label="budget_tokens"),
+    }
+
+
+def _apply_segment_filters(
+    *,
+    tasks_sorted: list[dict[str, Any]],
+    budgets: list[int],
+    trials: int,
+    segment_filters: dict[str, list[Any]],
+) -> tuple[list[dict[str, Any]], list[int], list[int]]:
+    selected_tasks = list(tasks_sorted)
+    category_filters = {str(x) for x in segment_filters.get("categories", []) if isinstance(x, str)}
+    task_id_filters = {str(x) for x in segment_filters.get("task_ids", []) if isinstance(x, str)}
+
+    if category_filters:
+        present_categories = {str(task.get("category")) for task in tasks_sorted if isinstance(task, dict)}
+        missing_categories = sorted(category_filters - present_categories)
+        if missing_categories:
+            raise ValueError(
+                "category filters not present in runnable task set: " + ", ".join(missing_categories)
+            )
+        selected_tasks = [
+            task for task in selected_tasks if isinstance(task.get("category"), str) and task["category"] in category_filters
+        ]
+
+    if task_id_filters:
+        present_task_ids = {str(task.get("task_id")) for task in tasks_sorted if isinstance(task, dict)}
+        missing_task_ids = sorted(task_id_filters - present_task_ids)
+        if missing_task_ids:
+            raise ValueError(
+                "task_id filters not present in task manifest: " + ", ".join(missing_task_ids)
+            )
+        selected_tasks = [
+            task for task in selected_tasks if isinstance(task.get("task_id"), str) and task["task_id"] in task_id_filters
+        ]
+
+    if (category_filters or task_id_filters) and not selected_tasks:
+        raise ValueError("segment filters selected no runnable tasks")
+
+    trial_filters = {int(x) for x in segment_filters.get("trials", []) if isinstance(x, int)}
+    selected_trials = list(range(1, int(trials) + 1))
+    if trial_filters:
+        missing_trials = sorted(trial_filters - set(selected_trials))
+        if missing_trials:
+            raise ValueError(
+                "trial filters outside configured trial range: " + ", ".join(str(x) for x in missing_trials)
+            )
+        selected_trials = [trial for trial in selected_trials if trial in trial_filters]
+
+    budget_filters = {int(x) for x in segment_filters.get("budget_tokens", []) if isinstance(x, int)}
+    selected_budgets = [int(budget) for budget in budgets]
+    if budget_filters:
+        missing_budgets = sorted(budget_filters - set(selected_budgets))
+        if missing_budgets:
+            raise ValueError(
+                "budget_tokens filters outside configured budgets: " + ", ".join(str(x) for x in missing_budgets)
+            )
+        selected_budgets = [budget for budget in selected_budgets if budget in budget_filters]
+
+    return selected_tasks, selected_budgets, selected_trials
+
+
+def _segment_filter_audit_doc(
+    *,
+    segment_filters: dict[str, list[Any]],
+    selected_tasks: list[dict[str, Any]],
+    selected_budgets: list[int],
+    selected_trials: list[int],
+) -> dict[str, Any]:
+    selected_task_ids = [
+        str(task.get("task_id")) for task in selected_tasks if isinstance(task, dict) and isinstance(task.get("task_id"), str)
+    ]
+    selected_categories = sorted(
+        {
+            str(task.get("category"))
+            for task in selected_tasks
+            if isinstance(task, dict) and isinstance(task.get("category"), str)
+        }
+    )
+    return {
+        "categories": [str(x) for x in segment_filters.get("categories", []) if isinstance(x, str)],
+        "task_ids": [str(x) for x in segment_filters.get("task_ids", []) if isinstance(x, str)],
+        "trials": [int(x) for x in segment_filters.get("trials", []) if isinstance(x, int)],
+        "budget_tokens": [int(x) for x in segment_filters.get("budget_tokens", []) if isinstance(x, int)],
+        "selected_categories": selected_categories,
+        "selected_task_ids": selected_task_ids,
+        "selected_trials": [int(x) for x in selected_trials],
+        "selected_budget_tokens": [int(x) for x in selected_budgets],
+        "selected_identity_count": len(selected_task_ids) * len(selected_trials) * len(selected_budgets),
+    }
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description="Run head-to-head task manifest through one tool profile.")
     ap.add_argument("--suite", default="benchmarks/head_to_head/suite.v1.json")
@@ -551,6 +683,37 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--out", default=None)
     ap.add_argument("--classification-out", default=None)
     ap.add_argument("--run-metadata-out", default=None)
+    ap.add_argument(
+        "--category",
+        "--categories",
+        dest="categories",
+        action="append",
+        default=None,
+        help="Optional rerun filter; repeat or use comma-separated values.",
+    )
+    ap.add_argument(
+        "--task-id",
+        "--task-ids",
+        dest="task_ids",
+        action="append",
+        default=None,
+        help="Optional rerun filter; repeat or use comma-separated values.",
+    )
+    ap.add_argument(
+        "--trial",
+        "--trials",
+        dest="trial_filters",
+        action="append",
+        default=None,
+        help="Optional rerun filter; repeat or use comma-separated integers.",
+    )
+    ap.add_argument(
+        "--budget-tokens",
+        dest="budget_token_filters",
+        action="append",
+        default=None,
+        help="Optional rerun filter; repeat or use comma-separated integers.",
+    )
     return ap
 
 
@@ -626,6 +789,28 @@ def main() -> int:
     ]
     tasks_sorted.sort(key=lambda t: str(t.get("task_id")))
 
+    try:
+        segment_filters = _normalize_segment_filters(
+            categories_raw=args.categories,
+            task_ids_raw=args.task_ids,
+            trials_raw=args.trial_filters,
+            budget_tokens_raw=args.budget_token_filters,
+        )
+        selected_tasks, selected_budgets, selected_trials = _apply_segment_filters(
+            tasks_sorted=tasks_sorted,
+            budgets=budgets,
+            trials=trials,
+            segment_filters=segment_filters,
+        )
+    except ValueError as exc:
+        raise SystemExit(f"error: {exc}") from exc
+    segment_filter_audit = _segment_filter_audit_doc(
+        segment_filters=segment_filters,
+        selected_tasks=selected_tasks,
+        selected_budgets=selected_budgets,
+        selected_trials=selected_trials,
+    )
+
     if args.corpus_root:
         corpus_root = Path(args.corpus_root).resolve()
     else:
@@ -647,15 +832,15 @@ def main() -> int:
     predictions: list[dict[str, Any]] = []
     classification_rows: list[dict[str, Any]] = []
 
-    for task in tasks_sorted:
+    for task in selected_tasks:
         task_id = str(task["task_id"])
         category = str(task["category"])
         command_entry = commands.get(category) if isinstance(commands.get(category), dict) else None
         template = command_entry.get("template") if isinstance(command_entry, dict) else None
         supported = bool(capabilities_by_category.get(category, False))
 
-        for budget_tokens in budgets:
-            for trial in range(1, trials + 1):
+        for budget_tokens in selected_budgets:
+            for trial in selected_trials:
                 raw_log = _raw_log_path(repo_root, tool_id=tool_id, trial=trial, task_id=task_id)
 
                 if not supported or not isinstance(template, str) or not template.strip():
@@ -791,6 +976,7 @@ def main() -> int:
         "tool_id": tool_id,
         "task_manifest_sha256": actual_task_manifest_sha,
         "tokenizer": tokenizer,
+        "segment_filters": segment_filter_audit,
         "predictions": predictions,
     }
 
@@ -807,6 +993,7 @@ def main() -> int:
             "suite_id": suite_id,
             "tool_id": tool_id,
             "task_manifest_sha256": actual_task_manifest_sha,
+            "segment_filters": segment_filter_audit,
             "rows": sorted(
                 classification_rows,
                 key=lambda r: (
@@ -828,8 +1015,11 @@ def main() -> int:
             "task_manifest_sha256": actual_task_manifest_sha,
             "tool_profile_sha256": _sha256_file(profile_path),
             "tokenizer": tokenizer,
-            "token_budgets": budgets,
+            "token_budgets": selected_budgets,
+            "suite_token_budgets": budgets,
             "trials": trials,
+            "selected_trials": selected_trials,
+            "segment_filters": segment_filter_audit,
             "seeds": suite.get("protocol", {}).get("seeds"),
             "timeout_s_per_query": timeout_s,
             "retry_on_timeout": retry_on_timeout,

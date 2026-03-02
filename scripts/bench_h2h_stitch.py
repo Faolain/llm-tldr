@@ -10,6 +10,15 @@ from typing import Any
 from bench_util import bench_runs_root, get_repo_root, write_report
 
 SCHEMA_VERSION = 1
+PREFLIGHT_SEMANTIC_INDEX_MISSING_CLASS = "preflight_semantic_index_missing"
+PREFLIGHT_SEMANTIC_INDEX_MISSING_EXPLICIT_CLASSES = frozenset(
+    {
+        "preflight_semantic_index_missing",
+        "preflight_missing_semantic_index",
+        "semantic_index_missing_preflight",
+    }
+)
+PREFLIGHT_SEMANTIC_INDEX_MISSING_REASON_MARKERS = ("semantic index not found",)
 
 
 def _utc_now() -> str:
@@ -32,11 +41,13 @@ def _normalize_row_key(tool_id: str, row: dict[str, Any]) -> tuple[str, str, int
     return (tool_id, task_id, int(budget), int(trial))
 
 
-def _classification_map(classification_doc: dict[str, Any], default_tool_id: str) -> dict[tuple[str, str, int, int], str]:
+def _classification_row_map(
+    classification_doc: dict[str, Any], default_tool_id: str
+) -> dict[tuple[str, str, int, int], dict[str, Any]]:
     rows = classification_doc.get("rows")
     if not isinstance(rows, list):
         return {}
-    out: dict[tuple[str, str, int, int], str] = {}
+    out: dict[tuple[str, str, int, int], dict[str, Any]] = {}
     for row in rows:
         if not isinstance(row, dict):
             continue
@@ -46,6 +57,13 @@ def _classification_map(classification_doc: dict[str, Any], default_tool_id: str
         key = _normalize_row_key(tool_id, row)
         if key is None:
             continue
+        out[key] = row
+    return out
+
+
+def _classification_map(classification_doc: dict[str, Any], default_tool_id: str) -> dict[tuple[str, str, int, int], str]:
+    out: dict[tuple[str, str, int, int], str] = {}
+    for key, row in _classification_row_map(classification_doc, default_tool_id=default_tool_id).items():
         failure_class = row.get("failure_class")
         if isinstance(failure_class, str) and failure_class:
             out[key] = failure_class
@@ -72,6 +90,64 @@ def _failure_class_for_row(
     if status == "pending":
         return "unclassified"
     return "none"
+
+
+def _is_preflight_semantic_index_missing(
+    *,
+    explicit_failure_class: str | None,
+    status: str | None,
+    reason: str | None,
+) -> bool:
+    explicit = str(explicit_failure_class or "").strip().lower()
+    if explicit:
+        return explicit in PREFLIGHT_SEMANTIC_INDEX_MISSING_EXPLICIT_CLASSES
+
+    status_norm = str(status or "").strip().lower()
+    if status_norm != "error":
+        return False
+
+    reason_norm = str(reason or "").strip().lower()
+    return any(marker in reason_norm for marker in PREFLIGHT_SEMANTIC_INDEX_MISSING_REASON_MARKERS)
+
+
+def _replacement_base_failure_class(
+    *,
+    tool_id: str,
+    row: dict[str, Any],
+    class_map: dict[tuple[str, str, int, int], str],
+    class_row_map: dict[tuple[str, str, int, int], dict[str, Any]],
+) -> str:
+    failure_class = _failure_class_for_row(
+        tool_id=tool_id,
+        row=row,
+        class_map=class_map,
+        use_classification_map=True,
+    )
+    if failure_class == "provider_transport_runtime":
+        return failure_class
+
+    key = _normalize_row_key(tool_id, row)
+    class_row = class_row_map.get(key) if key is not None else None
+
+    explicit_failure_class: str | None = None
+    if isinstance(class_row, dict):
+        raw_class = class_row.get("failure_class")
+        if isinstance(raw_class, str) and raw_class.strip():
+            explicit_failure_class = raw_class
+        status = class_row.get("status")
+        reason = class_row.get("reason")
+    else:
+        status = row.get("status")
+        reason = row.get("reason")
+
+    if _is_preflight_semantic_index_missing(
+        explicit_failure_class=explicit_failure_class,
+        status=status if isinstance(status, str) else None,
+        reason=reason if isinstance(reason, str) else None,
+    ):
+        return PREFLIGHT_SEMANTIC_INDEX_MISSING_CLASS
+
+    return failure_class
 
 
 def _key_to_dict(key: tuple[str, str, int, int]) -> dict[str, Any]:
@@ -124,6 +200,7 @@ def _stitch_predictions(
     for rerun_path, rerun_doc in rerun_docs:
         _validate_identity(base_doc, rerun_doc, rerun_path)
 
+    class_row_map = _classification_row_map(classification_doc, default_tool_id=tool_id)
     class_map = _classification_map(classification_doc, default_tool_id=tool_id)
 
     base_by_key: dict[tuple[str, str, int, int], dict[str, Any]] = {}
@@ -160,14 +237,14 @@ def _stitch_predictions(
 
     for key in base_order:
         base_row = base_by_key[key]
-        base_class = _failure_class_for_row(
+        base_class = _replacement_base_failure_class(
             tool_id=tool_id,
             row=base_row,
             class_map=class_map,
-            use_classification_map=True,
+            class_row_map=class_row_map,
         )
 
-        if base_class != "provider_transport_runtime":
+        if base_class not in {"provider_transport_runtime", PREFLIGHT_SEMANTIC_INDEX_MISSING_CLASS}:
             stitched_predictions.append(base_row)
             continue
 

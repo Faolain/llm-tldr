@@ -158,6 +158,89 @@ def test_stitch_keeps_base_when_all_candidates_provider_or_missing(tmp_path: Pat
     assert len(audit["unresolved"]) == 1
 
 
+def test_stitch_replaces_explicit_preflight_semantic_index_missing_rows(tmp_path: Path):
+    mod = _load_mod()
+    stitch = mod["_stitch_predictions"]
+
+    base = _pred_doc([_pred_row("retrieval:R1", status="error", marker="base-preflight")])
+    rerun1 = _pred_doc([_pred_row("retrieval:R1", status="ok", marker="rerun1-ok")])
+
+    class_doc = _class_doc(
+        [
+            {
+                "task_id": "retrieval:R1",
+                "trial": 1,
+                "budget_tokens": 2000,
+                "status": "error",
+                "failure_class": "preflight_semantic_index_missing",
+            }
+        ]
+    )
+
+    stitched, audit = stitch(
+        base_doc=base,
+        rerun_docs=[(tmp_path / "rerun1.json", rerun1)],
+        classification_doc=class_doc,
+        run_metadata_doc=None,
+        base_path=tmp_path / "base.json",
+    )
+
+    row = stitched["predictions"][0]
+    assert row["result"]["ranked_files"] == ["rerun1-ok:retrieval:R1"]
+    assert len(audit["replacements"]) == 1
+
+
+def test_stitch_preflight_reason_fallback_does_not_override_explicit_product_failure(tmp_path: Path):
+    mod = _load_mod()
+    stitch = mod["_stitch_predictions"]
+
+    base = _pred_doc(
+        [
+            _pred_row("retrieval:R1", status="error", marker="base-heuristic-preflight"),
+            _pred_row("retrieval:R2", status="error", marker="base-explicit-product"),
+        ]
+    )
+    rerun1 = _pred_doc(
+        [
+            _pred_row("retrieval:R1", status="ok", marker="rerun1-r1"),
+            _pred_row("retrieval:R2", status="ok", marker="rerun1-r2"),
+        ]
+    )
+
+    class_doc = _class_doc(
+        [
+            {
+                "task_id": "retrieval:R1",
+                "trial": 1,
+                "budget_tokens": 2000,
+                "status": "error",
+                "reason": "Semantic index not found for benchmark corpus",
+            },
+            {
+                "task_id": "retrieval:R2",
+                "trial": 1,
+                "budget_tokens": 2000,
+                "status": "error",
+                "failure_class": "product_failure",
+                "reason": "Semantic index not found for benchmark corpus",
+            },
+        ]
+    )
+
+    stitched, audit = stitch(
+        base_doc=base,
+        rerun_docs=[(tmp_path / "rerun1.json", rerun1)],
+        classification_doc=class_doc,
+        run_metadata_doc=None,
+        base_path=tmp_path / "base.json",
+    )
+
+    rows = stitched["predictions"]
+    assert rows[0]["result"]["ranked_files"] == ["rerun1-r1:retrieval:R1"]
+    assert rows[1]["result"]["ranked_files"] == ["base-explicit-product:retrieval:R2"]
+    assert len(audit["replacements"]) == 1
+
+
 def test_stitch_rejects_identity_mismatch(tmp_path: Path):
     mod = _load_mod()
     stitch = mod["_stitch_predictions"]

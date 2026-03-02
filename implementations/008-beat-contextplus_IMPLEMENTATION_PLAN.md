@@ -2,7 +2,7 @@
 
 - Status: In Progress (implementation complete for Phases 0-6; benchmark reruns pending)
 - Owner: TBD
-- Last updated: 2026-03-01
+- Last updated: 2026-03-02
 - Related spec: `specs/008-head-to-head-benchmark-llm-tldr-vs-contextplus.md`
 
 ## Objective
@@ -105,6 +105,9 @@ uv run pytest \
   - Speedup gate semantics should match `p50` latency (not mean) to align with phase pass/fail thresholds.
 - Markdown lint command caveat:
   - `ruff check` should be run on Python files only; passing `README.md` to ruff treats Markdown as Python input.
+- Stitch eligibility caveat:
+  - Missing semantic index failures can surface as generic `error/product_failure` rows unless classified explicitly.
+  - Stitch policy now allows deterministic replacement for explicit `preflight_semantic_index_missing` rows and a narrow fallback (`status=error` + reason contains `Semantic index not found`), while keeping unrelated product failures non-eligible.
 
 ## Definition Of Done (Program-Level)
 
@@ -181,7 +184,9 @@ A rerun row is eligible to replace a base row only if all identity fields match:
 - `seed`
 - prompt hash and provider `model_id`
 
-Only base rows classified as `provider_transport_runtime` are eligible for replacement.
+Base rows are eligible for replacement only when classified as either:
+- `provider_transport_runtime`, or
+- explicit `preflight_semantic_index_missing` (with fallback detection when explicit class is absent: `status=error` and reason contains `Semantic index not found`).
 
 ### Artifact Requirements
 
@@ -200,7 +205,7 @@ Only base rows classified as `provider_transport_runtime` are eligible for repla
 
 For each key (`tool`, `task_id`, `budget`, `trial`):
 
-1. Keep base row unless base row is classified `provider_transport_runtime`.
+1. Keep base row unless base row is classified `provider_transport_runtime` or `preflight_semantic_index_missing` (explicit or narrow fallback heuristic).
 2. For eligible keys, sort rerun candidates by `(rerun_index asc, completed_at_utc asc)`.
 3. Select the first candidate whose classification is not `provider_transport_runtime`.
 4. If no such candidate exists, keep base row and mark unresolved provider operational failure.
