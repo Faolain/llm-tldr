@@ -355,44 +355,125 @@ def _parse_complexity_result(text: str, parsed: Any) -> dict[str, Any]:
     return {"cyclomatic_complexity": 0}
 
 
-def _parse_data_flow_result(parsed: Any) -> dict[str, Any]:
-    flow_lines: list[int] = []
-    origin_line: int | None = None
+def _parse_data_flow_result(parsed: Any, *, variable: str | None = None) -> dict[str, Any]:
+    var_filter = variable.strip() if isinstance(variable, str) and variable.strip() else None
+
+    def _as_line(value: Any) -> int | None:
+        if isinstance(value, int):
+            return int(value)
+        return None
+
+    # Current `tldrf dfg` schema: {refs, edges, variables}.
+    has_dfg_shape = isinstance(parsed, dict) and any(k in parsed for k in ("refs", "edges", "variables"))
+    dfg_flow_lines: set[int] = set()
+    dfg_edge_def_lines: list[int] = []
+    dfg_ref_def_lines: list[int] = []
+
+    if isinstance(parsed, dict):
+        edges = parsed.get("edges")
+        if isinstance(edges, list):
+            for edge in edges:
+                if not isinstance(edge, dict):
+                    continue
+                if var_filter is not None and edge.get("var") != var_filter:
+                    continue
+                def_line = _as_line(edge.get("def_line"))
+                use_line = _as_line(edge.get("use_line"))
+                if def_line is not None:
+                    dfg_flow_lines.add(def_line)
+                    dfg_edge_def_lines.append(def_line)
+                if use_line is not None:
+                    dfg_flow_lines.add(use_line)
+
+        refs = parsed.get("refs")
+        if isinstance(refs, list):
+            for ref in refs:
+                if not isinstance(ref, dict):
+                    continue
+                if var_filter is not None and ref.get("name") != var_filter:
+                    continue
+                line = _as_line(ref.get("line"))
+                if line is None:
+                    continue
+                dfg_flow_lines.add(line)
+                ref_type = ref.get("type")
+                if not isinstance(ref_type, str):
+                    ref_type = ref.get("ref_type")
+                if isinstance(ref_type, str) and ref_type.lower() == "definition":
+                    dfg_ref_def_lines.append(line)
+
+    dfg_origin_line: int | None = None
+    if dfg_edge_def_lines:
+        dfg_origin_line = min(dfg_edge_def_lines)
+    elif dfg_ref_def_lines:
+        dfg_origin_line = min(dfg_ref_def_lines)
+
+    if has_dfg_shape:
+        if dfg_flow_lines or dfg_origin_line is not None:
+            return {
+                "origin_line": dfg_origin_line,
+                "flow_lines": sorted(dfg_flow_lines),
+            }
+        # Prefer variable-specific extraction over unfiltered fallbacks.
+        if var_filter is not None:
+            return {"origin_line": None, "flow_lines": []}
+
+    # Legacy compatibility:
+    # - {"origin_line": int, "flow_lines": [..]}
+    # - {"flow": [{"line": int, "event": "defined"|"used"}, ...]}
+    # - [{"line": int, "event": ...}, ...]
+    legacy_flow_lines: set[int] = set()
+    legacy_origin_line: int | None = None
+    legacy_defined_lines: list[int] = []
 
     if isinstance(parsed, dict):
         fl = parsed.get("flow_lines")
         if isinstance(fl, list):
-            flow_lines.extend([int(x) for x in fl if isinstance(x, int)])
+            for item in fl:
+                line = _as_line(item)
+                if line is not None:
+                    legacy_flow_lines.add(line)
 
-        origin = parsed.get("origin_line")
-        if isinstance(origin, int):
-            origin_line = int(origin)
+        origin = _as_line(parsed.get("origin_line"))
+        if origin is not None:
+            legacy_origin_line = origin
 
         flow = parsed.get("flow")
         if isinstance(flow, list):
             for event in flow:
                 if not isinstance(event, dict):
                     continue
-                ln = event.get("line")
-                if isinstance(ln, int):
-                    flow_lines.append(int(ln))
-                    if origin_line is None and event.get("event") == "defined":
-                        origin_line = int(ln)
+                line = _as_line(event.get("line"))
+                if line is None:
+                    continue
+                legacy_flow_lines.add(line)
+                ev = event.get("event")
+                if isinstance(ev, str) and ev.lower() == "defined":
+                    legacy_defined_lines.append(line)
 
     if isinstance(parsed, list):
         for event in parsed:
             if not isinstance(event, dict):
                 continue
-            ln = event.get("line")
-            if isinstance(ln, int):
-                flow_lines.append(int(ln))
-                if origin_line is None and event.get("event") == "defined":
-                    origin_line = int(ln)
+            line = _as_line(event.get("line"))
+            if line is None:
+                continue
+            legacy_flow_lines.add(line)
+            ev = event.get("event")
+            if isinstance(ev, str) and ev.lower() == "defined":
+                legacy_defined_lines.append(line)
 
-    return {"origin_line": origin_line, "flow_lines": sorted(set(flow_lines))}
+    if legacy_origin_line is None and legacy_defined_lines:
+        legacy_origin_line = min(legacy_defined_lines)
+    return {"origin_line": legacy_origin_line, "flow_lines": sorted(legacy_flow_lines)}
 
 
-def _result_from_output(category: str, text: str) -> dict[str, Any]:
+def _result_from_output(
+    category: str,
+    text: str,
+    *,
+    task: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     parsed = _extract_json_from_text(text)
     if category == "retrieval":
         return _parse_retrieval_result(text, parsed)
@@ -403,7 +484,14 @@ def _result_from_output(category: str, text: str) -> dict[str, Any]:
     if category == "complexity":
         return _parse_complexity_result(text, parsed)
     if category == "data_flow":
-        return _parse_data_flow_result(parsed)
+        variable = None
+        if isinstance(task, dict):
+            input_obj = task.get("input")
+            if isinstance(input_obj, dict):
+                raw_variable = input_obj.get("variable")
+                if isinstance(raw_variable, str) and raw_variable.strip():
+                    variable = raw_variable.strip()
+        return _parse_data_flow_result(parsed, variable=variable)
     return _default_result_for_category(category)
 
 
@@ -1105,7 +1193,7 @@ def main() -> int:
                 )
 
                 if final_status == "ok":
-                    result = _result_from_output(category, final_stdout)
+                    result = _result_from_output(category, final_stdout, task=task)
                     result = _apply_retrieval_rg_pattern_guard(
                         task=task,
                         corpus_root=corpus_root,

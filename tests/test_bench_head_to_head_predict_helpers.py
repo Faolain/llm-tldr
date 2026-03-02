@@ -1,3 +1,4 @@
+import json
 import runpy
 import sys
 from pathlib import Path
@@ -212,3 +213,97 @@ def test_retrieval_rg_pattern_guard_keeps_result_when_pattern_has_hits(tmp_path:
     )
 
     assert out == result
+
+
+def test_parse_data_flow_result_dfg_edges_for_target_variable():
+    mod = _load_mod()
+    parse_data_flow = mod["_parse_data_flow_result"]
+
+    parsed = {
+        "refs": [
+            {"name": "target", "type": "definition", "line": 8},
+            {"name": "target", "type": "use", "line": 14},
+            {"name": "other", "type": "definition", "line": 2},
+        ],
+        "edges": [
+            {"var": "target", "def_line": 12, "use_line": 16},
+            {"var": "target", "def_line": 10, "use_line": 14},
+            {"var": "other", "def_line": 2, "use_line": 3},
+        ],
+        "variables": ["target", "other"],
+    }
+
+    out = parse_data_flow(parsed, variable="target")
+    assert out == {
+        "origin_line": 10,
+        "flow_lines": [8, 10, 12, 14, 16],
+    }
+
+
+def test_parse_data_flow_result_refs_fallback_when_no_matching_edges():
+    mod = _load_mod()
+    parse_data_flow = mod["_parse_data_flow_result"]
+
+    parsed = {
+        "refs": [
+            {"name": "token", "type": "definition", "line": 11},
+            {"name": "token", "type": "definition", "line": 9},
+            {"name": "token", "type": "use", "line": 20},
+            {"name": "other", "type": "definition", "line": 1},
+        ],
+        "edges": [
+            {"var": "other", "def_line": 1, "use_line": 3},
+        ],
+        "variables": ["token", "other"],
+    }
+
+    out = parse_data_flow(parsed, variable="token")
+    assert out == {
+        "origin_line": 9,
+        "flow_lines": [9, 11, 20],
+    }
+
+
+def test_result_from_output_data_flow_uses_task_variable_filter():
+    mod = _load_mod()
+    result_from_output = mod["_result_from_output"]
+
+    payload = {
+        "refs": [
+            {"name": "needle", "type": "definition", "line": 28},
+            {"name": "needle", "type": "use", "line": 35},
+            {"name": "other", "type": "definition", "line": 5},
+        ],
+        "edges": [
+            {"var": "needle", "def_line": 30, "use_line": 33},
+            {"var": "other", "def_line": 5, "use_line": 6},
+        ],
+        "variables": ["needle", "other"],
+    }
+    task = {"category": "data_flow", "input": {"variable": "needle"}}
+
+    out = result_from_output("data_flow", json.dumps(payload), task=task)
+    assert out == {
+        "origin_line": 30,
+        "flow_lines": [28, 30, 33, 35],
+    }
+
+
+def test_parse_data_flow_result_legacy_flow_schema_still_works():
+    mod = _load_mod()
+    parse_data_flow = mod["_parse_data_flow_result"]
+
+    out = parse_data_flow({"origin_line": 41, "flow_lines": [44, 41, 44]}, variable="ignored")
+    assert out == {"origin_line": 41, "flow_lines": [41, 44]}
+
+    out2 = parse_data_flow(
+        {
+            "flow": [
+                {"line": 52, "event": "used"},
+                {"line": 51, "event": "defined"},
+                {"line": 50, "event": "defined"},
+            ]
+        },
+        variable="ignored",
+    )
+    assert out2 == {"origin_line": 50, "flow_lines": [50, 51, 52]}
