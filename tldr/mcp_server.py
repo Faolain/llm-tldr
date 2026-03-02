@@ -485,6 +485,7 @@ def semantic(
     project: str,
     query: str,
     k: int = 10,
+    budget_tokens: int | None = None,
     hybrid: bool = False,
     no_result_guard: str = "none",
     rg_pattern: str | None = None,
@@ -506,6 +507,7 @@ def semantic(
         project: Project root directory
         query: Natural language query
         k: Number of results to return
+        budget_tokens: Optional lane3 budget-aware retrieval control.
         hybrid: Enable deterministic lexical+semantic hybrid retrieval.
         no_result_guard: Optional guard mode ('none' or 'rg_empty').
         rg_pattern: Optional regex for lexical stage.
@@ -525,6 +527,7 @@ def semantic(
             "action": "search",
             "query": query,
             "k": k,
+            "budget_tokens": budget_tokens,
             "retrieval_mode": "hybrid" if bool(hybrid) else "semantic",
             "no_result_guard": no_result_guard,
             "rg_pattern": rg_pattern,

@@ -199,6 +199,12 @@ def _mean(xs: list[float]) -> float | None:
     return statistics.mean(xs) if xs else None
 
 
+def _effective_k_from_budget_tokens(k: int, *, budget_tokens: Any) -> int:
+    from tldr.semantic import _effective_k_from_budget_tokens as _semantic_effective_k
+
+    return int(_semantic_effective_k(k, budget_tokens=budget_tokens))
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Phase 5 retrieval-quality benchmarks (rg vs semantic vs hybrid).")
     group = ap.add_mutually_exclusive_group(required=True)
@@ -236,6 +242,12 @@ def main() -> int:
     ap.add_argument("--lane2-rerank-top-n", type=int, default=5)
     ap.add_argument("--lane2-max-latency-ms-p50-ratio", type=float, default=None)
     ap.add_argument("--lane2-max-payload-tokens-median-ratio", type=float, default=None)
+    ap.add_argument(
+        "--budget-tokens",
+        type=int,
+        default=None,
+        help="Optional lane3 budget-aware retrieval control (reference budget: 2000).",
+    )
     ap.add_argument("--out", default=None, help="Write JSON report to this path (default under benchmark/runs/).")
     args = ap.parse_args()
 
@@ -264,6 +276,9 @@ def main() -> int:
     if not ks:
         ks = [5, 10]
     max_k = max(ks)
+    effective_k = max_k
+    if args.budget_tokens is not None:
+        effective_k = _effective_k_from_budget_tokens(max_k, budget_tokens=args.budget_tokens)
 
     index_id = args.index or default_index_id
     index_ctx = get_index_context(
@@ -331,7 +346,7 @@ def main() -> int:
                 sem_time_s = 0.0
             else:
                 t0 = time.monotonic()
-                sem_rank = _semantic_rank_files(repo_root, index_ctx=index_ctx, query=q.query, k=max_k)
+                sem_rank = _semantic_rank_files(repo_root, index_ctx=index_ctx, query=q.query, k=effective_k)
                 sem_time_s = time.monotonic() - t0
 
         hybrid_rank: list[str] | None = None
@@ -357,6 +372,7 @@ def main() -> int:
                 rerank_top_n=int(args.lane2_rerank_top_n),
                 max_latency_ms_p50_ratio=args.lane2_max_latency_ms_p50_ratio,
                 max_payload_tokens_median_ratio=args.lane2_max_payload_tokens_median_ratio,
+                budget_tokens=args.budget_tokens,
             )
             lane2_rank = _rank_files_from_result_rows(lane2_rows)
 
@@ -458,6 +474,8 @@ def main() -> int:
             "cache_root": str(index_ctx.cache_root) if index_ctx.cache_root is not None else None,
             "index_id": index_ctx.index_id,
             "ks": ks,
+            "budget_tokens": args.budget_tokens,
+            "effective_k": int(effective_k),
             "rg_glob": glob_arg,
             "no_result_guard": no_result_guard,
             "lane2_enabled": bool(lane2_enabled),

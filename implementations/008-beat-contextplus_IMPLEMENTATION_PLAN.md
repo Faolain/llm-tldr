@@ -111,8 +111,10 @@ This track allows progress without executing run2/run3 immediately. It is explic
 - [x] Defer full 008 sign-off reruns (`run2/run3`) to optional section while comparison-first feature benchmarking continues.
 - [x] Complete lane2 loop end-to-end under deterministic constraints (no LLM calls):
   - red->green tests, retrieval-quality run, retrieval-segment h2h score/compare/assert, matrix export, and lane decision logging.
-- [ ] Start lane3 (budget-aware retrieval) using the same loop:
-  - lock `feature.budget-aware.v1`, add red tests, implement opt-in controls, run deterministic benchmarks, and append keep/rollback decision.
+- [x] Complete lane3 (budget-aware retrieval) using the same loop:
+  - locked `feature.budget-aware.v1`, added red->green tests, implemented opt-in controls, ran deterministic benchmarks, and appended keep/rollback decision.
+- [ ] Start lane4 (compound semantic+impact command/API) with the same loop:
+  - lock feature identity, add red tests, implement behind opt-in controls, run deterministic benchmarks, and append keep/rollback decision.
 
 ## Implementation Progress (2026-03-02)
 
@@ -557,13 +559,82 @@ Use this matrix to decide what to implement next and how to judge whether a port
 
       They can absolutely be combined, and they already are in lane2 profile (hybrid + abstain/rerank). The practical next move is tuning lane2 params (especially `abstain_threshold`/`abstain_empty`/`rerank_top_n`) to recover lane1 recall while keeping lane2 mrr/latency gains.
       ```
-- [ ] Budget-aware retrieval behavior:
+- [x] Budget-aware retrieval behavior:
   - owner: `token-efficiency`
-  - test-first files: `tests/test_bench_token_efficiency_helpers.py`
-  - implementation artifacts: token packing/selection changes in `scripts/bench_token_efficiency.py` and related retrieval budgeting helpers.
-  - before/after artifacts: budget `2000` required + optional `500/1000/5000` sensitivity rows in canonical matrix export.
-  - before row IDs: llm baseline + context baseline at `2000`; optional baseline rows at `500/1000/5000`.
-  - after row IDs: `llm-tldr|<post-change-tool-version>|feature.budget-aware.v1|sentence-transformers|<embedding_model>|<budget_tokens>|<run_id>`
+  - contract frozen with lane3 identity and opt-in-only behavior:
+    - `feature_set_id`: `feature.budget-aware.v1`
+    - profile: `benchmarks/head_to_head/tool_profiles/llm_tldr.budget_aware_lane3.v1.json`
+    - default behavior unchanged unless `--budget-tokens` is provided.
+  - red->green test-first lane3 coverage:
+    - `tests/test_semantic_hybrid_retrieval.py` (lane3 signature + deterministic budget->`effective_k` mapping + hybrid/semantic application tests).
+    - `tests/test_cli_semantic_hybrid_flags.py` (lane3 flag exposure/default/parse checks).
+    - `tests/test_bench_retrieval_quality_helpers.py` (budget propagation and protocol metadata checks).
+    - `tests/test_bench_head_to_head_tool_profiles_schema.py` (lane3 profile schema + retrieval template coverage).
+  - implementation artifacts:
+    - `tldr/semantic.py` (`_effective_k_from_budget_tokens`, lane3 `budget_tokens` plumbing in `semantic_search` and `hybrid_file_search`).
+    - `tldr/cli.py`, `tldr/daemon/core.py`, `tldr/mcp_server.py` (`budget_tokens` surface/plumbing).
+    - `scripts/bench_retrieval_quality.py` (lane3 budget control + protocol telemetry).
+  - deterministic retrieval-quality sweep (multi-budget, no LLM calls):
+    - `benchmark/runs/20260302-195057Z-retrieval-django-lane3-b500.json`
+    - `benchmark/runs/20260302-195057Z-retrieval-django-lane3-b1000.json`
+    - `benchmark/runs/20260302-195057Z-retrieval-django-lane3-b2000.json`
+    - `benchmark/runs/20260302-195057Z-retrieval-django-lane3-b5000.json`
+    - budget mapping observed in protocol: `500->effective_k=3`, `1000->5`, `2000->10`, `5000->25`.
+  - segment-scoped h2h (`retrieval@2000`, `trials=1..3`, no LLM calls):
+    - predictions + scoring:
+      - `benchmark/runs/h2h-llm-tldr-predictions-run1-budget-aware-lane3-retrieval-b2000-t123-segment.json`
+      - `benchmark/runs/h2h-failure-classification-run1-llm-tldr-budget-aware-lane3-retrieval-b2000-t123.json`
+      - `benchmark/runs/h2h-run-metadata-run1-llm-tldr-budget-aware-lane3-retrieval-b2000-t123.json`
+      - `benchmark/runs/h2h-llm-tldr-score-run1-budget-aware-lane3-retrieval-b2000-t123-segment.json`
+    - compares:
+      - `benchmark/runs/h2h-compare-run1-budget-aware-lane3-retrieval-b2000-t123-vs-contextplus-run1-segment-normalized-labels.json`
+      - `benchmark/runs/h2h-compare-run1-llm-tldr-budget-aware-lane3-vs-baseline-retrieval-b2000-t123-segment.json`
+      - `benchmark/runs/h2h-compare-run1-llm-tldr-budget-aware-lane3-vs-hybrid-lane1-retrieval-b2000-t123-segment.json`
+      - `benchmark/runs/h2h-compare-run1-llm-tldr-budget-aware-lane3-vs-abstain-rerank-lane2-retrieval-b2000-t123-segment.json`
+    - strict assert:
+      - `benchmark/runs/h2h-assert-run1-budget-aware-lane3-retrieval-b2000-t123-vs-contextplus-run1-segment-normalized-labels.json`
+      - interpretation: run-level strict gates pass (`runs[0].strict_gates_passed=true`), overall remains `false` only due `stability.two_of_three`.
+    - score (`budget=2000`, retrieval lane): `mrr=0.8741`, `recall@5=0.8772`, `precision@5=0.1754`, `fpr@5=0.0`, `payload_tokens_median=78.0`, `latency_ms_p50=4912.824`.
+    - delta vs llm baseline (`lane3 - baseline`): `mrr +0.2623`, `recall@5 +0.0877`, `precision@5 +0.0175`, `fpr@5 +0.0000`, `payload +24.5`, `latency -108.591ms`.
+    - delta vs `contextplus` (`lane3 - contextplus`): `mrr +0.6585`, `recall@5 +0.5789`, `precision@5 +0.1158`, `fpr@5 -1.0000`, `payload -251.0`, `latency -2804.283ms`.
+    - delta vs lane1 (`lane3 - lane1`): `mrr +0.0178`, `recall@5 -0.0526`, `precision@5 -0.0105`, `fpr@5 +0.0000`, `payload +0.0`, `latency -513.385ms`.
+    - delta vs lane2 (`lane3 - lane2`): `mrr +0.0000`, `recall@5 +0.0000`, `precision@5 +0.0000`, `fpr@5 +0.0000`, `payload +0.0`, `latency -76.198ms`.
+  - matrix export:
+    - `benchmark/runs/matrix/h2h-matrix-long-run1-budget-aware-lane3-retrieval-b2000-t123-vs-contextplus-run1-segment-20260302-202648Z.json`
+    - `benchmark/runs/matrix/h2h-matrix-long-run1-budget-aware-lane3-retrieval-b2000-t123-vs-contextplus-run1-segment-20260302-202648Z.csv`
+    - `benchmark/runs/matrix/008-canonical-matrix-run1-lane3-segment-snapshot-20260302-202648Z.md`
+    - `benchmark/runs/matrix/008-canonical-matrix-run1-lane3-segment-pivot-by-budget-20260302-202648Z.md`
+  - before row IDs:
+    - `llm-tldr|bbfee65bc8cc5d5051edb447d689e7ebed987a7c|baseline.run1.fixed.stitched.allowlist|sentence-transformers|profile_unpinned|2000|run1-fixed-stitched-allowlist-20260302T062602Z`
+    - `contextplus|4d7a6c37847c698c850d4b412ddb603dfc47257e|baseline.run1|unknown|unknown|2000|run1-segment-retrieval-b2000`
+  - after row IDs:
+    - `llm-tldr|8d5f6e9d9b30eb7bdeed9075b7897fc8ae0a4036|feature.budget-aware.v1|sentence-transformers|profile_unpinned|2000|run1-budget-aware-lane3-retrieval-b2000-t123-segment`
+    - `contextplus|4d7a6c37847c698c850d4b412ddb603dfc47257e|baseline.run1|unknown|unknown|2000|run1-segment-retrieval-b2000`
+  - gotchas/learnings (append-only):
+    - `scripts/bench_h2h_export_matrix_run1.py` currently requires compare labels to align with tool labels and snapshot/pivot defaults (`llm-tldr`/`contextplus`), so a normalized-label compare/assert artifact was required for matrix export.
+    - full `semantic index --rebuild` for `django` is expensive and was not required for lane3 correctness; existing indexed artifacts were sufficient for deterministic lane3 evaluation.
+    - at primary budget `2000`, lane3 preserves requested `k` by design, so quality parity with lane2 at `2000` is expected.
+  - lane3 decision (Phase 5): `KEEP` (comparison-first track; provisional until full `stability.two_of_three` sign-off runs are completed).
+  - lane3 parity explanation (verbatim-style, requested):
+    ```text
+    You are right. Lane3 mostly added budget sensitivity plumbing, not a new retrieval strategy at budget 2000.
+
+    What lane3 changed in code:
+    - Added budget-to-k mapper in semantic core (`_effective_k_from_budget_tokens`).
+    - Wired `budget_tokens` through hybrid and semantic search paths.
+    - Exposed CLI flag `--budget-tokens`.
+    - Plumbed through daemon and MCP surfaces.
+    - Added lane3 tool profile with `--budget-tokens {budget_tokens}`.
+    - Lane2 profile does not pass budget tokens.
+
+    Why performance is almost the same:
+    - Lane comparison here was at budget 2000.
+    - With reference budget 2000, lane3 maps `effective_k` to the same `k` lane2 already used.
+    - Same retrieval knobs then run (`hybrid + guard + abstain + rerank`), so quality is effectively identical.
+    - Small latency differences are runtime variance, not an algorithmic change.
+
+    So lane3 at 2000 is expected to be near lane2 parity; lane3’s effect appears when budget is not 2000.
+    ```
 - [ ] Compound semantic+impact command/API:
   - owner: `analysis-core`
   - test-first files: impact/semantic compound schema and fixture tests

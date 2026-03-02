@@ -557,6 +557,15 @@ Device Selection:
         help="Optional lane2 regression bound metadata for payload median-token ratio.",
     )
     search_p.add_argument(
+        "--budget-tokens",
+        type=int,
+        default=None,
+        help=(
+            "Optional lane3 budget-aware retrieval control. "
+            "Maps to effective-k using reference budget 2000."
+        ),
+    )
+    search_p.add_argument(
         "--model",
         default=None,
         help="Embedding model (uses index model if not specified)",
@@ -1757,6 +1766,7 @@ def main():
                     rerank_top_n=int(args.rerank_top_n),
                     max_latency_ms_p50_ratio=args.max_latency_ms_p50_ratio,
                     max_payload_tokens_median_ratio=args.max_payload_tokens_median_ratio,
+                    budget_tokens=args.budget_tokens,
                 )
                 print(json.dumps(results, indent=2))
 

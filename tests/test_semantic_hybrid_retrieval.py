@@ -85,9 +85,73 @@ def test_semantic_search_lane2_signature_exposes_abstain_rerank_and_bounds() -> 
         "rerank_top_n",
         "max_latency_ms_p50_ratio",
         "max_payload_tokens_median_ratio",
+        "budget_tokens",
     }
     missing = expected - params
     assert not missing, f"missing lane2 semantic_search kwargs: {sorted(missing)}"
+
+
+def test_lane3_effective_k_mapping_is_deterministic_and_clamped() -> None:
+    map_k = semantic._effective_k_from_budget_tokens
+
+    assert map_k(10, budget_tokens=2000) == 10
+    assert map_k(10, budget_tokens=1000) == 5
+    assert map_k(10, budget_tokens=500) == 3
+    assert map_k(10, budget_tokens=5000) == 25
+    assert map_k(10, budget_tokens=500000) == 50
+
+    assert map_k(10, budget_tokens=0) == 10
+    assert map_k(10, budget_tokens=-1) == 10
+    assert map_k(10, budget_tokens="bad") == 10
+
+
+def test_semantic_search_lane3_budget_tokens_scales_effective_k(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    observed: dict[str, int] = {}
+
+    def _fake_semantic_unit_search(*args, **kwargs):
+        observed["k"] = int(kwargs["k"])
+        return []
+
+    monkeypatch.setattr(semantic, "_semantic_unit_search", _fake_semantic_unit_search)
+
+    out = semantic.semantic_search(
+        str(tmp_path),
+        query="query",
+        k=10,
+        budget_tokens=500,
+    )
+
+    assert out == []
+    assert observed["k"] == 3
+
+
+def test_hybrid_search_lane3_budget_tokens_scales_return_count_and_semantic_k(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    lexical = [f"pkg/file_{i:02d}.py" for i in range(1, 21)]
+    semantic_rows = [{"file": fp, "line": idx} for idx, fp in enumerate(reversed(lexical), start=1)]
+    observed: dict[str, int] = {}
+
+    monkeypatch.setattr(semantic, "_rg_rank_files", lambda *_, **__: lexical)
+
+    def _fake_semantic_unit_search(*args, **kwargs):
+        observed["k"] = int(kwargs["k"])
+        return semantic_rows
+
+    monkeypatch.setattr(semantic, "_semantic_unit_search", _fake_semantic_unit_search)
+
+    out = semantic.hybrid_file_search(
+        str(tmp_path),
+        query="query",
+        k=10,
+        no_result_guard="none",
+        budget_tokens=500,
+    )
+
+    assert len(out) == 3
+    assert observed["k"] == 15
 
 
 def test_hybrid_search_rows_include_lane2_confidence_and_rerank_metadata(

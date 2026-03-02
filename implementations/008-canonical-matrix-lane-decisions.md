@@ -49,7 +49,7 @@ This log records keep/rollback outcomes for feature lanes using pinned matrix ro
   - The run1 snapshot/pivot markdowns now track the latest exported matrix view for active comparison work.
   - Lane1 baseline evidence remains pinned by its own run-stamped matrix artifacts and row IDs in this log.
 
-## Lane2 Handoff (Active Next Loop)
+## Lane2 Handoff (Historical)
 
 1. Lock lane2 profile identity (`feature.abstain-rerank.v1`) and retrieval command contract.
 2. Add failing tests for abstention threshold behavior, optional rerank behavior, and bounded latency/payload regression.
@@ -104,10 +104,70 @@ This log records keep/rollback outcomes for feature lanes using pinned matrix ro
   - Keep decision basis: 008 canonical gate surface is h2h segment at budget `2000`; lane2 remains superior to baseline/contextplus and passes run-level strict gates.
   - Drawback to carry forward into lane3: lane2 quality tradeoff against lane1 (`recall/precision` drop) must be monitored when budget-aware behavior is added.
 
-## Lane3 Handoff (Active Next Loop)
+## Lane3: Budget-Aware Retrieval (Phase 5, 2026-03-02)
 
-1. Lock lane3 profile identity (`feature.budget-aware.v1`) and retrieval command contract with budget-variant behavior explicit in profile/template flags.
-2. Add red tests for budget-driven retrieval packing behavior (non-decreasing quality across budgets + payload scaling + no violations).
-3. Implement budget-aware retrieval path behind opt-in controls with default behavior unchanged.
-4. Run deterministic loop: retrieval-quality (multi-budget) + retrieval segment h2h at budget `2000` + matrix export.
-5. Append lane3 keep/rollback decision in this log with before/after row IDs and drawback accounting.
+- Outcome: `KEEP` (comparison-first track; provisional until full `stability.two_of_three` sign-off runs are completed).
+- Contract identity:
+  - `feature_set_id`: `feature.budget-aware.v1`
+  - profile: `benchmarks/head_to_head/tool_profiles/llm_tldr.budget_aware_lane3.v1.json`
+  - default behavior unchanged unless `--budget-tokens` is provided.
+- Before row IDs:
+  - `llm-tldr|bbfee65bc8cc5d5051edb447d689e7ebed987a7c|baseline.run1.fixed.stitched.allowlist|sentence-transformers|profile_unpinned|2000|run1-fixed-stitched-allowlist-20260302T062602Z`
+  - `llm-tldr|0ead1a11739004a2b12b1d439f10a29a03c64296|feature.abstain-rerank.v1|sentence-transformers|profile_unpinned|2000|run1-abstain-rerank-lane2-retrieval-b2000-t123-segment`
+  - `contextplus|4d7a6c37847c698c850d4b412ddb603dfc47257e|baseline.run1|unknown|unknown|2000|run1-segment-retrieval-b2000`
+- After row IDs:
+  - `llm-tldr|8d5f6e9d9b30eb7bdeed9075b7897fc8ae0a4036|feature.budget-aware.v1|sentence-transformers|profile_unpinned|2000|run1-budget-aware-lane3-retrieval-b2000-t123-segment`
+  - `contextplus|4d7a6c37847c698c850d4b412ddb603dfc47257e|baseline.run1|unknown|unknown|2000|run1-segment-retrieval-b2000`
+- Decision evidence artifacts:
+  - retrieval-quality multi-budget sweep:
+    - `benchmark/runs/20260302-195057Z-retrieval-django-lane3-b500.json`
+    - `benchmark/runs/20260302-195057Z-retrieval-django-lane3-b1000.json`
+    - `benchmark/runs/20260302-195057Z-retrieval-django-lane3-b2000.json`
+    - `benchmark/runs/20260302-195057Z-retrieval-django-lane3-b5000.json`
+  - h2h segment predictions + scoring:
+    - `benchmark/runs/h2h-llm-tldr-predictions-run1-budget-aware-lane3-retrieval-b2000-t123-segment.json`
+    - `benchmark/runs/h2h-failure-classification-run1-llm-tldr-budget-aware-lane3-retrieval-b2000-t123.json`
+    - `benchmark/runs/h2h-run-metadata-run1-llm-tldr-budget-aware-lane3-retrieval-b2000-t123.json`
+    - `benchmark/runs/h2h-llm-tldr-score-run1-budget-aware-lane3-retrieval-b2000-t123-segment.json`
+  - compares:
+    - `benchmark/runs/h2h-compare-run1-budget-aware-lane3-retrieval-b2000-t123-vs-contextplus-run1-segment-normalized-labels.json`
+    - `benchmark/runs/h2h-compare-run1-llm-tldr-budget-aware-lane3-vs-baseline-retrieval-b2000-t123-segment.json`
+    - `benchmark/runs/h2h-compare-run1-llm-tldr-budget-aware-lane3-vs-hybrid-lane1-retrieval-b2000-t123-segment.json`
+    - `benchmark/runs/h2h-compare-run1-llm-tldr-budget-aware-lane3-vs-abstain-rerank-lane2-retrieval-b2000-t123-segment.json`
+  - strict assert:
+    - `benchmark/runs/h2h-assert-run1-budget-aware-lane3-retrieval-b2000-t123-vs-contextplus-run1-segment-normalized-labels.json`
+  - matrix export:
+    - `benchmark/runs/matrix/h2h-matrix-long-run1-budget-aware-lane3-retrieval-b2000-t123-vs-contextplus-run1-segment-20260302-202648Z.json`
+    - `benchmark/runs/matrix/h2h-matrix-long-run1-budget-aware-lane3-retrieval-b2000-t123-vs-contextplus-run1-segment-20260302-202648Z.csv`
+    - `benchmark/runs/matrix/008-canonical-matrix-run1-lane3-segment-snapshot-20260302-202648Z.md`
+    - `benchmark/runs/matrix/008-canonical-matrix-run1-lane3-segment-pivot-by-budget-20260302-202648Z.md`
+- Gate interpretation:
+  - Per-run strict gates passed: `runs[0].strict_gates_passed=true`.
+  - Overall assert remains false only because `stability.two_of_three=false` with reason `insufficient_runs_for_stability_check`.
+
+### Lane3 Comparison Table (Retrieval Segment, Budget 2000, Trials 1..3)
+
+| Metric | llm-tldr lane3 | llm-tldr lane2 | llm-tldr lane1 | llm-tldr baseline | contextplus baseline | lane3 - lane2 | lane3 - lane1 | lane3 - baseline | lane3 - contextplus |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `mrr_mean` | 0.8741 | 0.8741 | 0.8563 | 0.6119 | 0.2156 | +0.0000 | +0.0178 | +0.2623 | +0.6585 |
+| `recall@5_mean` | 0.8772 | 0.8772 | 0.9298 | 0.7895 | 0.2982 | +0.0000 | -0.0526 | +0.0877 | +0.5789 |
+| `precision@5_mean` | 0.1754 | 0.1754 | 0.1860 | 0.1579 | 0.0596 | +0.0000 | -0.0105 | +0.0175 | +0.1158 |
+| `fpr@5_mean` | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 1.0000 | +0.0000 | +0.0000 | +0.0000 | -1.0000 |
+| `payload_tokens_median` | 78.0 | 78.0 | 78.0 | 53.5 | 329.0 | +0.0 | +0.0 | +24.5 | -251.0 |
+| `latency_ms_p50` | 4912.824 | 4989.022 | 5426.209 | 5021.415 | 7717.107 | -76.198 | -513.385 | -108.591 | -2804.283 |
+
+- Rationale summary:
+  - Versus `contextplus`: lane3 wins all primary retrieval metrics (`5/5`) with clean run-validity (`timeout/error/budget_violation=0`).
+  - Versus llm baseline: lane3 wins `4/5` primary metrics (all except payload), while keeping `fpr@5=0`.
+  - Versus lane1: lane3 improves `mrr_mean` and latency, with flat payload/`fpr@5`, but gives up `recall@5` and `precision@5`.
+  - Versus lane2: lane3 is quality/payload-equivalent at budget `2000` and improves latency (`-76.198ms`).
+  - Budget-sensitivity diagnostic: lane3 retrieval-quality run showed budget-varying `effective_k` (`500->3`, `1000->5`, `2000->10`, `5000->25`) with `fpr@5=0.0` across budgets.
+  - Drawback observed: matrix export currently depends on compare/assert label alignment with snapshot defaults (`llm-tldr`/`contextplus`), so a normalized-label compare/assert artifact was required.
+
+## Lane4 Handoff (Active Next Loop)
+
+1. Lock lane4 profile identity (`feature.compound-semantic-impact.v1`) and command contract.
+2. Add red tests for compound schema, partial-failure handling, and latency envelope.
+3. Implement compound semantic+impact path behind opt-in controls with default behavior unchanged.
+4. Run deterministic loop: compound benchmark + retrieval regression checks + retrieval segment h2h at budget `2000`.
+5. Append lane4 keep/rollback decision in this log with before/after row IDs and drawback accounting.

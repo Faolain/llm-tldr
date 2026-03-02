@@ -55,6 +55,9 @@ SUPPORTED_MODELS = {
 
 DEFAULT_MODEL = "bge-large-en-v1.5"
 
+LANE3_REFERENCE_BUDGET_TOKENS = 2000
+LANE3_MAX_EFFECTIVE_K_MULTIPLIER = 5
+
 # Project root markers - files that indicate a project root
 PROJECT_ROOT_MARKERS = [".git", "pyproject.toml", "package.json", "Cargo.toml", "go.mod", ".tldr"]
 
@@ -1497,6 +1500,43 @@ def _safe_float(value: Any) -> Optional[float]:
         return None
 
 
+def _safe_int(value: Any) -> Optional[int]:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _effective_k_from_budget_tokens(
+    k: Any,
+    *,
+    budget_tokens: Any,
+    reference_budget_tokens: int = LANE3_REFERENCE_BUDGET_TOKENS,
+) -> int:
+    """Deterministically map budget_tokens to an effective retrieval k.
+
+    - Reference budget (2000) preserves the requested k.
+    - Invalid/non-positive budgets safely fall back to the requested k.
+    - Result is clamped to [1, requested_k * LANE3_MAX_EFFECTIVE_K_MULTIPLIER].
+    """
+    requested_k = _safe_int(k)
+    if requested_k is None or requested_k <= 0:
+        requested_k = 1
+
+    budget = _safe_int(budget_tokens)
+    if budget is None or budget <= 0:
+        return int(requested_k)
+
+    reference = _safe_int(reference_budget_tokens)
+    if reference is None or reference <= 0:
+        reference = LANE3_REFERENCE_BUDGET_TOKENS
+
+    # Integer half-up rounding avoids platform-dependent float edge cases.
+    scaled = int(((requested_k * budget) + (reference // 2)) // reference)
+    max_k = max(int(requested_k), int(requested_k) * LANE3_MAX_EFFECTIVE_K_MULTIPLIER)
+    return max(1, min(max_k, scaled))
+
+
 def _semantic_file_scores(results: List[dict]) -> dict[str, float]:
     out: dict[str, float] = {}
     for item in results or []:
@@ -1674,12 +1714,17 @@ def hybrid_file_search(
     rerank_top_n: int = 5,
     max_latency_ms_p50_ratio: Optional[float] = None,
     max_payload_tokens_median_ratio: Optional[float] = None,
+    budget_tokens: Optional[int] = None,
 ) -> List[dict]:
     """Hybrid file retrieval using lexical + semantic rank fusion."""
     if not query or not query.strip():
         return []
 
-    if k <= 0:
+    effective_k = k
+    if budget_tokens is not None:
+        effective_k = _effective_k_from_budget_tokens(k, budget_tokens=budget_tokens)
+
+    if effective_k <= 0:
         return []
 
     if no_result_guard not in {"none", "rg_empty"}:
@@ -1698,7 +1743,7 @@ def hybrid_file_search(
     if no_result_guard == "rg_empty" and not lexical_rank:
         return []
 
-    semantic_k = max(int(k), int(k) * 5)
+    semantic_k = max(int(effective_k), int(effective_k) * 5)
     semantic_results = _semantic_unit_search(
         project_path,
         query,
@@ -1719,7 +1764,7 @@ def hybrid_file_search(
     semantic_pos = {fp: i for i, fp in enumerate(semantic_rank, start=1)}
 
     out: List[dict] = []
-    for rank, file_path in enumerate(fused_rank[: int(k)], start=1):
+    for rank, file_path in enumerate(fused_rank[: int(effective_k)], start=1):
         out.append(
             {
                 "file": file_path,
@@ -1768,6 +1813,7 @@ def semantic_search(
     rerank_top_n: int = 5,
     max_latency_ms_p50_ratio: Optional[float] = None,
     max_payload_tokens_median_ratio: Optional[float] = None,
+    budget_tokens: Optional[int] = None,
 ) -> List[dict]:
     """Search for code semantically or with hybrid lexical+semantic retrieval.
 
@@ -1799,6 +1845,7 @@ def semantic_search(
             rerank_top_n=rerank_top_n,
             max_latency_ms_p50_ratio=max_latency_ms_p50_ratio,
             max_payload_tokens_median_ratio=max_payload_tokens_median_ratio,
+            budget_tokens=budget_tokens,
         )
 
     # Guard mode is opt-in for semantic mode too (helps reduce negative-query FPR).
@@ -1815,10 +1862,14 @@ def semantic_search(
         if not lexical_rank:
             return []
 
+    effective_k = k
+    if budget_tokens is not None:
+        effective_k = _effective_k_from_budget_tokens(k, budget_tokens=budget_tokens)
+
     results = _semantic_unit_search(
         project_path,
         query,
-        k=k,
+        k=effective_k,
         expand_graph=expand_graph,
         model=model,
         device=device,

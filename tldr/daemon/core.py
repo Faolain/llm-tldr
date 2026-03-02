@@ -187,6 +187,7 @@ class TLDRDaemon:
             "rerank_top_n": 5,
             "max_latency_ms_p50_ratio": None,
             "max_payload_tokens_median_ratio": None,
+            "budget_tokens": None,
         }
 
         # Try Claude settings first
@@ -871,6 +872,14 @@ class TLDRDaemon:
                     except (TypeError, ValueError):
                         return None
 
+                def _coerce_optional_int(value: Any) -> int | None:
+                    if value is None:
+                        return None
+                    try:
+                        return int(value)
+                    except (TypeError, ValueError):
+                        return None
+
                 query = command.get("query")
                 if not query:
                     return {"status": "error", "message": "Missing required parameter: query"}
@@ -904,6 +913,10 @@ class TLDRDaemon:
                     "max_payload_tokens_median_ratio",
                     self._semantic_config.get("max_payload_tokens_median_ratio"),
                 )
+                budget_tokens = command.get(
+                    "budget_tokens",
+                    self._semantic_config.get("budget_tokens"),
+                )
                 results = semantic_search(
                     str(self.project),
                     query,
@@ -921,6 +934,7 @@ class TLDRDaemon:
                     max_payload_tokens_median_ratio=_coerce_optional_float(
                         max_payload_tokens_median_ratio
                     ),
+                    budget_tokens=_coerce_optional_int(budget_tokens),
                     index_paths=self.index_paths,
                     index_config=self.index_config,
                 )

@@ -60,6 +60,7 @@ def test_semantic_search_hybrid_flags_default_to_legacy_behavior() -> None:
     assert args.rg_pattern is None
     assert args.rg_glob is None
     assert args.rrf_k == 60
+    assert args.budget_tokens is None
 
 
 def test_semantic_search_lane2_confidence_and_rerank_flags_exposed() -> None:
@@ -82,6 +83,11 @@ def test_semantic_search_lane2_regression_bound_flags_exposed() -> None:
     }
     missing = expected - option_strings
     assert not missing, f"missing lane2 regression bound flags: {sorted(missing)}"
+
+
+def test_semantic_search_lane3_budget_flag_exposed() -> None:
+    option_strings = _semantic_search_option_strings()
+    assert "--budget-tokens" in option_strings
 
 
 def test_semantic_search_lane2_flags_parse_values() -> None:
@@ -111,3 +117,19 @@ def test_semantic_search_lane2_flags_parse_values() -> None:
     assert args.rerank_top_n == 8
     assert args.max_latency_ms_p50_ratio == 1.15
     assert args.max_payload_tokens_median_ratio == 1.20
+
+
+def test_semantic_search_lane3_budget_flag_parses_value() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "semantic",
+            "search",
+            "query text",
+            "--hybrid",
+            "--budget-tokens",
+            "1500",
+        ]
+    )
+
+    assert args.budget_tokens == 1500
