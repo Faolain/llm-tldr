@@ -36,6 +36,7 @@ This log records keep/rollback outcomes for feature lanes using pinned matrix ro
 | `fpr@5_mean` | 0.0000 | 0.0000 | 1.0000 | +0.0000 | -1.0000 |
 | `payload_tokens_median` | 78.0 | 53.5 | 329.0 | +24.5 | -251.0 |
 | `latency_ms_p50` | 5426.209 | 5021.415 | 7717.107 | +404.794 | -2290.898 |
+| Winner (5 primary metrics) | `llm-tldr-hybrid-lane1` vs `contextplus` | - | `llm-tldr-hybrid-lane1` vs `contextplus` | `llm-tldr-hybrid-lane1` wins `3/5` vs baseline | `llm-tldr-hybrid-lane1` wins `5/5` vs contextplus |
 
 - Rationale summary:
   - Quality: lane1 wins all primary metrics (`5/5`) with large margins (`mrr +0.6407`, `recall@5 +0.6316`, `precision@5 +0.1263`).
