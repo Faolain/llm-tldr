@@ -8,6 +8,7 @@ def _assert_profile_shape(path: Path):
     assert data.get("schema_version") == 1
     assert data.get("suite_id") == "h2h_llm_tldr_vs_contextplus_v1"
     assert isinstance(data.get("tool_id"), str) and data.get("tool_id")
+    assert isinstance(data.get("feature_set_id"), str) and data.get("feature_set_id")
 
     caps = data.get("capabilities")
     assert isinstance(caps, dict)
@@ -32,6 +33,19 @@ def test_head_to_head_tool_profiles_schema():
 
     _assert_profile_shape(llm_tldr)
     _assert_profile_shape(contextplus)
+
+
+def test_lane1_llm_tldr_profile_schema():
+    repo_root = Path(__file__).resolve().parents[1]
+    lane1 = (
+        repo_root
+        / "benchmarks"
+        / "head_to_head"
+        / "tool_profiles"
+        / "llm_tldr.hybrid_lane1.v1.json"
+    )
+
+    _assert_profile_shape(lane1)
 
 
 def test_contextplus_profile_is_real_profile_not_template():

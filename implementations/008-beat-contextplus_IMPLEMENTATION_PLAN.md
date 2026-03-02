@@ -35,14 +35,19 @@ Make `llm-tldr` measurably better than `contextplus` using the existing neutral 
 - [x] Seed canonical benchmark matrix with run1-fixed baseline values + pinned artifact references for `llm-tldr` and `contextplus`.
 - [x] Add feature-porting hypothesis matrix for six candidate lanes (hybrid, abstention/rerank, budget-aware retrieval, compound semantic+impact, navigate/clustering, Ollama backend).
 - [x] Add row-eligibility integrity + deterministic stitch policies that keep matrix rows auditable and comparable.
-- [ ] Add per-feature execution ownership in this plan (`owner`, `test-first files`, `implementation artifacts`, `before/after row IDs`).
-- [ ] Promote canonical row identity to include tool revision axes (`tool`, `tool_version`, `feature_set_id`, `embedding_backend`, `embedding_model`, `budget_tokens`, `run_id`).
-- [ ] Populate holistic metric columns (below) for existing run1 rows at budgets `500/1000/2000/5000`.
-- [ ] Export canonical long-format matrix artifact (`csv`/`json`) for all rows so dashboards and pivots are deterministic.
-- [ ] After each completed run or stitched refresh, update human-readable matrix views:
+- [x] Add per-feature execution ownership in this plan (`owner`, `test-first files`, `implementation artifacts`, `before/after row IDs`).
+- [x] Promote canonical row identity to include tool revision axes (`tool`, `tool_version`, `feature_set_id`, `embedding_backend`, `embedding_model`, `budget_tokens`, `run_id`).
+- [x] Populate holistic metric columns (below) for existing run1 rows at budget `2000` (required), with optional budget-sensitivity rows for `500/1000/5000`.
+- [x] Export canonical long-format matrix artifact (`csv`/`json`) for all rows so dashboards and pivots are deterministic.
+  - export script: `scripts/bench_h2h_export_matrix_run1.py`
+  - `benchmark/runs/matrix/h2h-matrix-long-run1-fixed-stitched-allowlist-20260302T062602Z.csv`
+  - `benchmark/runs/matrix/h2h-matrix-long-run1-fixed-stitched-allowlist-20260302T062602Z.json`
+- [x] After each completed run or stitched refresh, update human-readable matrix views:
   - `implementations/008-canonical-matrix-run1-snapshot.md`
   - `implementations/008-canonical-matrix-run1-pivot-by-budget.md`
   - and append a new run-stamped matrix artifact under `benchmark/runs/matrix/`.
+- [x] Phase 4 lane1 hybrid confirmation executed as a deterministic retrieval-only segment (`budget=2000`, `trials=1..3`) and recorded with score/compare/assert artifacts.
+- [x] Phase 5 lane1 keep/rollback decision recorded in canonical matrix artifacts + lane decision log; execution focus moved to lane2.
 - [ ] For each new feature implementation, append a before/after delta row with explicit keep/rollback decision.
 
 Note:
@@ -254,14 +259,52 @@ How this matrix is used:
    - `tool x tool_version x feature_set_id x embedding_backend x embedding_model x feature_lane x budget_tokens x run_id`.
 2. Fill values from pinned artifacts only (`score`, `compare`, `assert`, plus run metadata/classification where applicable).
 3. Port a feature only when the candidate row improves the target tradeoff without violating run-validity gates.
-4. Budgets are first-class and required in canonical comparison (`500/1000/2000/5000` minimum); `2000` remains the primary winner gate, but porting decisions must review all budgets.
+4. Budget `2000` is required for comparison-first decisions in this active track.
+5. Budget-sensitivity rows for `500/1000/5000` are optional in this track and may be run later.
+6. Full multi-budget sweeps remain part of deferred full-signoff work.
 
 | Tool | Feature lane | Budget tokens | Quality metrics (higher is better) | Latency p50 ms (lower is better) | Cost proxy: payload_tokens_median (lower is better) | Run-validity snapshot (`timeout/error/budget_violation`) | Evidence artifact(s) | Porting decision |
 | --- | --- | --- | --- | ---: | ---: | --- | --- | --- |
 | `llm-tldr` | Retrieval (common lane) | `2000` | `mrr_mean=0.6119`, `recall@5=0.7895`, `precision@5=0.1579` | `5021.415` | `53.5` | `0 / 0 / 0` (run1-fixed) | `benchmark/runs/h2h-llm-tldr-score-run1-fixed-stitched-allowlist-20260302T062602Z.json`; `benchmark/runs/h2h-assert-run1-fixed-stitched-allowlist-20260302T062602Z.json` | Keep as baseline winner lane (provisional until `2/3` full-run stability pass) |
-| `contextplus` | Retrieval (common lane) | `2000` | `mrr_mean=0.2156`, `recall@5=0.2982`, `precision@5=0.0596` | `7717.107` | `329` | strict-gate failure on `error_rate` in run1-fixed | `benchmark/runs/h2h-contextplus-score-run1-fixed.json`; `benchmark/runs/h2h-assert-run1-fixed-stitched-allowlist-20260302T062602Z.json` | Port only ideas that improve quality/efficiency without inheriting reliability failures |
+| `contextplus` | Retrieval (common lane) | `2000` | `mrr_mean=0.2156`, `recall@5=0.2982`, `precision@5=0.0596` | `7717.107` | `329` | strict-gate failure on `error_rate` in run1-fixed comparison bundle | `benchmark/runs/h2h-contextplus-score-run1.json`; `benchmark/runs/h2h-assert-run1-fixed-stitched-allowlist-20260302T062602Z.json` | Port only ideas that improve quality/efficiency without inheriting reliability failures |
 | `future-tool-A` (placeholder) | Retrieval (common lane) | `2000` | `TBD from pinned score artifact` | `TBD` | `TBD` | `TBD` | `benchmark/runs/h2h-future-tool-A-score-<run>.json`; `benchmark/runs/h2h-assert-<run>.json` | Evaluate against same gates before any porting decision |
 | `future-tool-A` (placeholder) | Non-common lane feature (for example semantic navigation) | `2000` | lane-specific metric + mapped proxy to common-lane quality | `TBD` | `TBD` | `TBD` | `benchmark/runs/<feature>-future-tool-A-<run>.json` + mapped h2h compare note | Port only if differentiated value is measurable and does not regress common-lane gates |
+
+### Canonical Run1 Row IDs (Exported)
+
+Primary required rows (`budget_tokens=2000`):
+
+- `llm-tldr|bbfee65bc8cc5d5051edb447d689e7ebed987a7c|baseline.run1.fixed.stitched.allowlist|sentence-transformers|profile_unpinned|2000|run1-fixed-stitched-allowlist-20260302T062602Z`
+- `contextplus|b42853d7c2a2018f2d4376c664db30d65ea1af23|baseline.run1|unknown|unknown|2000|run1`
+
+Optional sensitivity rows (`budget_tokens` in `500/1000/5000`) are explicitly marked with:
+
+- `row_scope = optional_budget_sensitivity`
+- `is_optional_budget_row = true`
+
+in:
+
+- `benchmark/runs/matrix/h2h-matrix-long-run1-fixed-stitched-allowlist-20260302T062602Z.json`
+- `benchmark/runs/matrix/h2h-matrix-long-run1-fixed-stitched-allowlist-20260302T062602Z.csv`
+
+### Lane1 Segment Decision Row IDs (Phase 5)
+
+Before row IDs (run1 baseline rows at `budget_tokens=2000`):
+
+- `llm-tldr|bbfee65bc8cc5d5051edb447d689e7ebed987a7c|baseline.run1.fixed.stitched.allowlist|sentence-transformers|profile_unpinned|2000|run1-fixed-stitched-allowlist-20260302T062602Z`
+- `contextplus|b42853d7c2a2018f2d4376c664db30d65ea1af23|baseline.run1|unknown|unknown|2000|run1`
+
+After row IDs (segment-scoped lane1 confirmation export):
+
+- `llm-tldr|4d7a6c37847c698c850d4b412ddb603dfc47257e|feature.hybrid.v1|sentence-transformers|profile_unpinned|2000|run1-hybrid-lane1-retrieval-b2000-t123-segment`
+- `contextplus|4d7a6c37847c698c850d4b412ddb603dfc47257e|baseline.run1|unknown|unknown|2000|run1-segment-retrieval-b2000`
+
+Phase 5 matrix artifacts:
+
+- `benchmark/runs/matrix/h2h-matrix-long-run1-hybrid-lane1-retrieval-b2000-t123-vs-contextplus-run1-segment-20260302T122740Z.json`
+- `benchmark/runs/matrix/h2h-matrix-long-run1-hybrid-lane1-retrieval-b2000-t123-vs-contextplus-run1-segment-20260302T122740Z.csv`
+- `benchmark/runs/matrix/008-canonical-matrix-run1-lane1-segment-snapshot-20260302T122740Z.md`
+- `benchmark/runs/matrix/008-canonical-matrix-run1-lane1-segment-pivot-by-budget-20260302T122740Z.md`
 
 ### Canonical Holistic Metrics Matrix ("Benchmark Bible")
 
@@ -310,6 +353,7 @@ Governance:
 - Human-readable summaries are required refresh artifacts after each completed run:
   - `implementations/008-canonical-matrix-run1-snapshot.md` (detailed source-linked snapshot)
   - `implementations/008-canonical-matrix-run1-pivot-by-budget.md` (compact per-budget pivot view)
+- Lane keep/rollback outcomes are recorded in `implementations/008-canonical-matrix-lane-decisions.md` and must cite the row IDs above.
 - Any row change in those markdown views must be traceable to a corresponding run-stamped artifact in `benchmark/runs/matrix/`.
 
 ### Feature-Porting Benchmark Matrix (Hypotheses + Tradeoffs)
@@ -329,30 +373,113 @@ Use this matrix to decide what to implement next and how to judge whether a port
 
 - [x] Define hypotheses/tradeoffs and measurable checks for all six lanes (table above).
 - [x] Seed canonical retrieval baseline rows for `llm-tldr` and `contextplus` at budget `2000`.
-- [ ] Hybrid retrieval in product path:
-  - owner: `TBD`
-  - test-first files: `tests/test_semantic*.py`, `tests/test_cli*.py`
-  - before/after artifacts: `phase3-retrieval-quality` + h2h score/compare rows by budget
-- [ ] Confidence abstention + optional rerank:
-  - owner: `TBD`
+- [x] Hybrid retrieval in product path (implemented 2026-03-02, Phase 2 lane1):
+  - owner: `retrieval-core`
+  - test-first files:
+    - `tests/test_semantic_hybrid_retrieval.py` (new; hybrid rank behavior, deterministic tie-break, negative-query guard)
+    - `tests/test_cli_semantic_hybrid_flags.py` (new; opt-in flag parsing + default legacy behavior)
+    - `tests/test_bench_head_to_head_predict_helpers.py` (updated; `rg_pattern` placeholder and `feature_set_id` validation)
+    - `tests/test_bench_h2h_export_matrix_run1.py` (updated; feature-set fallback precedence)
+    - `tests/test_bench_head_to_head_tool_profiles_schema.py` (updated; `feature_set_id` + lane1 profile schema)
+  - implementation artifacts:
+    - product retrieval path: `tldr/semantic.py` (`--hybrid` path with deterministic RRF tie-break and `no_result_guard=rg_empty`)
+    - CLI/runtime wiring: `tldr/cli.py`, `tldr/daemon/core.py`, `tldr/mcp_server.py`
+    - h2h artifact identity propagation: `scripts/bench_h2h_predict.py`, `scripts/bench_head_to_head.py`, `scripts/bench_h2h_export_matrix_run1.py`
+    - tool profiles: baseline profiles keep working, plus lane1 profile `benchmarks/head_to_head/tool_profiles/llm_tldr.hybrid_lane1.v1.json`
+  - before/after artifacts:
+    - profile-level identity now carried by `feature_set_id` in predictions/run-metadata/score/compare inputs for row comparability.
+    - [x] Phase 3 deterministic retrieval evaluation completed on `django` (no LLM calls):
+      - run artifact: `benchmark/runs/20260302-094231Z-retrieval-django.json`
+      - deterministic baseline reference: `benchmark/runs/20260210-001934Z-retrieval-django-minilm-guard-rg-empty.json`
+      - 008 matrix baseline reference: `benchmark/runs/h2h-llm-tldr-score-run1-fixed-stitched-allowlist-20260302T062602Z.json`
+      - lane1 metrics (`hybrid_rrf`): `mrr=0.8189`, `recall@5=0.9123`, `precision@5=0.1825`, `fpr@5=0.0`
+      - delta vs deterministic baseline (`new - baseline`): `mrr=+0.0000`, `recall@5=+0.0000`, `precision@5=+0.0000`, `fpr@5=+0.0000`
+      - delta vs 008 matrix retrieval baseline @2000 (`new - baseline`): `mrr=+0.2070`, `recall@5=+0.1228`, `precision@5=+0.0246`, `fpr@5=+0.0000`
+      - latency proxies (deterministic per-query p50): `rg=0.0987s` (`+0.0148s` vs deterministic baseline), `semantic=0.1143s` (`-0.0209s` vs deterministic baseline)
+      - payload proxy from `bench_retrieval_quality.py` is not emitted; canonical `payload_tokens_median` baseline remains `53.5` from run1 matrix artifact.
+    - [x] Phase 4 minimal h2h confirmation completed on `django` (deterministic; no LLM providers/judges; retrieval lane only, `budget=2000`, `trials=1..3`):
+      - preflight artifacts:
+        - `benchmark/runs/h2h-preflight-run1-hybrid-lane1-retrieval-b2000-t123-semantic-probe.json`
+        - `benchmark/runs/h2h-preflight-run1-hybrid-lane1-retrieval-b2000-t123-impact-probe.json`
+      - corrected segment-scoped artifacts used for decision evidence:
+        - `benchmark/runs/h2h-suite-segment-retrieval-b2000.v1.json`
+        - `benchmark/runs/h2h-task-manifest-segment-retrieval.json`
+        - `benchmark/runs/h2h-llm-tldr-score-run1-hybrid-lane1-retrieval-b2000-t123-segment.json`
+        - `benchmark/runs/h2h-contextplus-score-run1-segment-retrieval-b2000.json`
+        - `benchmark/runs/h2h-compare-run1-hybrid-lane1-retrieval-b2000-t123-vs-contextplus-run1-segment.json`
+        - `benchmark/runs/h2h-assert-run1-hybrid-lane1-retrieval-b2000-t123-vs-contextplus-run1-segment.json`
+      - retrieval @2000 (`llm-tldr`, lane1 segment score): `mrr_mean=0.8563`, `recall@5=0.9298`, `precision@5=0.1860`, `fpr@5=0.0`, `payload_tokens_median=78`, `latency_ms_p50=5426.209`
+      - delta vs `contextplus` run1 baseline @2000 (`llm-tldr - contextplus`): `mrr=+0.6407`, `recall@5=+0.6316`, `precision@5=+0.1263`; ratios: `payload=0.2371x`, `latency=0.7031x`; compare winner `llm-tldr` (`5/5` primary metrics).
+      - strict assert clarification: per-run strict gates passed (`runs[0].strict_gates_passed=true`); overall `gates_passed=false` only because `stability.two_of_three` remains unsatisfied by design in this single compare bundle.
+    - [x] Phase 5 canonical matrix export for lane1 decision:
+      - `benchmark/runs/matrix/h2h-matrix-long-run1-hybrid-lane1-retrieval-b2000-t123-vs-contextplus-run1-segment-20260302T122740Z.json`
+      - `benchmark/runs/matrix/h2h-matrix-long-run1-hybrid-lane1-retrieval-b2000-t123-vs-contextplus-run1-segment-20260302T122740Z.csv`
+    - [x] Phase 5b intra-tool A/B confirmation (`llm-tldr hybrid` vs `llm-tldr baseline`) on the same segment scope (`retrieval@2000,trials=1..3`, no LLM calls):
+      - baseline segment artifacts:
+        - `benchmark/runs/h2h-llm-tldr-predictions-run1-fixed-stitched-allowlist-retrieval-b2000-t123-segment.json`
+        - `benchmark/runs/h2h-tool-profile-llm-tldr-baseline-retrieval-only.v1.json`
+        - `benchmark/runs/h2h-llm-tldr-score-run1-baseline-retrieval-b2000-t123-segment.json`
+      - direct A/B compare artifact:
+        - `benchmark/runs/h2h-compare-run1-llm-tldr-hybrid-vs-baseline-retrieval-b2000-t123-segment.json`
+      - `hybrid - baseline` deltas @2000:
+        - `mrr_mean=+0.2444`
+        - `recall@5=+0.1404`
+        - `precision@5=+0.0281`
+        - `fpr@5=+0.0000` (flat at `0.0`)
+        - cost/perf tradeoff: `payload_tokens_median=+24.5` (`78.0` vs `53.5`), `latency_ms_p50=+404.794ms` (`5426.209` vs `5021.415`)
+      - winner rule result: `llm-tldr-hybrid-lane1` wins `3/5` primary metrics over `llm-tldr-baseline` (`baseline` retains only payload + latency).
+  - before row IDs (explicit):
+    - `llm-tldr|bbfee65bc8cc5d5051edb447d689e7ebed987a7c|baseline.run1.fixed.stitched.allowlist|sentence-transformers|profile_unpinned|2000|run1-fixed-stitched-allowlist-20260302T062602Z`
+    - `contextplus|b42853d7c2a2018f2d4376c664db30d65ea1af23|baseline.run1|unknown|unknown|2000|run1`
+  - after row IDs (explicit):
+    - `llm-tldr|4d7a6c37847c698c850d4b412ddb603dfc47257e|feature.hybrid.v1|sentence-transformers|profile_unpinned|2000|run1-hybrid-lane1-retrieval-b2000-t123-segment`
+    - `contextplus|4d7a6c37847c698c850d4b412ddb603dfc47257e|baseline.run1|unknown|unknown|2000|run1-segment-retrieval-b2000`
+  - lane1 decision (Phase 5): `KEEP` (comparison-first track; still provisional for full-signoff stability policy).
+    - rationale: versus `contextplus`, quality wins `5/5` with large positive deltas (`mrr`, `recall@5`, `precision@5`), lower latency (`0.7031x`), lower payload (`0.2371x`), and clean segment run-validity rates (`timeout/error/budget_violation=0` for both tools).
+    - rationale (intra-tool): versus `llm-tldr` baseline, hybrid wins `3/5` primary metrics with substantial quality lift (`mrr +0.2444`, `recall@5 +0.1404`, `precision@5 +0.0281`) and unchanged `fpr@5=0.0`, with expected tradeoff of higher payload/latency.
+    - remaining gate: `stability.two_of_three` only (`insufficient_runs_for_stability_check`) under deliberate single-bundle segment confirmation scope.
+    - canonical decision record: `implementations/008-canonical-matrix-lane-decisions.md`.
+- [ ] Confidence abstention + optional rerank (active next loop):
+  - owner: `retrieval-quality`
   - test-first files: retrieval negative-query + rerank helper tests
-  - before/after artifacts: retrieval quality + h2h gate rows (`retrieval_max_fpr5`, `retrieval_min_mrr`)
+  - implementation artifacts: confidence/rerank controls in retrieval command path + benchmark guard updates.
+  - before/after artifacts: retrieval quality report + h2h score/compare/assert + canonical matrix export.
+  - before row IDs: llm baseline + context baseline at budget `2000`.
+  - after row IDs: `llm-tldr|<post-change-tool-version>|feature.abstain-rerank.v1|sentence-transformers|<embedding_model>|2000|<run_id>`
+  - immediate loop steps:
+    - lock lane2 profile identity (`feature.abstain-rerank.v1`) and retrieval command contract before implementation.
+    - add/turn red lane2 tests for abstain threshold behavior on negatives, optional rerank behavior, and bounded latency/payload regression.
+    - implement minimal confidence abstention + optional rerank switches in product retrieval path (default behavior unchanged when disabled).
+    - run the same segment-scoped `retrieval@2000,trials=1..3` score/compare/assert loop and export a new canonical matrix row under `benchmark/runs/matrix/`.
+    - append lane2 keep/rollback outcome to `implementations/008-canonical-matrix-lane-decisions.md`.
 - [ ] Budget-aware retrieval behavior:
-  - owner: `TBD`
+  - owner: `token-efficiency`
   - test-first files: `tests/test_bench_token_efficiency_helpers.py`
-  - before/after artifacts: by-budget retrieval metrics (`500/1000/2000/5000`) + budget violation rates
+  - implementation artifacts: token packing/selection changes in `scripts/bench_token_efficiency.py` and related retrieval budgeting helpers.
+  - before/after artifacts: budget `2000` required + optional `500/1000/5000` sensitivity rows in canonical matrix export.
+  - before row IDs: llm baseline + context baseline at `2000`; optional baseline rows at `500/1000/5000`.
+  - after row IDs: `llm-tldr|<post-change-tool-version>|feature.budget-aware.v1|sentence-transformers|<embedding_model>|<budget_tokens>|<run_id>`
 - [ ] Compound semantic+impact command/API:
-  - owner: `TBD`
+  - owner: `analysis-core`
   - test-first files: impact/semantic compound schema and fixture tests
-  - before/after artifacts: compound latency/timeout/error plus budget-2000 quality rows
+  - implementation artifacts: compound command/API surface in `tldr/cli.py` and shared analysis/retrieval orchestration modules.
+  - before/after artifacts: compound benchmark artifact + h2h run artifacts + canonical matrix budget-`2000` rows.
+  - before row IDs: llm baseline + context baseline at budget `2000`.
+  - after row IDs: `llm-tldr|<post-change-tool-version>|feature.compound-semantic-impact.v1|sentence-transformers|<embedding_model>|2000|<run_id>`
 - [ ] Semantic navigation/clustering (`tldrf navigate`):
-  - owner: `TBD`
+  - owner: `navigation-exploration`
   - test-first files: deterministic cluster fixture tests
-  - before/after artifacts: cluster coverage/determinism artifact + retrieval regression rows
+  - implementation artifacts: navigation/clustering implementation + deterministic cluster output helpers.
+  - before/after artifacts: cluster coverage/determinism report + retrieval regression rows + canonical matrix export.
+  - before row IDs: llm baseline + context baseline at budget `2000`.
+  - after row IDs: `llm-tldr|<post-change-tool-version>|feature.navigate-cluster.v1|sentence-transformers|<embedding_model>|2000|<run_id>`
 - [ ] Optional Ollama backend:
-  - owner: `TBD`
+  - owner: `runtime-platform`
   - test-first files: provider-selection and fallback tests
-  - before/after artifacts: budget-2000 h2h rows + overlap@5 parity report
+  - implementation artifacts: provider selection/runtime integration updates for Ollama in CLI/daemon paths.
+  - before/after artifacts: budget-`2000` h2h rows + overlap@5 parity report + canonical matrix export.
+  - before row IDs: llm baseline + context baseline at budget `2000`.
+  - after row IDs: `llm-tldr|<post-change-tool-version>|feature.ollama-backend.v1|<embedding_backend>|<embedding_model>|2000|<run_id>`
 - [ ] For each lane, append a final keep/rollback decision row with explicit drawbacks observed.
 
 ## Program Delivery Mode: Test-First With Benchmark Confirmation
@@ -924,6 +1051,7 @@ These are intentionally deferred while comparison-first feature implementation i
   - `scripts/bench_h2h_predict.py`, `scripts/bench_h2h_stitch.py`, `scripts/bench_h2h_baseline.py`, `scripts/bench_h2h_assert.py`
 - [ ] Execute final 008 sign-off runs when provider reliability window is acceptable.
 - [ ] Enable nightly full job with secrets/feature flag (`H2H_NIGHTLY_ENABLED=1`) before relying on nightly full gating.
+- [ ] Run full optional budget-sensitivity sweeps (`500/1000/5000`) and publish updated matrix artifacts when timing permits.
 - [ ] Phase 0-6 deliverables merged.
 - [ ] All phase pass/fail thresholds met on completed judgments after deterministic stitching.
 - [ ] `llm-tldr` wins head-to-head by suite rule and strict margin gates.

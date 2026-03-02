@@ -123,6 +123,52 @@ def test_segment_filter_audit_doc_records_requested_filters():
     assert audit_doc["selected_identity_count"] == 1
 
 
+def test_template_values_exposes_retrieval_rg_pattern_placeholder():
+    mod = _load_mod()
+    template_values = mod["_template_values"]
+
+    out = template_values(
+        task={
+            "task_id": "retrieval:R01",
+            "category": "retrieval",
+            "input": {"query": "where", "rg_pattern": r"^def\\s+items_for_result"},
+        },
+        budget_tokens=2000,
+        trial=1,
+        corpus_root=Path("/tmp/repo"),
+        retrieval_top_k=10,
+    )
+
+    assert out["rg_pattern"] == r"^def\\s+items_for_result"
+
+
+def test_validate_tool_profile_rejects_blank_feature_set_id():
+    mod = _load_mod()
+    validate_profile = mod["_validate_tool_profile"]
+
+    errors = validate_profile(
+        {
+            "schema_version": 1,
+            "suite_id": "h2h_llm_tldr_vs_contextplus_v1",
+            "tool_id": "llm-tldr",
+            "feature_set_id": "   ",
+            "capabilities": {
+                "retrieval": True,
+                "impact": False,
+                "slice": False,
+                "complexity": False,
+                "data_flow": False,
+            },
+            "commands": {
+                "retrieval": {"template": "uv run tldrf semantic search \"{query}\" --path {repo_root}"}
+            },
+        },
+        "h2h_llm_tldr_vs_contextplus_v1",
+    )
+
+    assert any("feature_set_id" in e for e in errors)
+
+
 def test_parse_retrieval_result_accepts_list_of_objects():
     mod = _load_mod()
     parse_retrieval = mod["_parse_retrieval_result"]

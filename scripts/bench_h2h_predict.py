@@ -121,6 +121,10 @@ def _validate_tool_profile(profile: dict[str, Any], suite_id: str) -> list[str]:
         errors.append("tool profile commands must be an object")
         commands = {}
 
+    feature_set_id = profile.get("feature_set_id")
+    if feature_set_id is not None and (not isinstance(feature_set_id, str) or not feature_set_id.strip()):
+        errors.append("tool profile feature_set_id must be a non-empty string when provided")
+
     for category in CATEGORY_KEYS:
         supported = capabilities.get(category)
         if not isinstance(supported, bool):
@@ -754,6 +758,9 @@ def _template_values(
     variable = input_obj.get("variable")
     if isinstance(variable, str):
         out["variable"] = variable
+    rg_pattern = input_obj.get("rg_pattern")
+    if isinstance(rg_pattern, str):
+        out["rg_pattern"] = rg_pattern
     return out
 
 
@@ -1080,6 +1087,11 @@ def main() -> int:
     tool_id = profile.get("tool_id")
     if not isinstance(tool_id, str) or not tool_id:
         raise SystemExit("error: tool profile requires non-empty tool_id")
+    feature_set_id = profile.get("feature_set_id")
+    if not isinstance(feature_set_id, str) or not feature_set_id.strip():
+        feature_set_id = "unspecified"
+    else:
+        feature_set_id = feature_set_id.strip()
 
     predictions: list[dict[str, Any]] = []
     classification_rows: list[dict[str, Any]] = []
@@ -1242,6 +1254,7 @@ def main() -> int:
         "schema_version": SCHEMA_VERSION,
         "suite_id": suite_id,
         "tool_id": tool_id,
+        "feature_set_id": feature_set_id,
         "task_manifest_sha256": actual_task_manifest_sha,
         "tokenizer": tokenizer,
         "segment_filters": segment_filter_audit,
@@ -1260,6 +1273,7 @@ def main() -> int:
             "schema_version": SCHEMA_VERSION,
             "suite_id": suite_id,
             "tool_id": tool_id,
+            "feature_set_id": feature_set_id,
             "task_manifest_sha256": actual_task_manifest_sha,
             "segment_filters": segment_filter_audit,
             "rows": sorted(
@@ -1279,6 +1293,7 @@ def main() -> int:
             "schema_version": SCHEMA_VERSION,
             "suite_id": suite_id,
             "tool_id": tool_id,
+            "feature_set_id": feature_set_id,
             "suite_sha256": _sha256_file(suite_path),
             "task_manifest_sha256": actual_task_manifest_sha,
             "tool_profile_sha256": _sha256_file(profile_path),

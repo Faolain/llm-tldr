@@ -302,6 +302,10 @@ def _validate_tool_profile(profile: dict[str, Any], suite_id: str) -> list[str]:
         errors.append("tool profile commands must be an object")
         commands = {}
 
+    feature_set_id = profile.get("feature_set_id")
+    if feature_set_id is not None and (not isinstance(feature_set_id, str) or not feature_set_id.strip()):
+        errors.append("tool profile feature_set_id must be a non-empty string when provided")
+
     for cat in CATEGORY_KEYS:
         v = caps.get(cat)
         if not isinstance(v, bool):
@@ -1042,6 +1046,7 @@ def cmd_score(args: argparse.Namespace) -> int:
     profile_errors: list[str] = []
     capabilities: dict[str, bool] = {k: True for k in CATEGORY_KEYS}
     tool_id = preds_doc.get("tool_id")
+    feature_set_id = preds_doc.get("feature_set_id")
 
     if profile_path is not None:
         profile = _read_json(profile_path)
@@ -1055,9 +1060,13 @@ def cmd_score(args: argparse.Namespace) -> int:
             capabilities = {k: bool(caps.get(k, False)) for k in CATEGORY_KEYS}
         if not isinstance(tool_id, str) or not tool_id:
             tool_id = profile.get("tool_id")
+        if not isinstance(feature_set_id, str) or not feature_set_id:
+            feature_set_id = profile.get("feature_set_id")
 
     if not isinstance(tool_id, str) or not tool_id:
         tool_id = "unknown-tool"
+    if not isinstance(feature_set_id, str) or not feature_set_id:
+        feature_set_id = "unspecified"
 
     required_categories = _required_categories(suite, capabilities)
 
@@ -1454,6 +1463,7 @@ def cmd_score(args: argparse.Namespace) -> int:
         "schema_version": SCHEMA_VERSION,
         "suite_id": suite_id,
         "tool_id": tool_id,
+        "feature_set_id": feature_set_id,
         "scored_at_utc": _utc_now(),
         "meta": gather_meta(tldr_repo_root=repo_root),
         "inputs": {
@@ -1463,6 +1473,7 @@ def cmd_score(args: argparse.Namespace) -> int:
             "task_manifest_sha256": actual_manifest_hash,
             "predictions": str(preds_path),
             "predictions_sha256": _sha256_file(preds_path),
+            "predictions_feature_set_id": feature_set_id,
             "tool_profile": str(profile_path) if profile_path else None,
             "tool_profile_sha256": _sha256_file(profile_path) if profile_path else None,
             "tokenizer": tokenizer,
@@ -1584,6 +1595,8 @@ def cmd_compare(args: argparse.Namespace) -> int:
         winner = label_b
 
     tie_breakers = h2h_cfg.get("tie_breakers") if isinstance(h2h_cfg.get("tie_breakers"), list) else []
+    feature_set_a = score_a.get("feature_set_id") if isinstance(score_a.get("feature_set_id"), str) else "unspecified"
+    feature_set_b = score_b.get("feature_set_id") if isinstance(score_b.get("feature_set_id"), str) else "unspecified"
 
     if winner == "tie":
         for tb in tie_breakers:
@@ -1619,11 +1632,14 @@ def cmd_compare(args: argparse.Namespace) -> int:
             "score_a_sha256": _sha256_file(score_a_path),
             "score_b_sha256": _sha256_file(score_b_path),
             "primary_budget": primary_budget,
+            "feature_set_a": feature_set_a,
+            "feature_set_b": feature_set_b,
         },
         "labels": {
             "a": label_a,
             "b": label_b,
         },
+        "feature_sets": {"a": feature_set_a, "b": feature_set_b},
         "winner_rule": rule,
         "metric_comparisons": comparisons,
         "wins": wins,

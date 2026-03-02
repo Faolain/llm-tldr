@@ -15,6 +15,7 @@ and FAISS for fast vector similarity search.
 import json
 import logging
 import os
+import subprocess
 import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -1278,7 +1279,7 @@ def build_semantic_index(
     return len(units)
 
 
-def semantic_search(
+def _semantic_unit_search(
     project_path: str,
     query: str,
     k: int = 5,
@@ -1387,3 +1388,241 @@ def semantic_search(
         results.append(result)
 
     return results
+
+
+def _dedupe_preserve(values: List[str]) -> List[str]:
+    seen: set[str] = set()
+    out: List[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        out.append(value)
+    return out
+
+
+def _rg_rank_files(
+    repo_root: Path,
+    *,
+    pattern: str,
+    glob: Optional[str],
+    fixed_string: bool,
+) -> List[str]:
+    """Rank files by lexical match density + earliest hit line (deterministic)."""
+    normalized_pattern = str(pattern or "").strip()
+    if not normalized_pattern:
+        return []
+
+    cmd = ["rg", "-n", "--no-messages"]
+    if fixed_string:
+        cmd.append("--fixed-strings")
+    if glob:
+        cmd.extend(["--glob", glob])
+    cmd.append(normalized_pattern)
+    cmd.append(".")
+
+    proc = subprocess.run(
+        cmd,
+        cwd=str(repo_root),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode not in (0, 1):  # 1 = no matches
+        stderr = (proc.stderr or "").strip()
+        raise RuntimeError(f"rg failed (rc={proc.returncode}): {stderr}")
+
+    hits_by_file: dict[str, dict[str, int]] = {}
+    for line in (proc.stdout or "").splitlines():
+        parts = line.split(":", 2)
+        if len(parts) != 3:
+            continue
+        file_path, line_s, _ = parts
+        if file_path.startswith("./"):
+            file_path = file_path[2:]
+        file_path = file_path.replace("\\", "/")
+        try:
+            line_no = int(line_s)
+        except ValueError:
+            continue
+        info = hits_by_file.setdefault(file_path, {"hits": 0, "min_line": line_no})
+        info["hits"] += 1
+        if line_no < info["min_line"]:
+            info["min_line"] = line_no
+
+    ranked = sorted(
+        hits_by_file.items(),
+        key=lambda kv: (-kv[1]["hits"], kv[1]["min_line"], kv[0]),
+    )
+    return [file_path for file_path, _ in ranked]
+
+
+def _semantic_files_from_results(results: List[dict]) -> List[str]:
+    ranked: List[str] = []
+    for item in results or []:
+        if not isinstance(item, dict):
+            continue
+        file_path = item.get("file") or item.get("path")
+        if not isinstance(file_path, str):
+            continue
+        if file_path.startswith("./"):
+            file_path = file_path[2:]
+        ranked.append(file_path.replace("\\", "/"))
+    return _dedupe_preserve(ranked)
+
+
+def _rrf_file_scores(rankings: List[List[str]], *, rrf_k: int = 60) -> dict[str, float]:
+    k = int(rrf_k)
+    if k <= 0:
+        k = 60
+    scores: dict[str, float] = {}
+    for ranking in rankings:
+        for rank, file_path in enumerate(ranking, start=1):
+            scores[file_path] = scores.get(file_path, 0.0) + (1.0 / float(k + rank))
+    return scores
+
+
+def _rrf_fuse_file_rankings(rankings: List[List[str]], *, rrf_k: int = 60) -> List[str]:
+    """Deterministic RRF fuse: score desc, then filepath asc for ties."""
+    scores = _rrf_file_scores(rankings, rrf_k=rrf_k)
+    fused = sorted(scores.items(), key=lambda kv: (-kv[1], kv[0]))
+    return [file_path for file_path, _ in fused]
+
+
+def hybrid_file_search(
+    project_path: str,
+    query: str,
+    k: int = 5,
+    *,
+    model: Optional[str] = None,
+    device: Optional[str] = None,
+    index_paths=None,
+    index_config=None,
+    no_result_guard: str = "none",
+    rg_pattern: Optional[str] = None,
+    rg_glob: Optional[str] = None,
+    rrf_k: int = 60,
+) -> List[dict]:
+    """Hybrid file retrieval using lexical + semantic rank fusion."""
+    if not query or not query.strip():
+        return []
+
+    if k <= 0:
+        return []
+
+    if no_result_guard not in {"none", "rg_empty"}:
+        raise ValueError("no_result_guard must be 'none' or 'rg_empty'")
+
+    scan_path = Path(project_path).resolve()
+    has_explicit_pattern = isinstance(rg_pattern, str) and bool(rg_pattern.strip())
+    lexical_pattern = rg_pattern.strip() if has_explicit_pattern else query.strip()
+
+    lexical_rank = _rg_rank_files(
+        scan_path,
+        pattern=lexical_pattern,
+        glob=rg_glob,
+        fixed_string=not has_explicit_pattern,
+    )
+    if no_result_guard == "rg_empty" and not lexical_rank:
+        return []
+
+    semantic_k = max(int(k), int(k) * 5)
+    semantic_results = _semantic_unit_search(
+        project_path,
+        query,
+        k=semantic_k,
+        expand_graph=False,
+        model=model,
+        device=device,
+        index_paths=index_paths,
+        index_config=index_config,
+    )
+    semantic_rank = _semantic_files_from_results(semantic_results)
+
+    fused_rank = _rrf_fuse_file_rankings([lexical_rank, semantic_rank], rrf_k=rrf_k)
+    fused_scores = _rrf_file_scores([lexical_rank, semantic_rank], rrf_k=rrf_k)
+
+    lexical_pos = {fp: i for i, fp in enumerate(lexical_rank, start=1)}
+    semantic_pos = {fp: i for i, fp in enumerate(semantic_rank, start=1)}
+
+    out: List[dict] = []
+    for rank, file_path in enumerate(fused_rank[: int(k)], start=1):
+        out.append(
+            {
+                "file": file_path,
+                "score": float(fused_scores.get(file_path, 0.0)),
+                "rank": int(rank),
+                "source_ranks": {
+                    "lexical": lexical_pos.get(file_path),
+                    "semantic": semantic_pos.get(file_path),
+                },
+            }
+        )
+    return out
+
+
+def semantic_search(
+    project_path: str,
+    query: str,
+    k: int = 5,
+    expand_graph: bool = False,
+    model: Optional[str] = None,
+    device: Optional[str] = None,
+    index_paths=None,
+    index_config=None,
+    retrieval_mode: str = "semantic",
+    no_result_guard: str = "none",
+    rg_pattern: Optional[str] = None,
+    rg_glob: Optional[str] = None,
+    rrf_k: int = 60,
+) -> List[dict]:
+    """Search for code semantically or with hybrid lexical+semantic retrieval.
+
+    Default behavior remains semantic unit search.
+    """
+    mode = str(retrieval_mode or "semantic")
+    if mode not in {"semantic", "hybrid"}:
+        raise ValueError("retrieval_mode must be 'semantic' or 'hybrid'")
+
+    if no_result_guard not in {"none", "rg_empty"}:
+        raise ValueError("no_result_guard must be 'none' or 'rg_empty'")
+
+    if mode == "hybrid":
+        return hybrid_file_search(
+            project_path,
+            query,
+            k=k,
+            model=model,
+            device=device,
+            index_paths=index_paths,
+            index_config=index_config,
+            no_result_guard=no_result_guard,
+            rg_pattern=rg_pattern,
+            rg_glob=rg_glob,
+            rrf_k=rrf_k,
+        )
+
+    # Guard mode is opt-in for semantic mode too (helps reduce negative-query FPR).
+    if no_result_guard == "rg_empty" and query and query.strip():
+        scan_path = Path(project_path).resolve()
+        has_explicit_pattern = isinstance(rg_pattern, str) and bool(rg_pattern.strip())
+        lexical_pattern = rg_pattern.strip() if has_explicit_pattern else query.strip()
+        lexical_rank = _rg_rank_files(
+            scan_path,
+            pattern=lexical_pattern,
+            glob=rg_glob,
+            fixed_string=not has_explicit_pattern,
+        )
+        if not lexical_rank:
+            return []
+
+    return _semantic_unit_search(
+        project_path,
+        query,
+        k=k,
+        expand_graph=expand_graph,
+        model=model,
+        device=device,
+        index_paths=index_paths,
+        index_config=index_config,
+    )

@@ -2,6 +2,7 @@
   "schema_version": 1,
   "suite_id": "h2h_llm_tldr_vs_contextplus_v1",
   "tool_id": "contextplus",
+  "feature_set_id": "baseline.run1",
   "display_name": "contextplus",
   "version_capture": {
     "command": ["contextplus", "--version"],
@@ -16,8 +17,8 @@
   },
   "commands": {
     "retrieval": {
-      "description": "Replace with the real contextplus retrieval command.",
-      "template": "contextplus search --repo {repo_root} --query \"{query}\" --top-k {top_k}"
+      "description": "Natural-language retrieval via contextplus MCP stdio adapter.",
+      "template": "python3 \"{repo_root}/../../../scripts/contextplus_search_adapter.py\" --repo \"{repo_root}\" --query \"{query}\" --top-k {top_k} --timeout-s 25"
     }
   },
   "budget_policy": {
@@ -25,7 +26,7 @@
     "max_payload_bytes": "enforced_by_benchmark_harness"
   },
   "notes": [
-    "Fill this template with real commands before running head-to-head.",
+    "This template uses the MCP stdio adapter for runnable contextplus retrieval.",
     "Declare unsupported capabilities as false instead of mapping to ad-hoc proxies."
   ]
 }

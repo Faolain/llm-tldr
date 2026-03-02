@@ -481,7 +481,16 @@ def importers(project: str, module: str, language: str = "python") -> dict:
 
 
 @mcp.tool()
-def semantic(project: str, query: str, k: int = 10) -> dict:
+def semantic(
+    project: str,
+    query: str,
+    k: int = 10,
+    hybrid: bool = False,
+    no_result_guard: str = "none",
+    rg_pattern: str | None = None,
+    rg_glob: str | None = None,
+    rrf_k: int = 60,
+) -> dict:
     """Semantic code search using embeddings.
 
     Searches over function/class summaries using vector similarity.
@@ -491,9 +500,25 @@ def semantic(project: str, query: str, k: int = 10) -> dict:
         project: Project root directory
         query: Natural language query
         k: Number of results to return
+        hybrid: Enable deterministic lexical+semantic hybrid retrieval.
+        no_result_guard: Optional guard mode ('none' or 'rg_empty').
+        rg_pattern: Optional regex for lexical stage.
+        rg_glob: Optional ripgrep --glob filter for lexical stage.
+        rrf_k: RRF constant used in hybrid mode.
     """
     return _send_command(
-        project, {"cmd": "semantic", "action": "search", "query": query, "k": k}
+        project,
+        {
+            "cmd": "semantic",
+            "action": "search",
+            "query": query,
+            "k": k,
+            "retrieval_mode": "hybrid" if bool(hybrid) else "semantic",
+            "no_result_guard": no_result_guard,
+            "rg_pattern": rg_pattern,
+            "rg_glob": rg_glob,
+            "rrf_k": int(rrf_k),
+        },
     )
 
 

@@ -490,6 +490,39 @@ Device Selection:
     search_p.add_argument("--expand", action="store_true", help="Include call graph expansion")
     search_p.add_argument("--lang", default="python", help="Language")
     search_p.add_argument(
+        "--hybrid",
+        action="store_true",
+        help="Opt-in hybrid retrieval (deterministic lexical + semantic RRF at file level).",
+    )
+    search_p.add_argument(
+        "--rg-pattern",
+        default=None,
+        help=(
+            "Regex pattern for lexical stage in hybrid/guard mode. "
+            "If omitted, query text is used as a fixed-string lexical probe."
+        ),
+    )
+    search_p.add_argument(
+        "--rg-glob",
+        default=None,
+        help="Optional ripgrep --glob filter for lexical stage (e.g., *.py).",
+    )
+    search_p.add_argument(
+        "--no-result-guard",
+        choices=["none", "rg_empty"],
+        default="none",
+        help=(
+            "Optional guard to reduce false positives. "
+            "'rg_empty' returns [] when lexical stage finds no files."
+        ),
+    )
+    search_p.add_argument(
+        "--rrf-k",
+        type=int,
+        default=60,
+        help="RRF constant for --hybrid ranking (default: 60).",
+    )
+    search_p.add_argument(
         "--model",
         default=None,
         help="Embedding model (uses index model if not specified)",
@@ -1679,6 +1712,11 @@ def main():
                     device=args.device,
                     index_paths=getattr(index_ctx, "paths", None),
                     index_config=getattr(index_ctx, "config", None),
+                    retrieval_mode="hybrid" if bool(args.hybrid) else "semantic",
+                    no_result_guard=str(args.no_result_guard),
+                    rg_pattern=args.rg_pattern,
+                    rg_glob=args.rg_glob,
+                    rrf_k=int(args.rrf_k),
                 )
                 print(json.dumps(results, indent=2))
 

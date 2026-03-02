@@ -842,10 +842,20 @@ class TLDRDaemon:
                 if not query:
                     return {"status": "error", "message": "Missing required parameter: query"}
                 k = command.get("k", 10)
+                retrieval_mode = command.get("retrieval_mode", "semantic")
+                no_result_guard = command.get("no_result_guard", "none")
+                rg_pattern = command.get("rg_pattern")
+                rg_glob = command.get("rg_glob")
+                rrf_k = command.get("rrf_k", 60)
                 results = semantic_search(
                     str(self.project),
                     query,
                     k=k,
+                    retrieval_mode=str(retrieval_mode),
+                    no_result_guard=str(no_result_guard),
+                    rg_pattern=rg_pattern if isinstance(rg_pattern, str) else None,
+                    rg_glob=rg_glob if isinstance(rg_glob, str) and rg_glob.strip() else None,
+                    rrf_k=int(rrf_k),
                     index_paths=self.index_paths,
                     index_config=self.index_config,
                 )
