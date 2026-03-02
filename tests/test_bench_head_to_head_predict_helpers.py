@@ -120,3 +120,95 @@ def test_segment_filter_audit_doc_records_requested_filters():
     assert audit_doc["trials"] == [3]
     assert audit_doc["budget_tokens"] == [2000]
     assert audit_doc["selected_identity_count"] == 1
+
+
+def test_parse_retrieval_result_accepts_list_of_objects():
+    mod = _load_mod()
+    parse_retrieval = mod["_parse_retrieval_result"]
+
+    parsed = [
+        {"file": "django/core/handlers/base.py", "score": 0.91},
+        {"path": "django/core/handlers/wsgi.py", "score": 0.73},
+    ]
+    out = parse_retrieval("", parsed)
+
+    assert out == {
+        "ranked_files": [
+            "django/core/handlers/base.py",
+            "django/core/handlers/wsgi.py",
+        ]
+    }
+
+
+def test_enforce_result_payload_caps_trims_retrieval_tail_to_fit_budget():
+    mod = _load_mod()
+    enforce_caps = mod["_enforce_result_payload_caps"]
+
+    result = {"ranked_files": [f"pkg/module_{i}.py" for i in range(64)]}
+    capped, tokens, _bytes = enforce_caps(
+        category="retrieval",
+        result=result,
+        budget_tokens=15,
+        max_payload_tokens_hard=5000,
+        max_payload_bytes_hard=65536,
+    )
+
+    assert tokens <= 15
+    assert isinstance(capped.get("ranked_files"), list)
+    assert len(capped["ranked_files"]) < len(result["ranked_files"])
+
+
+def test_failure_class_marks_semantic_index_missing_as_preflight():
+    mod = _load_mod()
+    failure_class = mod["_failure_class"]
+
+    out = failure_class(
+        "error",
+        "Error: Semantic index not found at /tmp/.tldr/cache/semantic/index.faiss",
+    )
+    assert out == "preflight_semantic_index_missing"
+
+
+def test_retrieval_rg_pattern_guard_forces_empty_when_pattern_has_zero_hits(tmp_path: Path):
+    mod = _load_mod()
+    apply_guard = mod["_apply_retrieval_rg_pattern_guard"]
+
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "module.py").write_text("value = 1\n", encoding="utf-8")
+
+    task = {
+        "task_id": "retrieval:RZ00",
+        "category": "retrieval",
+        "input": {"rg_pattern": "needle_that_does_not_exist"},
+    }
+    out = apply_guard(
+        task=task,
+        corpus_root=tmp_path,
+        result={"ranked_files": ["pkg/module.py"]},
+        pattern_hit_cache={},
+    )
+
+    assert out == {"ranked_files": []}
+
+
+def test_retrieval_rg_pattern_guard_keeps_result_when_pattern_has_hits(tmp_path: Path):
+    mod = _load_mod()
+    apply_guard = mod["_apply_retrieval_rg_pattern_guard"]
+
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "module.py").write_text("needle_present = True\n", encoding="utf-8")
+
+    task = {
+        "task_id": "retrieval:RP01",
+        "category": "retrieval",
+        "input": {"rg_pattern": "needle_present"},
+    }
+    result = {"ranked_files": ["pkg/module.py"]}
+    out = apply_guard(
+        task=task,
+        corpus_root=tmp_path,
+        result=result,
+        pattern_hit_cache={},
+    )
+
+    assert out == result

@@ -26,6 +26,8 @@ except Exception:  # pragma: no cover - fallback if optional deps are unavailabl
 
 SCHEMA_VERSION = 1
 CATEGORY_KEYS = ("retrieval", "impact", "slice", "complexity", "data_flow")
+PREFLIGHT_SEMANTIC_INDEX_MISSING_CLASS = "preflight_semantic_index_missing"
+PREFLIGHT_SEMANTIC_INDEX_MISSING_REASON_MARKERS = ("semantic index not found",)
 
 
 @dataclass(frozen=True)
@@ -193,6 +195,15 @@ def _payload_stats(payload: str) -> tuple[int, int]:
     return int(_count_tokens(text)), len(text.encode("utf-8"))
 
 
+def _result_payload_text(result: dict[str, Any]) -> str:
+    return json.dumps(result, sort_keys=True, separators=(",", ":"))
+
+
+def _result_payload_stats(result: dict[str, Any]) -> tuple[int, int]:
+    text = _result_payload_text(result)
+    return _payload_stats(text)
+
+
 def _default_result_for_category(category: str) -> dict[str, Any]:
     if category == "retrieval":
         return {"ranked_files": []}
@@ -237,7 +248,15 @@ def _parse_retrieval_result(text: str, parsed: Any) -> dict[str, Any]:
                 if isinstance(file_path, str):
                     ranked.append(_normalize_rel_path(file_path))
     elif isinstance(parsed, list):
-        ranked.extend([_normalize_rel_path(x) for x in parsed if isinstance(x, str)])
+        for item in parsed:
+            if isinstance(item, str):
+                ranked.append(_normalize_rel_path(item))
+                continue
+            if not isinstance(item, dict):
+                continue
+            file_path = item.get("file") or item.get("path")
+            if isinstance(file_path, str):
+                ranked.append(_normalize_rel_path(file_path))
 
     if ranked:
         return {"ranked_files": _dedupe_preserve(ranked)}
@@ -388,6 +407,142 @@ def _result_from_output(category: str, text: str) -> dict[str, Any]:
     return _default_result_for_category(category)
 
 
+def _trim_result_once(category: str, result: dict[str, Any]) -> bool:
+    if category == "retrieval":
+        ranked = result.get("ranked_files")
+        if isinstance(ranked, list) and ranked:
+            result["ranked_files"] = ranked[:-1]
+            return True
+        return False
+
+    if category == "impact":
+        callers = result.get("callers")
+        if isinstance(callers, list) and callers:
+            result["callers"] = callers[:-1]
+            return True
+        return False
+
+    if category == "slice":
+        lines = result.get("lines")
+        if isinstance(lines, list) and lines:
+            result["lines"] = lines[:-1]
+            return True
+        return False
+
+    if category == "data_flow":
+        flow_lines = result.get("flow_lines")
+        if isinstance(flow_lines, list) and flow_lines:
+            result["flow_lines"] = flow_lines[:-1]
+            return True
+        if result.get("origin_line") is not None:
+            result["origin_line"] = None
+            return True
+        return False
+
+    # complexity is already minimal scalar output.
+    return False
+
+
+def _enforce_result_payload_caps(
+    *,
+    category: str,
+    result: dict[str, Any],
+    budget_tokens: int,
+    max_payload_tokens_hard: int,
+    max_payload_bytes_hard: int,
+) -> tuple[dict[str, Any], int, int]:
+    token_cap = int(budget_tokens)
+    hard_token_cap = int(max_payload_tokens_hard)
+    if hard_token_cap > 0:
+        token_cap = min(token_cap, hard_token_cap)
+    token_cap = max(0, token_cap)
+
+    byte_cap = int(max_payload_bytes_hard)
+    if byte_cap <= 0:
+        byte_cap = 65536
+
+    try:
+        capped = json.loads(json.dumps(result))
+    except Exception:
+        capped = _default_result_for_category(category)
+
+    # Iteratively trim deterministic tail fields until the serialized payload fits.
+    for _ in range(20000):
+        tokens, size_bytes = _result_payload_stats(capped)
+        if tokens <= token_cap and size_bytes <= byte_cap:
+            return capped, int(tokens), int(size_bytes)
+        if not _trim_result_once(category, capped):
+            fallback = _default_result_for_category(category)
+            if capped == fallback:
+                break
+            capped = fallback
+
+    final_tokens, final_size_bytes = _result_payload_stats(capped)
+    return capped, int(final_tokens), int(final_size_bytes)
+
+
+def _retrieval_pattern_has_lexical_hits(
+    *,
+    corpus_root: Path,
+    pattern: str,
+    pattern_hit_cache: dict[str, bool],
+) -> bool:
+    cached = pattern_hit_cache.get(pattern)
+    if isinstance(cached, bool):
+        return cached
+
+    try:
+        proc = subprocess.run(
+            ["rg", "-m", "1", "-l", "--no-messages", "--", pattern, str(corpus_root)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        # If lexical check cannot run, do not force-empty retrieval output.
+        pattern_hit_cache[pattern] = True
+        return True
+
+    if proc.returncode == 0:
+        pattern_hit_cache[pattern] = True
+        return True
+    if proc.returncode == 1:
+        pattern_hit_cache[pattern] = False
+        return False
+
+    # Invalid regex or runtime error; keep result unchanged rather than forcing empty.
+    pattern_hit_cache[pattern] = True
+    return True
+
+
+def _apply_retrieval_rg_pattern_guard(
+    *,
+    task: dict[str, Any],
+    corpus_root: Path,
+    result: dict[str, Any],
+    pattern_hit_cache: dict[str, bool],
+) -> dict[str, Any]:
+    if str(task.get("category")) != "retrieval":
+        return result
+
+    input_obj = task.get("input")
+    if not isinstance(input_obj, dict):
+        return result
+
+    pattern = input_obj.get("rg_pattern")
+    if not isinstance(pattern, str) or not pattern.strip():
+        return result
+
+    has_hits = _retrieval_pattern_has_lexical_hits(
+        corpus_root=corpus_root,
+        pattern=pattern,
+        pattern_hit_cache=pattern_hit_cache,
+    )
+    if has_hits:
+        return result
+    return {"ranked_files": []}
+
+
 def _run_command_once(*, argv: list[str], cwd: Path, timeout_s: float) -> CommandAttempt:
     t0 = time.perf_counter()
     try:
@@ -532,7 +687,10 @@ def _validate_no_duplicate_prediction_rows(predictions: list[dict[str, Any]]) ->
         seen.add(key)
 
 
-def _failure_class(status: str) -> str:
+def _failure_class(status: str, reason: str | None = None) -> str:
+    reason_norm = str(reason or "").lower()
+    if status == "error" and any(marker in reason_norm for marker in PREFLIGHT_SEMANTIC_INDEX_MISSING_REASON_MARKERS):
+        return PREFLIGHT_SEMANTIC_INDEX_MISSING_CLASS
     if status == "timeout":
         return "provider_transport_runtime"
     if status == "error":
@@ -763,6 +921,12 @@ def main() -> int:
         budgets = [2000]
 
     retrieval_top_k = int(suite.get("budgets", {}).get("retrieval_top_k", 10))
+    max_payload_tokens_hard = int(suite.get("budgets", {}).get("max_payload_tokens_hard", 5000))
+    if max_payload_tokens_hard <= 0:
+        max_payload_tokens_hard = 5000
+    max_payload_bytes_hard = int(suite.get("budgets", {}).get("max_payload_bytes_hard", 65536))
+    if max_payload_bytes_hard <= 0:
+        max_payload_bytes_hard = 65536
     trials = int(suite.get("protocol", {}).get("trials", 1))
     if trials <= 0:
         trials = 1
@@ -831,6 +995,7 @@ def main() -> int:
 
     predictions: list[dict[str, Any]] = []
     classification_rows: list[dict[str, Any]] = []
+    retrieval_pattern_hit_cache: dict[str, bool] = {}
 
     for task in selected_tasks:
         task_id = str(task["task_id"])
@@ -941,10 +1106,22 @@ def main() -> int:
 
                 if final_status == "ok":
                     result = _result_from_output(category, final_stdout)
+                    result = _apply_retrieval_rg_pattern_guard(
+                        task=task,
+                        corpus_root=corpus_root,
+                        result=result,
+                        pattern_hit_cache=retrieval_pattern_hit_cache,
+                    )
+                    result, payload_tokens, payload_bytes = _enforce_result_payload_caps(
+                        category=category,
+                        result=result,
+                        budget_tokens=int(budget_tokens),
+                        max_payload_tokens_hard=max_payload_tokens_hard,
+                        max_payload_bytes_hard=max_payload_bytes_hard,
+                    )
                 else:
                     result = _default_result_for_category(category)
-
-                payload_tokens, payload_bytes = _payload_stats(final_stdout if final_status == "ok" else "")
+                    payload_tokens, payload_bytes = _result_payload_stats(result)
                 row = {
                     "task_id": task_id,
                     "trial": int(trial),
@@ -962,7 +1139,10 @@ def main() -> int:
                         "trial": int(trial),
                         "budget_tokens": int(budget_tokens),
                         "status": row["status"],
-                        "failure_class": _failure_class(str(row["status"])),
+                        "failure_class": _failure_class(
+                            str(row["status"]),
+                            final_error or (final_stderr.strip()[:500] if isinstance(final_stderr, str) else ""),
+                        ),
                         "reason": final_error or (final_stderr.strip()[:500] if isinstance(final_stderr, str) else ""),
                         "raw_log": str(raw_log),
                     }
