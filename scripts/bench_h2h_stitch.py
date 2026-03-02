@@ -32,6 +32,85 @@ def _read_json_obj(path: Path) -> dict[str, Any]:
     return data
 
 
+def _parse_filter_values(raw_values: list[Any] | None) -> list[str]:
+    values: list[str] = []
+    for raw in raw_values or []:
+        for token in str(raw).split(","):
+            item = token.strip()
+            if item:
+                values.append(item)
+    return values
+
+
+def _parse_positive_int_filter(raw_values: list[Any] | None, *, label: str) -> list[int]:
+    out: list[int] = []
+    for raw in _parse_filter_values(raw_values):
+        try:
+            value = int(raw)
+        except Exception as exc:
+            raise ValueError(f"{label} values must be integers: {raw!r}") from exc
+        if value <= 0:
+            raise ValueError(f"{label} values must be positive: {raw!r}")
+        out.append(value)
+    return sorted(set(out))
+
+
+def _normalize_explicit_allowlist_filters(
+    *,
+    task_ids_raw: list[Any] | None,
+    trials_raw: list[Any] | None,
+    budget_tokens_raw: list[Any] | None,
+) -> dict[str, list[Any]]:
+    return {
+        "task_ids": sorted(set(_parse_filter_values(task_ids_raw))),
+        "trials": _parse_positive_int_filter(trials_raw, label="trial"),
+        "budget_tokens": _parse_positive_int_filter(budget_tokens_raw, label="budget_tokens"),
+    }
+
+
+def _as_list_or_none(value: Any) -> list[Any] | None:
+    if value is None:
+        return None
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def _coerce_explicit_allowlist_filters(filters: dict[str, Any] | None) -> dict[str, list[Any]]:
+    if not isinstance(filters, dict):
+        return _normalize_explicit_allowlist_filters(
+            task_ids_raw=None,
+            trials_raw=None,
+            budget_tokens_raw=None,
+        )
+    return _normalize_explicit_allowlist_filters(
+        task_ids_raw=_as_list_or_none(filters.get("task_ids")),
+        trials_raw=_as_list_or_none(filters.get("trials")),
+        budget_tokens_raw=_as_list_or_none(filters.get("budget_tokens")),
+    )
+
+
+def _has_explicit_allowlist_filters(filters: dict[str, list[Any]]) -> bool:
+    return any(filters.get(field) for field in ("task_ids", "trials", "budget_tokens"))
+
+
+def _key_matches_explicit_allowlist(
+    key: tuple[str, str, int, int], filters: dict[str, list[Any]]
+) -> bool:
+    _, task_id, budget, trial = key
+    task_ids = {str(x) for x in filters.get("task_ids", []) if str(x)}
+    trials = {int(x) for x in filters.get("trials", [])}
+    budgets = {int(x) for x in filters.get("budget_tokens", [])}
+
+    if task_ids and task_id not in task_ids:
+        return False
+    if trials and trial not in trials:
+        return False
+    if budgets and budget not in budgets:
+        return False
+    return True
+
+
 def _normalize_row_key(tool_id: str, row: dict[str, Any]) -> tuple[str, str, int, int] | None:
     task_id = row.get("task_id")
     budget = row.get("budget_tokens")
@@ -182,6 +261,7 @@ def _stitch_predictions(
     classification_doc: dict[str, Any],
     run_metadata_doc: dict[str, Any] | None,
     base_path: Path,
+    explicit_allowlist_filters: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     tool_id = base_doc.get("tool_id")
     if not isinstance(tool_id, str) or not tool_id:
@@ -202,6 +282,8 @@ def _stitch_predictions(
 
     class_row_map = _classification_row_map(classification_doc, default_tool_id=tool_id)
     class_map = _classification_map(classification_doc, default_tool_id=tool_id)
+    allowlist_filters = _coerce_explicit_allowlist_filters(explicit_allowlist_filters)
+    allowlist_enabled = _has_explicit_allowlist_filters(allowlist_filters)
 
     base_by_key: dict[tuple[str, str, int, int], dict[str, Any]] = {}
     base_order: list[tuple[str, str, int, int]] = []
@@ -215,6 +297,11 @@ def _stitch_predictions(
             raise ValueError(f"duplicate base key: {key}")
         base_by_key[key] = row
         base_order.append(key)
+
+    if allowlist_enabled:
+        allowlist_matches = [key for key in base_order if _key_matches_explicit_allowlist(key, allowlist_filters)]
+        if not allowlist_matches:
+            raise ValueError("explicit stitch allowlist filters matched zero base rows")
 
     rerun_maps: list[tuple[Path, dict[tuple[str, str, int, int], dict[str, Any]]]] = []
     for rerun_path, rerun_doc in rerun_docs:
@@ -243,8 +330,18 @@ def _stitch_predictions(
             class_map=class_map,
             class_row_map=class_row_map,
         )
+        explicit_eligible = allowlist_enabled and _key_matches_explicit_allowlist(key, allowlist_filters)
+        failure_eligible = base_class in {"provider_transport_runtime", PREFLIGHT_SEMANTIC_INDEX_MISSING_CLASS}
+        if failure_eligible and explicit_eligible:
+            eligibility_source = "failure_class_and_explicit_allowlist"
+        elif failure_eligible:
+            eligibility_source = "failure_class"
+        elif explicit_eligible:
+            eligibility_source = "explicit_allowlist"
+        else:
+            eligibility_source = "none"
 
-        if base_class not in {"provider_transport_runtime", PREFLIGHT_SEMANTIC_INDEX_MISSING_CLASS}:
+        if eligibility_source == "none":
             stitched_predictions.append(base_row)
             continue
 
@@ -272,6 +369,7 @@ def _stitch_predictions(
                     "replacement_artifact": str(rerun_path),
                     "base_failure_class": base_class,
                     "replacement_failure_class": candidate_class,
+                    "eligibility_source": eligibility_source,
                     "decision_rule": "first_non_provider_transport_by_rerun_order",
                     "decision_timestamp_utc": _utc_now(),
                 }
@@ -298,6 +396,7 @@ def _stitch_predictions(
         "replacements": len(decisions),
         "unresolved": len(unresolved),
         "classification": classification_doc.get("schema_version"),
+        "explicit_allowlist_filters": allowlist_filters,
     }
 
     audit_doc = {
@@ -307,6 +406,7 @@ def _stitch_predictions(
         "generated_at_utc": _utc_now(),
         "base_artifact": str(base_path),
         "rerun_artifacts": [str(path) for path, _ in rerun_docs],
+        "explicit_allowlist_filters": allowlist_filters,
         "replacements": decisions,
         "unresolved": unresolved,
     }
@@ -321,6 +421,29 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--run-metadata", default=None, help="Run metadata JSON path.")
     ap.add_argument("--out", default=None, help="Output stitched predictions path.")
     ap.add_argument("--audit", default=None, help="Output stitch audit path.")
+    ap.add_argument(
+        "--stitch-allow-task-id",
+        "--stitch-allow-task-ids",
+        dest="stitch_allow_task_ids",
+        action="append",
+        default=None,
+        help="Optional explicit stitch allowlist filter; repeat or use comma-separated values.",
+    )
+    ap.add_argument(
+        "--stitch-allow-trial",
+        "--stitch-allow-trials",
+        dest="stitch_allow_trials",
+        action="append",
+        default=None,
+        help="Optional explicit stitch allowlist filter; repeat or use comma-separated integers.",
+    )
+    ap.add_argument(
+        "--stitch-allow-budget-tokens",
+        dest="stitch_allow_budget_tokens",
+        action="append",
+        default=None,
+        help="Optional explicit stitch allowlist filter; repeat or use comma-separated integers.",
+    )
     return ap
 
 
@@ -337,6 +460,11 @@ def main() -> int:
     rerun_docs = [(path, _read_json_obj(path)) for path in rerun_paths]
     classification_doc = _read_json_obj(classification_path)
     run_metadata_doc = _read_json_obj(run_metadata_path) if run_metadata_path else None
+    explicit_allowlist_filters = _normalize_explicit_allowlist_filters(
+        task_ids_raw=args.stitch_allow_task_ids,
+        trials_raw=args.stitch_allow_trials,
+        budget_tokens_raw=args.stitch_allow_budget_tokens,
+    )
 
     stitched_doc, audit_doc = _stitch_predictions(
         base_doc=base_doc,
@@ -344,6 +472,7 @@ def main() -> int:
         classification_doc=classification_doc,
         run_metadata_doc=run_metadata_doc,
         base_path=base_path,
+        explicit_allowlist_filters=explicit_allowlist_filters,
     )
 
     if args.out:
