@@ -15,6 +15,9 @@ But we split tests so we can tell why results changed.
 
 1. `h2h` isolates tool quality.
    It answers: "Is retrieval/analysis output itself better than contextplus?"
+   It also has two winner views in 008:
+   - shared-capability winner (apples-to-apples lanes only),
+   - full-product workflow winner (workflow board where `N/A` counts as loss).
 2. `llm_ab` isolates end-to-end answer quality with a judge.
    It answers: "Does this context actually produce better final answers?"
 3. `token_efficiency` isolates budget tradeoffs.

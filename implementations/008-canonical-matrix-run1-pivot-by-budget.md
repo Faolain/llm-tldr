@@ -65,3 +65,19 @@ This pivot uses mixed run artifacts currently in plan baseline:
 | strict assert overall (lane2 vs contextplus) | `false` |
 | failing strict gate(s) (lane2 vs contextplus) | `stability.two_of_three` |
 | stability gate (lane2 vs contextplus) | `stability.two_of_three=false` (`insufficient_runs_for_stability_check`) |
+
+## Full-Product Workflow Gate (N/A = Loss)
+
+| Workflow row | llm-tldr@0ead1a1 | contextplus@4d7a6c3 | rg-native@unknown |
+| --- | --- | --- | --- |
+| Retrieval (common lane, 2000) | `mrr=0.874`, `r@5=0.877`, `p@5=0.175`, `fpr@5=0.000`, `p50=4989.022ms`, `tok=78` | `mrr=0.216`, `r@5=0.298`, `p@5=0.060`, `fpr@5=1.000`, `p50=7717.107ms`, `tok=329` | `mrr=0.813`, `r@5=0.877`, `p@5=0.175`, `fpr@5=0.000`, `p50=216.221ms`, `tok=12` |
+| `impact -> context -> rg` (refactor path) | `impact f1=0.848 (P=0.739,R=0.933), p50=191.951ms, tok=26; context pending` | `N/A` | `N/A` |
+| `slice (+anchor) -> dfg` (debug path) | `slice f1=0.919, recall=0.884, noise=0.657; dfg origin=1.000, flow=1.000` | `N/A` | `N/A` |
+| Semantic search (concept path) | `semantic mrr=0.247, r@5=0.456, p@5=0.091, fpr@5=0.000` | `pending` | `N/A` |
+| `cfg` / complexity | `accuracy=0.600, mae=1.800, p50=151.115ms, tok=8` | `N/A` | `N/A` |
+| Daemon/index operational metrics | `build_s=1.231, patch_s=0.815, rebuild_s=1.070; daemon-vs-cli pending` | `N/A` | `N/A` |
+
+Notes:
+- This gate is workflow-level and intentionally not limited to shared lanes.
+- `unsupported/N/A` is scored as loss on resolved rows.
+- `pending` rows are excluded until their benchmark contract artifacts are produced.

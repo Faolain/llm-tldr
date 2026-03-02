@@ -74,3 +74,20 @@ This snapshot combines:
   - winner: `rg-native`
   - wins: `rg-native=5`, `llm-tldr-baseline=0`
   - deltas: `mrr +0.2008`, `recall@5 +0.0877`, `precision@5 +0.0175`
+
+## Full-Product Workflow Gate Snapshot (N/A = Loss)
+
+This board is separate from the shared-capability retrieval gate. It evaluates end-user workflows and treats `unsupported/N/A` as explicit losses on resolved rows.
+
+| Workflow row | llm-tldr (quantitative) | contextplus (quantitative) | rg-native (quantitative) | Evidence |
+| --- | --- | --- | --- | --- |
+| Retrieval (common lane, budget `2000`) | `mrr=0.874`, `r@5=0.877`, `p@5=0.175`, `fpr@5=0.000`, `p50=4989.022ms`, `tok=78` | `mrr=0.216`, `r@5=0.298`, `p@5=0.060`, `fpr@5=1.000`, `p50=7717.107ms`, `tok=329` | `mrr=0.813`, `r@5=0.877`, `p@5=0.175`, `fpr@5=0.000`, `p50=216.221ms`, `tok=12` | `benchmark/runs/h2h-llm-tldr-score-run1-abstain-rerank-lane2-retrieval-b2000-t123-segment.json`; `benchmark/runs/h2h-contextplus-score-run1-segment-retrieval-b2000.json`; `benchmark/runs/h2h-rg-native-score-run1-retrieval-b2000-t123-segment.json` |
+| `impact -> context -> rg` (refactor path) | `impact: f1=0.848 (P=0.739,R=0.933), p50=191.951ms, tok=26`; `rg component: mrr=0.813, r@5=0.877, p@5=0.175, fpr@5=0.000`; `context metric pending` | `N/A` | `N/A` | `benchmark/runs/h2h-llm-tldr-score-run1-fixed-stitched-allowlist-20260302T062602Z.json`; `benchmark/runs/h2h-rg-native-score-run1-retrieval-b2000-t123-segment.json` |
+| `slice (+anchor) -> dfg` (debug path) | `slice: f1=0.919, recall=0.884, noise_reduction=0.657, p50=145.627ms, tok=11`; `dfg: origin=1.000, flow=1.000, p50=148.132ms, tok=13` | `N/A` | `N/A` | `benchmark/runs/h2h-llm-tldr-score-run1-fixed-stitched-allowlist-20260302T062602Z.json` |
+| Semantic search (concept path) | `semantic strategy: mrr=0.247, r@5=0.456, p@5=0.091, fpr@5=0.000` | `pending (not isolated)` | `N/A` | `benchmark/runs/20260302-195057Z-retrieval-django-lane3-b2000.json` |
+| `cfg` / complexity | `accuracy=0.600`, `mae=1.800`, `p50=151.115ms`, `tok=8` | `N/A` | `N/A` | `benchmark/runs/h2h-llm-tldr-score-run1-fixed-stitched-allowlist-20260302T062602Z.json` |
+| Daemon/index operational metrics | `build_s=1.231`, `patch_s=0.815`, `full_rebuild_after_touch_s=1.070`; `daemon-vs-cli p50 pending` | `N/A` | `N/A` | `benchmark/runs/20260209-044240Z-ts-perf-ts-monorepo.json`; `benchmark/runs/phase5-daemon-vs-cli.json` (pending) |
+
+Resolved-row provisional picture:
+- `llm-tldr` leads on resolved full-product workflow rows.
+- `contextplus` and `rg-native` are competitive on retrieval but lose rows where capabilities are `N/A`.

@@ -115,6 +115,10 @@ This track allows progress without executing run2/run3 immediately. It is explic
   - locked `feature.budget-aware.v1`, added red->green tests, implemented opt-in controls, ran deterministic benchmarks, and appended keep/rollback decision.
 - [ ] Start lane4 (compound semantic+impact command/API) with the same loop:
   - lock feature identity, add red tests, implement behind opt-in controls, run deterministic benchmarks, and append keep/rollback decision.
+- [ ] Resolve pending full-product workflow rows so the new overall winner gate is fully computable:
+  - add a deterministic benchmark row contract for `impact -> context -> rg` (explicit context-path metric + thresholds).
+  - add an isolated semantic concept-path probe for `contextplus` so semantic row is not `pending`.
+  - produce daemon/index operational artifact (`bench_perf_daemon_vs_cli.py`) for llm-tldr and record row result.
 
 ## Implementation Progress (2026-03-02)
 
@@ -255,6 +259,24 @@ A release is considered successful only if all conditions below are true:
 6. Stability gate:
    - Criteria 1-5 pass in at least `2/3` full reruns with suite seeds unchanged.
    - The same deterministic stitch rules are used in each rerun.
+7. Full-product workflow gate (N/A counts as loss) is tracked and must pass before final close:
+   - This gate is separate from the shared-capability winner gate above.
+   - Scoring unit is workflow rows, not only retrieval metrics.
+   - `unsupported`/`N/A` rows score as `0` and are explicit losses against tools that pass the row.
+   - `pending` rows (no benchmark contract/artifact yet) are excluded from score math until resolved.
+
+### Dual Winner Gates (Authoritative)
+
+Use two explicit winner decisions, each answering a different question:
+
+1. Shared-capability winner gate (current strict h2h gate):
+   - Compare only lanes that both tools support in the same harness contract.
+   - Purpose: avoid false wins/losses caused purely by capability mismatch.
+2. Full-product workflow gate (new canonical gate):
+   - Compare end-user workflows across all tracked rows.
+   - Purpose: answer "which tool is better overall in real usage patterns."
+   - Rule: `N/A`/unsupported counts as a row loss.
+   - `rg-native` is included as a baseline tool in this board.
 
 ## Canonical Benchmark Matrix (Feature-Porting Decisions)
 
@@ -275,6 +297,7 @@ How this matrix is used:
 4. Budget `2000` is required for comparison-first decisions in this active track.
 5. Budget-sensitivity rows for `500/1000/5000` are optional in this track and may be run later.
 6. Full multi-budget sweeps remain part of deferred full-signoff work.
+7. For the full-product workflow gate, record `pass/fail/unsupported/pending` per workflow row and compute winner from resolved rows only.
 
 | Tool | Feature lane | Budget tokens | Quality metrics (higher is better) | Latency p50 ms (lower is better) | Cost proxy: payload_tokens_median (lower is better) | Run-validity snapshot (`timeout/error/budget_violation`) | Evidence artifact(s) | Porting decision |
 | --- | --- | --- | --- | ---: | ---: | --- | --- | --- |
@@ -283,6 +306,19 @@ How this matrix is used:
 | `rg-native` | Retrieval lexical baseline (common lane) | `2000` | `mrr_mean=0.8126`, `recall@5=0.8772`, `precision@5=0.1754` | `216.221` | `12` | `0 / 0 / 0` (run1 retrieval segment) | `benchmark/runs/h2h-rg-native-score-run1-retrieval-b2000-t123-segment.json`; `benchmark/runs/h2h-compare-run1-rg-native-retrieval-b2000-t123-segment-vs-contextplus-run1-segment.json`; `benchmark/runs/h2h-compare-run1-rg-native-retrieval-b2000-t123-segment-vs-llm-tldr-baseline-segment.json` | Keep as external native baseline comparator for regression tracking (not a product replacement lane) |
 | `future-tool-A` (placeholder) | Retrieval (common lane) | `2000` | `TBD from pinned score artifact` | `TBD` | `TBD` | `TBD` | `benchmark/runs/h2h-future-tool-A-score-<run>.json`; `benchmark/runs/h2h-assert-<run>.json` | Evaluate against same gates before any porting decision |
 | `future-tool-A` (placeholder) | Non-common lane feature (for example semantic navigation) | `2000` | lane-specific metric + mapped proxy to common-lane quality | `TBD` | `TBD` | `TBD` | `benchmark/runs/<feature>-future-tool-A-<run>.json` + mapped h2h compare note | Port only if differentiated value is measurable and does not regress common-lane gates |
+
+### Full-Product Workflow Rows (N/A Counts As Loss)
+
+Rows below are the required workflow board for overall product winner decisions:
+
+| Workflow row | llm-tldr (quantitative) | contextplus (quantitative) | rg-native (quantitative) | Current evidence / status |
+| --- | --- | --- | --- | --- |
+| Retrieval (common lane, budget `2000`) | `mrr=0.874`, `r@5=0.877`, `p@5=0.175`, `fpr@5=0.000`, `p50=4989.022ms`, `tok=78` | `mrr=0.216`, `r@5=0.298`, `p@5=0.060`, `fpr@5=1.000`, `p50=7717.107ms`, `tok=329` | `mrr=0.813`, `r@5=0.877`, `p@5=0.175`, `fpr@5=0.000`, `p50=216.221ms`, `tok=12` | h2h segment score/compare artifacts under `benchmark/runs/h2h-*-score-run1-*-retrieval-b2000-*.json` |
+| `impact -> context -> rg` (refactor path) | `impact f1=0.848 (P=0.739,R=0.933), p50=191.951ms, tok=26`; `context metric pending` | unsupported (`N/A`) | unsupported (`N/A`) | impact: `benchmark/runs/h2h-llm-tldr-score-run1-fixed-stitched-allowlist-20260302T062602Z.json`; context-path row contract pending |
+| `slice (+anchor) -> dfg` (debug path) | `slice f1=0.919, recall=0.884, noise=0.657; dfg origin=1.000, flow=1.000` | unsupported (`N/A`) | unsupported (`N/A`) | slice/data-flow metrics in `benchmark/runs/h2h-llm-tldr-score-run1-fixed-stitched-allowlist-20260302T062602Z.json` |
+| Semantic search (concept path) | `semantic mrr=0.247, r@5=0.456, p@5=0.091, fpr@5=0.000` | pending (not isolated in current board) | unsupported (`N/A`) | semantic strategy metrics in `benchmark/runs/20260302-195057Z-retrieval-django-lane3-b2000.json` |
+| `cfg` / complexity | `accuracy=0.600, mae=1.800, p50=151.115ms, tok=8` | unsupported (`N/A`) | unsupported (`N/A`) | complexity metrics in `benchmark/runs/h2h-llm-tldr-score-run1-fixed-stitched-allowlist-20260302T062602Z.json` |
+| Daemon/index operational metrics | `build_s=1.231, patch_s=0.815, rebuild_s=1.070`; `daemon-vs-cli p50 pending` | unsupported (`N/A`) | unsupported (`N/A`) | provisional TS perf metrics: `benchmark/runs/20260209-044240Z-ts-perf-ts-monorepo.json`; next artifact via `scripts/bench_perf_daemon_vs_cli.py` |
 
 ### Canonical Run1 Row IDs (Exported)
 

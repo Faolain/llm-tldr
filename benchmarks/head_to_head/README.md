@@ -6,6 +6,16 @@ It explicitly separates:
 - common lane (`retrieval`): required for all tools
 - optional lane (`impact`, `slice`, `complexity`, `data_flow`): scored only when a tool declares native support
 
+## Winner Views
+
+1. Shared-capability winner (this suite):
+   - Compares only lanes that both tools support under this contract.
+   - Use this for strict apples-to-apples quality gating.
+2. Full-product workflow winner (canonical matrix board):
+   - Tracks real workflows across all lanes/capabilities.
+   - `unsupported`/`N/A` rows count as explicit losses.
+   - Current board: `implementations/008-canonical-matrix-run1-snapshot.md` and `implementations/008-canonical-matrix-run1-pivot-by-budget.md`.
+
 ## Inputs
 
 - Suite contract: `benchmarks/head_to_head/suite.v1.json`

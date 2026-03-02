@@ -171,6 +171,36 @@ This log records keep/rollback outcomes for feature lanes using pinned matrix ro
   - Budget-sensitivity diagnostic: lane3 retrieval-quality run showed budget-varying `effective_k` (`500->3`, `1000->5`, `2000->10`, `5000->25`) with `fpr@5=0.0` across budgets.
   - Drawback observed: matrix export currently depends on compare/assert label alignment with snapshot defaults (`llm-tldr`/`contextplus`), so a normalized-label compare/assert artifact was required.
 
+## Program Rollup (Cross-Lane, As Of 2026-03-02)
+
+This section is the single summary view for "where we stand now" across lanes and tools.
+
+### Gate A: Shared-Capability Winner (Retrieval Common Lane @ 2000, Trials 1..3)
+
+| Matchup | Winner | Wins | Evidence |
+| --- | --- | --- | --- |
+| lane1 (`llm-tldr`) vs `contextplus` | `llm-tldr` | `5-0` | `benchmark/runs/h2h-compare-run1-hybrid-lane1-retrieval-b2000-t123-vs-contextplus-run1-segment.json` |
+| lane2 (`llm-tldr`) vs `contextplus` | `llm-tldr` | `5-0` | `benchmark/runs/h2h-compare-run1-abstain-rerank-lane2-retrieval-b2000-t123-vs-contextplus-run1-segment.json` |
+| lane3 (`llm-tldr`) vs `contextplus` | `llm-tldr` | `5-0` | `benchmark/runs/h2h-compare-run1-budget-aware-lane3-retrieval-b2000-t123-vs-contextplus-run1-segment-normalized-labels.json` |
+| `rg-native` vs `contextplus` | `rg-native` | `5-0` | `benchmark/runs/h2h-compare-run1-rg-native-retrieval-b2000-t123-segment-vs-contextplus-run1-segment.json` |
+| `rg-native` vs `llm-tldr` baseline | `rg-native` | `5-0` | `benchmark/runs/h2h-compare-run1-rg-native-retrieval-b2000-t123-segment-vs-llm-tldr-baseline-segment.json` |
+
+### Gate B: Full-Product Workflow Winner (N/A = Loss)
+
+| Workflow row | llm-tldr (quantitative) | contextplus (quantitative) | rg-native (quantitative) | Status |
+| --- | --- | --- | --- | --- |
+| Retrieval (common lane) | `mrr=0.874`, `r@5=0.877`, `p@5=0.175`, `fpr@5=0.000`, `p50=4989.022ms`, `tok=78` | `mrr=0.216`, `r@5=0.298`, `p@5=0.060`, `fpr@5=1.000`, `p50=7717.107ms`, `tok=329` | `mrr=0.813`, `r@5=0.877`, `p@5=0.175`, `fpr@5=0.000`, `p50=216.221ms`, `tok=12` | resolved |
+| `impact -> context -> rg` (refactor path) | `impact f1=0.848 (P=0.739,R=0.933), p50=191.951ms, tok=26; context metric pending` | `N/A` | `N/A` | partial |
+| `slice (+anchor) -> dfg` (debug path) | `slice f1=0.919, recall=0.884, noise=0.657; dfg origin=1.000, flow=1.000` | `N/A` | `N/A` | resolved |
+| Semantic search (concept path) | `semantic mrr=0.247, r@5=0.456, p@5=0.091, fpr@5=0.000` | pending | `N/A` | partial |
+| `cfg` / complexity | `accuracy=0.600, mae=1.800, p50=151.115ms, tok=8` | `N/A` | `N/A` | resolved |
+| Daemon/index operational metrics | `build_s=1.231, patch_s=0.815, rebuild_s=1.070; daemon-vs-cli pending` | `N/A` | `N/A` | pending |
+
+Resolved-row interpretation:
+- `llm-tldr` is currently the provisional full-product winner on resolved workflow rows.
+- `contextplus` and `rg-native` remain strong retrieval baselines but lose structural workflow rows via `N/A`.
+- Final full-product gate close requires resolving the pending workflow rows (explicit `context` row contract, semantic row parity status for `contextplus`, and daemon/index operational artifact).
+
 ## Lane4 Handoff (Active Next Loop)
 
 1. Lock lane4 profile identity (`feature.compound-semantic-impact.v1`) and command contract.
