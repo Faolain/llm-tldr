@@ -36,7 +36,9 @@ Make `llm-tldr` measurably better than `contextplus` using the existing neutral 
 - [x] Add feature-porting hypothesis matrix for six candidate lanes (hybrid, abstention/rerank, budget-aware retrieval, compound semantic+impact, navigate/clustering, Ollama backend).
 - [x] Add row-eligibility integrity + deterministic stitch policies that keep matrix rows auditable and comparable.
 - [ ] Add per-feature execution ownership in this plan (`owner`, `test-first files`, `implementation artifacts`, `before/after row IDs`).
+- [ ] Promote canonical row identity to include tool revision axes (`tool`, `tool_version`, `feature_set_id`, `embedding_backend`, `embedding_model`, `budget_tokens`, `run_id`).
 - [ ] Populate holistic metric columns (below) for existing run1 rows at budgets `500/1000/2000/5000`.
+- [ ] Export canonical long-format matrix artifact (`csv`/`json`) for all rows so dashboards and pivots are deterministic.
 - [ ] For each new feature implementation, append a before/after delta row with explicit keep/rollback decision.
 
 Note:
@@ -244,9 +246,11 @@ Why this matrix is required:
 
 How this matrix is used:
 
-1. Add one row per `tool x feature lane x budget` under the same harness and suite version.
+1. Add one row per canonical identity:
+   - `tool x tool_version x feature_set_id x embedding_backend x embedding_model x feature_lane x budget_tokens x run_id`.
 2. Fill values from pinned artifacts only (`score`, `compare`, `assert`, plus run metadata/classification where applicable).
 3. Port a feature only when the candidate row improves the target tradeoff without violating run-validity gates.
+4. Budgets are first-class and required in canonical comparison (`500/1000/2000/5000` minimum); `2000` remains the primary winner gate, but porting decisions must review all budgets.
 
 | Tool | Feature lane | Budget tokens | Quality metrics (higher is better) | Latency p50 ms (lower is better) | Cost proxy: payload_tokens_median (lower is better) | Run-validity snapshot (`timeout/error/budget_violation`) | Evidence artifact(s) | Porting decision |
 | --- | --- | --- | --- | ---: | ---: | --- | --- | --- |
@@ -274,6 +278,31 @@ Rules:
 | Efficiency / cost proxies | `payload_tokens_median`, `tok`, `tok_per_tp`, `noise_ratio_mean`, `noise_reduction_mean`, index/cache size | Surfaces cost and context-efficiency tradeoffs. |
 | Latency / operational performance | `latency_ms_p50`, `latency_ms_p95`, daemon-vs-CLI p50 speedup, `build_s`, `patch_s`, `full_rebuild_after_touch_s` | Prevents quality gains that are too slow to ship. |
 | Decision rollups | winner `>=3/5` primary metrics, margin deltas (`mrr`, `recall@5`, `precision@5`), run-validity gates, stability (`2/3` when used) | Produces a clear ship/rollback decision with traceable evidence. |
+
+### Visualization Model (Versions + Tools)
+
+Goal: visualize all `llm-tldr` variants (feature additions, embedding swaps like `bge -> jina`) and external tools (`contextplus`, future tools) in one consistent board.
+
+Canonical dataset format:
+- Maintain a long-format artifact with one row per canonical identity:
+  - `tool`, `tool_version`, `feature_set_id`, `embedding_backend`, `embedding_model`, `feature_lane`, `budget_tokens`, `run_id`, and all holistic metrics.
+- Store under pinned run artifacts, for example:
+  - `benchmark/runs/matrix/h2h-matrix-long-<run_id>.csv`
+  - `benchmark/runs/matrix/h2h-matrix-long-<run_id>.json`
+
+Required comparison views (from the same long-format source):
+1. Budget curves:
+   - x-axis `budget_tokens`, y-axis metric (`mrr_mean`, `fpr@5_mean`, `payload_tokens_median`, `latency_ms_p50`), series keyed by `tool_version + feature_set_id`.
+2. Version delta table:
+   - compare each candidate row against its baseline row (same lane/budget) with signed deltas for quality, reliability, latency, and cost.
+3. Pareto frontier:
+   - quality (`mrr_mean` or lane metric) vs cost proxy (`payload_tokens_median`/`tok_per_tp`) and latency (`latency_ms_p50`).
+4. Reliability heatmap:
+   - rows `tool_version`, columns `budget_tokens`, values `error_rate`, `timeout_rate`, `bad_json`, `judge_bad_json`.
+
+Governance:
+- Visualization must be data-only from pinned artifacts; no manual edits.
+- Every chart/table cell links back to source artifact paths in `benchmark/runs/`.
 
 ### Feature-Porting Benchmark Matrix (Hypotheses + Tradeoffs)
 
