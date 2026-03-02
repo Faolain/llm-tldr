@@ -113,8 +113,14 @@ This track allows progress without executing run2/run3 immediately. It is explic
   - red->green tests, retrieval-quality run, retrieval-segment h2h score/compare/assert, matrix export, and lane decision logging.
 - [x] Complete lane3 (budget-aware retrieval) using the same loop:
   - locked `feature.budget-aware.v1`, added red->green tests, implemented opt-in controls, ran deterministic benchmarks, and appended keep/rollback decision.
-- [ ] Start lane4 (compound semantic+impact command/API) with the same loop:
+- [x] Start lane4 (compound semantic+impact command/API) with the same loop:
+  - locked feature identity, added red->green contract tests, implemented opt-in compound path, ran deterministic benchmarks, and appended keep/rollback decision.
+- [ ] Promote lane4 bounded retrieval h2h subset (`R01..R12`, `trial=1`) to full retrieval segment (`trials=1..3`) when runtime window allows:
+  - keep current bounded artifacts as provisional evidence and replace with full-lane artifacts once completed.
+- [ ] Start lane5 (semantic navigation/clustering) with the same loop:
   - lock feature identity, add red tests, implement behind opt-in controls, run deterministic benchmarks, and append keep/rollback decision.
+- [ ] Run one consolidated Gate B structural sweep across completed lanes:
+  - collect `impact/slice/dfg/cfg` per-lane numbers in one pass for clean comparability.
 - [ ] Resolve pending full-product workflow rows so the new overall winner gate is fully computable:
   - add a deterministic benchmark row contract for `impact -> context -> rg` (explicit context-path metric + thresholds).
   - add an isolated semantic concept-path probe for `contextplus` so semantic row is not `pending`.
@@ -235,6 +241,15 @@ uv run pytest \
 - Lane2 confidence heuristic caveat:
   - Confidence must be derived from semantic similarity (not only normalized fused rank), otherwise abstention almost never triggers on low-signal queries.
   - Mitigation implemented: lane2 confidence prefers per-file semantic score with deterministic fallback path and bounded `[0,1]` clamp.
+- Lane4 compound benchmark fairness caveat:
+  - Sequential baseline was initially paying call-graph build cost even when no impact targets were selected, inflating time-to-evidence deltas.
+  - Mitigation implemented in `scripts/bench_compound_semantic_impact.py`: skip graph build when target set is empty and pass query `rg_pattern` into both compound and sequential paths.
+- Lane4 retrieval subset scoring caveat:
+  - For bounded rerun subsets, `bench_head_to_head.py score` enforces task-manifest hash equality; filtered predictions must carry the recomputed subset `task_manifest_sha256`.
+  - Mitigation: generate a subset task manifest + suite pair and rewrite filtered prediction manifest hashes before scoring.
+- Lane4 matrix export caveat:
+  - `scripts/bench_h2h_export_matrix_run1.py` markdown rendering assumes default labels (`llm-tldr`/`contextplus`).
+  - Mitigation for custom lane labels: export canonical long JSON/CSV with `--no-markdown`, then record lane decision directly in canonical decision log.
 
 ## Definition Of Done (Program-Level)
 
@@ -673,13 +688,61 @@ Use this matrix to decide what to implement next and how to judge whether a port
 
     So lane3 at 2000 is expected to be near lane2 parity; lane3’s effect appears when budget is not 2000.
     ```
-- [ ] Compound semantic+impact command/API:
+- [x] Compound semantic+impact command/API:
   - owner: `analysis-core`
-  - test-first files: impact/semantic compound schema and fixture tests
-  - implementation artifacts: compound command/API surface in `tldr/cli.py` and shared analysis/retrieval orchestration modules.
-  - before/after artifacts: compound benchmark artifact + h2h run artifacts + canonical matrix budget-`2000` rows.
-  - before row IDs: llm baseline + context baseline at budget `2000`.
-  - after row IDs: `llm-tldr|<post-change-tool-version>|feature.compound-semantic-impact.v1|sentence-transformers|<embedding_model>|2000|<run_id>`
+  - contract identity:
+    - `feature_set_id`: `feature.compound-semantic-impact.v1`
+    - lane4 h2h profile: `benchmarks/head_to_head/tool_profiles/llm_tldr.compound_semantic_impact_lane4.v1.json`
+  - test-first files (red->green):
+    - `tests/test_semantic_compound_lane4.py`
+    - updates in `tests/test_semantic_hybrid_retrieval.py`
+    - updates in `tests/test_cli_semantic_hybrid_flags.py`
+    - `tests/test_daemon_semantic_compound.py`
+    - `tests/test_mcp_semantic_compound.py`
+  - implementation artifacts:
+    - `tldr/semantic.py`: `compound_semantic_impact_search(...)` with deterministic schema, ordering, and partial-failure tracking.
+    - `tldr/cli.py`: opt-in lane4 flags on `semantic search` (`--compound-impact`, `--impact-depth`, `--impact-limit`, `--impact-language`).
+    - `tldr/daemon/core.py`: lane4 compound routing via `compound_impact` and `action=compound`.
+    - `tldr/mcp_server.py`: lane4 compound controls forwarded through `semantic(...)`.
+    - `scripts/bench_compound_semantic_impact.py`: deterministic compound-vs-sequential benchmark artifact generator.
+  - command/API contract (locked):
+    - CLI shape:
+      - `uv run tldrf semantic search "<query>" --path <repo> --k <k> --hybrid --no-result-guard rg_empty --compound-impact --impact-depth <n> --impact-limit <n> --impact-language <lang>`
+    - Daemon shape:
+      - `{\"cmd\":\"semantic\",\"action\":\"search|compound\",\"query\":\"...\",\"compound_impact\":true,\"impact_depth\":3,\"impact_limit\":3,\"impact_language\":\"python\",...}`
+    - Output schema keys:
+      - top-level: `schema_version`, `feature_set_id`, `status`, `query`, `budget_tokens`, `retrieval_mode`, `k_requested`, `k_effective`, `timing_ms`, `counts`, `results`, `partial_failures`, `regression_metadata`.
+      - per-result: `rank`, `file`, `symbol`, `retrieval`, `impact`.
+  - deterministic evidence artifacts (no LLM calls):
+    - compound benchmark:
+      - `benchmark/runs/20260302-215311Z-compound-semantic-impact-django-lane4-b2000.json`
+    - retrieval-quality regression at budget `2000`:
+      - `benchmark/runs/20260302-214803Z-retrieval-django-lane4-b2000.json`
+    - lane4 retrieval h2h (bounded subset for this turn: `R01..R12`, `trial=1`, `budget=2000`):
+      - suite/task subset:
+        - `benchmark/runs/h2h-suite-segment-retrieval-b2000-t1-r01-r12.v1.json`
+        - `benchmark/runs/h2h-task-manifest-segment-retrieval-r01-r12.json`
+      - lane4 predictions/score:
+        - `benchmark/runs/h2h-llm-tldr-predictions-run1-compound-semantic-impact-lane4-retrieval-b2000-t1-r01-r12-segment.json`
+        - `benchmark/runs/h2h-llm-tldr-score-run1-compound-semantic-impact-lane4-retrieval-b2000-t1-r01-r12-segment.json`
+      - baseline/contextplus subset scores:
+        - `benchmark/runs/h2h-llm-tldr-score-run1-baseline-retrieval-b2000-t1-r01-r12-segment.json`
+        - `benchmark/runs/h2h-contextplus-score-run1-retrieval-b2000-t1-r01-r12-segment.json`
+      - compares/assert:
+        - `benchmark/runs/h2h-compare-run1-compound-semantic-impact-lane4-vs-baseline-retrieval-b2000-t1-r01-r12-segment.json`
+        - `benchmark/runs/h2h-compare-run1-compound-semantic-impact-lane4-vs-contextplus-retrieval-b2000-t1-r01-r12-segment.json`
+        - `benchmark/runs/h2h-assert-run1-compound-semantic-impact-lane4-vs-contextplus-retrieval-b2000-t1-r01-r12-segment.json`
+      - matrix export:
+        - `benchmark/runs/matrix/h2h-matrix-long-run1-compound-semantic-impact-lane4-retrieval-b2000-t1-r01-r12-vs-contextplus.json`
+        - `benchmark/runs/matrix/h2h-matrix-long-run1-compound-semantic-impact-lane4-retrieval-b2000-t1-r01-r12-vs-contextplus.csv`
+  - lane4 quantitative summary:
+    - compound benchmark (`n=12`): compound `tte_p50=217.036ms` vs sequential `215.425ms` (near parity), retrieval overlap `1.000`, impact callers jaccard `1.000`, payload median delta `-1116.5` tokens.
+    - retrieval-quality (`budget=2000`): hybrid_rrf `mrr=0.8189`, `recall@5=0.9123`, `precision@5=0.1825`, negative `fpr@5=0.0`; lane2 policy variant remained conservative (`fpr@5=0.0`) with lower `mrr`.
+    - h2h subset (`R01..R12`, `trial=1`, `budget=2000`):
+      - lane4 vs baseline: `mrr +0.1061`, `recall@5 +0.0000`, `precision@5 +0.0000`, `fpr@5 +0.0000`, `latency -159.475ms`, `payload +28.5`.
+      - lane4 vs contextplus: `mrr +0.4727`, `recall@5 +0.4545`, `precision@5 +0.0909`, `fpr@5 -1.0000`, `latency -2492.692ms`, `payload -255.5`.
+      - assert interpretation: run-level strict gates pass (`runs[0].strict_gates_passed=true`), overall remains `false` only due `stability.two_of_three`.
+  - lane4 decision (Phase 5): `KEEP` (workflow lane, provisional; retrieval baseline tradeoff to monitor is payload increase vs baseline on this subset).
 - [ ] Semantic navigation/clustering (`tldrf navigate`):
   - owner: `navigation-exploration`
   - test-first files: deterministic cluster fixture tests

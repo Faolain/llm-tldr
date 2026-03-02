@@ -566,6 +566,35 @@ Device Selection:
         ),
     )
     search_p.add_argument(
+        "--compound-impact",
+        action="store_true",
+        help=(
+            "Opt-in lane4 compound output: semantic retrieval plus impact analysis "
+            "for top semantic rows."
+        ),
+    )
+    search_p.add_argument(
+        "--impact-depth",
+        type=int,
+        default=3,
+        help="Depth used by lane4 impact analysis (default: 3).",
+    )
+    search_p.add_argument(
+        "--impact-limit",
+        type=int,
+        default=3,
+        help="Max semantic rows to enrich with lane4 impact analysis (default: 3).",
+    )
+    search_p.add_argument(
+        "--impact-language",
+        default="auto",
+        choices=["auto", "all", "python", "typescript", "go", "rust", "java", "c", "php"],
+        help=(
+            "Call-graph language for lane4 impact stage "
+            "(auto infers from semantic rows)."
+        ),
+    )
+    search_p.add_argument(
         "--model",
         default=None,
         help="Embedding model (uses index model if not specified)",
@@ -1716,7 +1745,11 @@ def main():
                 print(f"Total: Indexed {len(all_files)} files, found {len(unique_edges)} edges")
 
         elif args.command == "semantic":
-            from .semantic import build_semantic_index, semantic_search
+            from .semantic import (
+                build_semantic_index,
+                compound_semantic_impact_search,
+                semantic_search,
+            )
 
             if args.action == "index":
                 scan_root = _resolve_scan_root(
@@ -1746,28 +1779,60 @@ def main():
                     default=".",
                 )
                 index_ctx = _get_index_ctx(scan_root, allow_create=False)
-                results = semantic_search(
-                    scan_root,
-                    args.query,
-                    k=args.k,
-                    expand_graph=args.expand,
-                    model=args.model,
-                    device=args.device,
-                    index_paths=getattr(index_ctx, "paths", None),
-                    index_config=getattr(index_ctx, "config", None),
-                    retrieval_mode="hybrid" if bool(args.hybrid) else "semantic",
-                    no_result_guard=str(args.no_result_guard),
-                    rg_pattern=args.rg_pattern,
-                    rg_glob=args.rg_glob,
-                    rrf_k=int(args.rrf_k),
-                    abstain_threshold=args.abstain_threshold,
-                    abstain_empty=bool(args.abstain_empty),
-                    rerank=bool(args.rerank),
-                    rerank_top_n=int(args.rerank_top_n),
-                    max_latency_ms_p50_ratio=args.max_latency_ms_p50_ratio,
-                    max_payload_tokens_median_ratio=args.max_payload_tokens_median_ratio,
-                    budget_tokens=args.budget_tokens,
-                )
+                retrieval_mode = "hybrid" if bool(args.hybrid) else "semantic"
+                if bool(args.compound_impact):
+                    ignore_spec = get_ignore_spec(scan_root, index_ctx)
+                    workspace_root = _workspace_root(scan_root, index_ctx)
+                    results = compound_semantic_impact_search(
+                        scan_root,
+                        args.query,
+                        k=args.k,
+                        expand_graph=args.expand,
+                        model=args.model,
+                        device=args.device,
+                        index_paths=getattr(index_ctx, "paths", None),
+                        index_config=getattr(index_ctx, "config", None),
+                        retrieval_mode=retrieval_mode,
+                        no_result_guard=str(args.no_result_guard),
+                        rg_pattern=args.rg_pattern,
+                        rg_glob=args.rg_glob,
+                        rrf_k=int(args.rrf_k),
+                        abstain_threshold=args.abstain_threshold,
+                        abstain_empty=bool(args.abstain_empty),
+                        rerank=bool(args.rerank),
+                        rerank_top_n=int(args.rerank_top_n),
+                        max_latency_ms_p50_ratio=args.max_latency_ms_p50_ratio,
+                        max_payload_tokens_median_ratio=args.max_payload_tokens_median_ratio,
+                        budget_tokens=args.budget_tokens,
+                        impact_depth=int(args.impact_depth),
+                        impact_limit=int(args.impact_limit),
+                        impact_language=str(args.impact_language),
+                        ignore_spec=ignore_spec,
+                        workspace_root=workspace_root,
+                    )
+                else:
+                    results = semantic_search(
+                        scan_root,
+                        args.query,
+                        k=args.k,
+                        expand_graph=args.expand,
+                        model=args.model,
+                        device=args.device,
+                        index_paths=getattr(index_ctx, "paths", None),
+                        index_config=getattr(index_ctx, "config", None),
+                        retrieval_mode=retrieval_mode,
+                        no_result_guard=str(args.no_result_guard),
+                        rg_pattern=args.rg_pattern,
+                        rg_glob=args.rg_glob,
+                        rrf_k=int(args.rrf_k),
+                        abstain_threshold=args.abstain_threshold,
+                        abstain_empty=bool(args.abstain_empty),
+                        rerank=bool(args.rerank),
+                        rerank_top_n=int(args.rerank_top_n),
+                        max_latency_ms_p50_ratio=args.max_latency_ms_p50_ratio,
+                        max_payload_tokens_median_ratio=args.max_payload_tokens_median_ratio,
+                        budget_tokens=args.budget_tokens,
+                    )
                 print(json.dumps(results, indent=2))
 
         elif args.command == "index":

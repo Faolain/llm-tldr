@@ -487,6 +487,10 @@ def semantic(
     k: int = 10,
     budget_tokens: int | None = None,
     hybrid: bool = False,
+    compound_impact: bool = False,
+    impact_depth: int = 3,
+    impact_limit: int = 3,
+    impact_language: str = "auto",
     no_result_guard: str = "none",
     rg_pattern: str | None = None,
     rg_glob: str | None = None,
@@ -509,6 +513,10 @@ def semantic(
         k: Number of results to return
         budget_tokens: Optional lane3 budget-aware retrieval control.
         hybrid: Enable deterministic lexical+semantic hybrid retrieval.
+        compound_impact: Opt-in lane4 compound retrieval + impact output.
+        impact_depth: Max reverse-call depth for lane4 impact stage.
+        impact_limit: Max semantic rows enriched by lane4 impact stage.
+        impact_language: Call-graph language for lane4 impact stage.
         no_result_guard: Optional guard mode ('none' or 'rg_empty').
         rg_pattern: Optional regex for lexical stage.
         rg_glob: Optional ripgrep --glob filter for lexical stage.
@@ -529,6 +537,10 @@ def semantic(
             "k": k,
             "budget_tokens": budget_tokens,
             "retrieval_mode": "hybrid" if bool(hybrid) else "semantic",
+            "compound_impact": bool(compound_impact),
+            "impact_depth": int(impact_depth),
+            "impact_limit": int(impact_limit),
+            "impact_language": impact_language,
             "no_result_guard": no_result_guard,
             "rg_pattern": rg_pattern,
             "rg_glob": rg_glob,

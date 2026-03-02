@@ -17,6 +17,7 @@ import logging
 import os
 import subprocess
 import sys
+import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -57,6 +58,24 @@ DEFAULT_MODEL = "bge-large-en-v1.5"
 
 LANE3_REFERENCE_BUDGET_TOKENS = 2000
 LANE3_MAX_EFFECTIVE_K_MULTIPLIER = 5
+LANE4_SCHEMA_VERSION = 1
+LANE4_FEATURE_SET_ID = "feature.compound-semantic-impact.v1"
+LANE4_IMPACT_DEFAULT_DEPTH = 3
+LANE4_IMPACT_DEFAULT_LIMIT = 3
+LANE4_CALL_GRAPH_LANGUAGES = {"python", "typescript", "go", "rust", "java", "c", "php"}
+LANE4_EXTENSION_TO_CALL_GRAPH_LANGUAGE = {
+    ".py": "python",
+    ".ts": "typescript",
+    ".tsx": "typescript",
+    ".js": "typescript",
+    ".jsx": "typescript",
+    ".go": "go",
+    ".rs": "rust",
+    ".java": "java",
+    ".c": "c",
+    ".h": "c",
+    ".php": "php",
+}
 
 # Project root markers - files that indicate a project root
 PROJECT_ROOT_MARKERS = [".git", "pyproject.toml", "package.json", "Cargo.toml", "go.mod", ".tldr"]
@@ -1695,6 +1714,268 @@ def _lane2_apply_abstention(
     return rows
 
 
+def _lane4_normalize_call_graph_language(language: Any) -> Optional[str]:
+    if not isinstance(language, str):
+        return None
+    normalized = language.strip().lower()
+    if not normalized:
+        return None
+    if normalized == "javascript":
+        normalized = "typescript"
+    if normalized in LANE4_CALL_GRAPH_LANGUAGES:
+        return normalized
+    return None
+
+
+def _lane4_languages_from_semantic_rows(
+    semantic_rows: List[dict],
+    *,
+    impact_language: Optional[str],
+) -> List[str]:
+    normalized_impact = _lane4_normalize_call_graph_language(impact_language)
+    impact_mode = str(impact_language or "auto").strip().lower()
+    if normalized_impact is not None:
+        return [normalized_impact]
+    if impact_mode == "all":
+        return sorted(LANE4_CALL_GRAPH_LANGUAGES)
+
+    languages: set[str] = set()
+    for row in semantic_rows:
+        if not isinstance(row, dict):
+            continue
+        from_row = _lane4_normalize_call_graph_language(row.get("language"))
+        if from_row is not None:
+            languages.add(from_row)
+            continue
+        file_path = row.get("file")
+        if not isinstance(file_path, str):
+            continue
+        suffix = Path(file_path).suffix.lower()
+        from_suffix = LANE4_EXTENSION_TO_CALL_GRAPH_LANGUAGE.get(suffix)
+        normalized_suffix = _lane4_normalize_call_graph_language(from_suffix)
+        if normalized_suffix is not None:
+            languages.add(normalized_suffix)
+
+    return sorted(languages)
+
+
+def _lane4_target_aliases(row: dict) -> List[str]:
+    aliases: List[str] = []
+    for key in ("qualified_name", "name"):
+        value = row.get(key)
+        if not isinstance(value, str):
+            continue
+        normalized = value.strip()
+        if normalized:
+            aliases.append(normalized)
+
+    expanded: List[str] = []
+    for alias in aliases:
+        expanded.append(alias)
+        for separator in ("::", "."):
+            if separator in alias:
+                expanded.append(alias.rsplit(separator, 1)[-1])
+
+    return _dedupe_preserve(expanded)
+
+
+def _lane4_impact_targets(
+    semantic_rows: List[dict],
+    *,
+    impact_limit: Optional[int],
+) -> tuple[List[dict], List[dict]]:
+    limit = _safe_int(impact_limit)
+    if limit is None:
+        limit = LANE4_IMPACT_DEFAULT_LIMIT
+    limit = max(0, int(limit))
+
+    targets: List[dict] = []
+    partial_failures: List[dict] = []
+    seen_keys: set[tuple[Optional[str], str]] = set()
+
+    for row_index, row in enumerate(semantic_rows, start=1):
+        if len(targets) >= limit:
+            break
+        if not isinstance(row, dict):
+            partial_failures.append(
+                {
+                    "stage": "target_selection",
+                    "row_index": row_index,
+                    "reason": "invalid_semantic_row",
+                    "message": "semantic row is not an object",
+                }
+            )
+            continue
+
+        file_path = row.get("file")
+        normalized_file = file_path if isinstance(file_path, str) and file_path else None
+        aliases = _lane4_target_aliases(row)
+        if not aliases:
+            partial_failures.append(
+                {
+                    "stage": "target_selection",
+                    "row_index": row_index,
+                    "file": normalized_file,
+                    "reason": "missing_symbol",
+                    "message": "semantic row does not include a function or method name",
+                }
+            )
+            continue
+
+        dedupe_key = (normalized_file, aliases[0])
+        if dedupe_key in seen_keys:
+            continue
+        seen_keys.add(dedupe_key)
+
+        targets.append(
+            {
+                "row_index": row_index,
+                "file": normalized_file,
+                "aliases": aliases,
+            }
+        )
+
+    return targets, partial_failures
+
+
+def _lane4_symbol_from_row(row: dict) -> dict:
+    name = row.get("name")
+    qualified_name = row.get("qualified_name")
+    if not isinstance(name, str):
+        name = None
+    if not isinstance(qualified_name, str):
+        qualified_name = None
+    line = row.get("line")
+    if not isinstance(line, int):
+        line = None
+    unit_type = row.get("unit_type")
+    if not isinstance(unit_type, str):
+        unit_type = None
+    return {
+        "name": name,
+        "qualified_name": qualified_name,
+        "line": line,
+        "unit_type": unit_type,
+    }
+
+
+def _lane4_build_result_row(row: dict, *, rank: int) -> dict:
+    file_path = row.get("file")
+    if not isinstance(file_path, str):
+        file_path = None
+
+    retrieval: dict[str, Any] = {
+        "score": _safe_float(row.get("score")),
+        "semantic_score": _safe_float(row.get("semantic_score")),
+    }
+    source_ranks = row.get("source_ranks")
+    if isinstance(source_ranks, dict):
+        retrieval["source_ranks"] = source_ranks
+    confidence = _safe_float(row.get("confidence"))
+    if confidence is not None:
+        retrieval["confidence"] = confidence
+
+    return {
+        "rank": int(rank),
+        "file": file_path,
+        "symbol": _lane4_symbol_from_row(row),
+        "retrieval": retrieval,
+        "impact": {
+            "status": "skipped",
+            "latency_ms": None,
+            "caller_count": 0,
+            "truncated": None,
+            "callers": [],
+            "error_code": "not_selected",
+            "message": "not selected for impact analysis",
+        },
+    }
+
+
+def _lane4_collect_callers(node: dict, *, depth: int, out: List[dict]) -> bool:
+    truncated = bool(node.get("truncated"))
+    callers = node.get("callers")
+    if not isinstance(callers, list):
+        return truncated
+    for caller in callers:
+        if not isinstance(caller, dict):
+            continue
+        file_path = caller.get("file")
+        function = caller.get("function")
+        if isinstance(file_path, str) and isinstance(function, str):
+            out.append(
+                {
+                    "file": file_path,
+                    "function": function,
+                    "line": caller.get("line") if isinstance(caller.get("line"), int) else None,
+                    "depth": int(depth),
+                }
+            )
+        if _lane4_collect_callers(caller, depth=depth + 1, out=out):
+            truncated = True
+    return truncated
+
+
+def _lane4_extract_callers(payload: dict) -> tuple[List[dict], bool]:
+    targets = payload.get("targets") if isinstance(payload, dict) else None
+    if not isinstance(targets, dict):
+        return ([], False)
+
+    callers: List[dict] = []
+    truncated = False
+    for _, node in sorted(targets.items(), key=lambda item: str(item[0])):
+        if not isinstance(node, dict):
+            continue
+        if _lane4_collect_callers(node, depth=1, out=callers):
+            truncated = True
+
+    deduped: List[dict] = []
+    seen: set[tuple[int, str, str, Optional[int]]] = set()
+    for caller in sorted(
+        callers,
+        key=lambda c: (int(c.get("depth", 0)), str(c.get("file")), str(c.get("function")), str(c.get("line"))),
+    ):
+        key = (
+            int(caller.get("depth", 0)),
+            str(caller.get("file")),
+            str(caller.get("function")),
+            caller.get("line") if isinstance(caller.get("line"), int) else None,
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(caller)
+    return (deduped, truncated)
+
+
+def _lane4_partial_failure(
+    *,
+    stage: str,
+    code: str,
+    message: str,
+    rank: Optional[int] = None,
+    file_path: Optional[str] = None,
+    symbol: Optional[str] = None,
+    recoverable: bool = True,
+    latency_ms: Optional[float] = None,
+) -> dict:
+    out: dict[str, Any] = {
+        "stage": str(stage),
+        "code": str(code),
+        "message": str(message),
+        "recoverable": bool(recoverable),
+    }
+    if isinstance(rank, int):
+        out["rank"] = int(rank)
+    if isinstance(file_path, str):
+        out["file"] = file_path
+    if isinstance(symbol, str):
+        out["symbol"] = symbol
+    if latency_ms is not None:
+        out["latency_ms"] = float(latency_ms)
+    return out
+
+
 def hybrid_file_search(
     project_path: str,
     query: str,
@@ -1899,3 +2180,369 @@ def semantic_search(
         abstain_threshold=abstain_threshold,
         abstain_empty=abstain_empty,
     )
+
+
+def compound_semantic_impact_search(
+    project_path: str,
+    query: str,
+    k: int = 5,
+    *,
+    expand_graph: bool = False,
+    model: Optional[str] = None,
+    device: Optional[str] = None,
+    index_paths=None,
+    index_config=None,
+    retrieval_mode: str = "semantic",
+    no_result_guard: str = "none",
+    rg_pattern: Optional[str] = None,
+    rg_glob: Optional[str] = None,
+    rrf_k: int = 60,
+    abstain_threshold: Optional[float] = None,
+    abstain_empty: bool = False,
+    rerank: bool = False,
+    rerank_top_n: int = 5,
+    max_latency_ms_p50_ratio: Optional[float] = None,
+    max_payload_tokens_median_ratio: Optional[float] = None,
+    budget_tokens: Optional[int] = None,
+    impact_depth: int = LANE4_IMPACT_DEFAULT_DEPTH,
+    impact_limit: Optional[int] = LANE4_IMPACT_DEFAULT_LIMIT,
+    impact_language: Optional[str] = "auto",
+    ignore_spec=None,
+    workspace_root: Optional[Path] = None,
+) -> dict:
+    """Run lane4 compound retrieval: semantic retrieval with impact enrichment."""
+
+    k_requested = _safe_int(k)
+    if k_requested is None or k_requested <= 0:
+        k_requested = 5
+    k_effective = int(k_requested)
+    if budget_tokens is not None:
+        k_effective = _effective_k_from_budget_tokens(k_requested, budget_tokens=budget_tokens)
+
+    total_start = time.perf_counter()
+    semantic_start = time.perf_counter()
+    try:
+        semantic_rows = semantic_search(
+            project_path,
+            query,
+            k=k_requested,
+            expand_graph=expand_graph,
+            model=model,
+            device=device,
+            index_paths=index_paths,
+            index_config=index_config,
+            retrieval_mode=retrieval_mode,
+            no_result_guard=no_result_guard,
+            rg_pattern=rg_pattern,
+            rg_glob=rg_glob,
+            rrf_k=rrf_k,
+            abstain_threshold=abstain_threshold,
+            abstain_empty=abstain_empty,
+            rerank=rerank,
+            rerank_top_n=rerank_top_n,
+            max_latency_ms_p50_ratio=max_latency_ms_p50_ratio,
+            max_payload_tokens_median_ratio=max_payload_tokens_median_ratio,
+            budget_tokens=budget_tokens,
+        )
+    except Exception as exc:
+        semantic_ms = (time.perf_counter() - semantic_start) * 1000.0
+        total_ms = (time.perf_counter() - total_start) * 1000.0
+        return {
+            "schema_version": LANE4_SCHEMA_VERSION,
+            "feature_set_id": LANE4_FEATURE_SET_ID,
+            "status": "error",
+            "query": query,
+            "budget_tokens": _safe_int(budget_tokens),
+            "retrieval_mode": str(retrieval_mode or "semantic"),
+            "k_requested": int(k_requested),
+            "k_effective": int(k_effective),
+            "timing_ms": {
+                "total": float(total_ms),
+                "semantic": float(semantic_ms),
+                "impact_total": 0.0,
+                "impact_p50": 0.0,
+            },
+            "counts": {
+                "retrieval_results": 0,
+                "impact_attempted": 0,
+                "impact_ok": 0,
+                "impact_partial": 0,
+                "impact_error": 0,
+            },
+            "results": [],
+            "partial_failures": [
+                _lane4_partial_failure(
+                    stage="semantic",
+                    code="semantic_runtime_error",
+                    message=str(exc),
+                    recoverable=False,
+                    latency_ms=semantic_ms,
+                )
+            ],
+            "regression_metadata": {
+                "budget_tokens": _safe_int(budget_tokens),
+                "latency_ms_p50": float(total_ms),
+                "payload_tokens_median": 0.0,
+                "max_latency_ms_p50_ratio": _lane2_ratio(max_latency_ms_p50_ratio),
+                "max_payload_tokens_median_ratio": _lane2_ratio(max_payload_tokens_median_ratio),
+            },
+        }
+
+    semantic_ms = (time.perf_counter() - semantic_start) * 1000.0
+    normalized_rows = [dict(row) for row in semantic_rows if isinstance(row, dict)]
+    results: List[dict] = [
+        _lane4_build_result_row(row, rank=rank)
+        for rank, row in enumerate(normalized_rows, start=1)
+    ]
+    by_rank = {int(row["rank"]): row for row in results if isinstance(row, dict)}
+
+    targets, selection_failures = _lane4_impact_targets(
+        normalized_rows,
+        impact_limit=impact_limit,
+    )
+
+    partial_failures: List[dict] = []
+    for failure in selection_failures:
+        rank = failure.get("row_index")
+        rank_int = rank if isinstance(rank, int) else None
+        row_out = by_rank.get(rank_int) if rank_int is not None else None
+        file_path = row_out.get("file") if isinstance(row_out, dict) else None
+        symbol_name = None
+        if isinstance(row_out, dict):
+            symbol_obj = row_out.get("symbol")
+            if isinstance(symbol_obj, dict):
+                symbol_name = (
+                    symbol_obj.get("qualified_name")
+                    if isinstance(symbol_obj.get("qualified_name"), str)
+                    else symbol_obj.get("name")
+                )
+            impact_obj = row_out.get("impact")
+            if isinstance(impact_obj, dict):
+                impact_obj["error_code"] = "skipped_no_symbol"
+                impact_obj["message"] = str(failure.get("message") or "semantic row has no symbol")
+        partial_failures.append(
+            _lane4_partial_failure(
+                stage="target_selection",
+                code="skipped_no_symbol",
+                message=str(failure.get("message") or "semantic row has no symbol"),
+                rank=rank_int,
+                file_path=file_path if isinstance(file_path, str) else None,
+                symbol=symbol_name if isinstance(symbol_name, str) else None,
+                recoverable=True,
+            )
+        )
+
+    try:
+        depth = int(impact_depth)
+    except (TypeError, ValueError):
+        depth = LANE4_IMPACT_DEFAULT_DEPTH
+    if depth <= 0:
+        depth = LANE4_IMPACT_DEFAULT_DEPTH
+
+    impact_latencies: List[float] = []
+    impact_attempted = 0
+    impact_ok = 0
+
+    if targets:
+        languages = _lane4_languages_from_semantic_rows(
+            normalized_rows,
+            impact_language=impact_language,
+        )
+
+        from tldr.analysis import impact_analysis
+        from tldr.cross_file_calls import ProjectCallGraph, build_project_call_graph
+
+        combined_graph = ProjectCallGraph()
+        if not languages:
+            for target in targets:
+                rank = int(target["row_index"])
+                row_out = by_rank.get(rank)
+                if not isinstance(row_out, dict):
+                    continue
+                symbol_obj = row_out.get("symbol")
+                symbol_name = None
+                if isinstance(symbol_obj, dict):
+                    symbol_name = symbol_obj.get("qualified_name") or symbol_obj.get("name")
+                impact_obj = row_out.get("impact")
+                if isinstance(impact_obj, dict):
+                    impact_obj.update(
+                        {
+                            "status": "error",
+                            "error_code": "impact_runtime_error",
+                            "message": "No supported call-graph language could be inferred",
+                        }
+                    )
+                partial_failures.append(
+                    _lane4_partial_failure(
+                        stage="impact",
+                        code="impact_runtime_error",
+                        message="No supported call-graph language could be inferred",
+                        rank=rank,
+                        file_path=row_out.get("file") if isinstance(row_out.get("file"), str) else None,
+                        symbol=symbol_name if isinstance(symbol_name, str) else None,
+                        recoverable=True,
+                    )
+                )
+        else:
+            for language in languages:
+                try:
+                    language_graph = build_project_call_graph(
+                        project_path,
+                        language=language,
+                        ignore_spec=ignore_spec,
+                        workspace_root=workspace_root,
+                    )
+                except Exception as exc:
+                    partial_failures.append(
+                        _lane4_partial_failure(
+                            stage="call_graph",
+                            code="impact_runtime_error",
+                            message=f"{language}: {exc}",
+                            recoverable=True,
+                        )
+                    )
+                    continue
+                for edge in language_graph.sorted_edges():
+                    combined_graph.add_edge(*edge)
+
+            for target in targets:
+                rank = int(target["row_index"])
+                row_out = by_rank.get(rank)
+                if not isinstance(row_out, dict):
+                    continue
+                symbol_obj = row_out.get("symbol")
+                symbol_name = None
+                if isinstance(symbol_obj, dict):
+                    symbol_name = symbol_obj.get("qualified_name") or symbol_obj.get("name")
+                target_file = target.get("file")
+                aliases = [alias for alias in target.get("aliases", []) if isinstance(alias, str)]
+                if not aliases:
+                    continue
+
+                impact_attempted += 1
+                target_start = time.perf_counter()
+                chosen_alias: Optional[str] = None
+                payload: Optional[dict] = None
+                last_error = "Function not found in call graph"
+                for alias in aliases:
+                    if not combined_graph.edges:
+                        last_error = "Unable to build call graph for impact analysis"
+                        break
+                    candidate = impact_analysis(
+                        combined_graph,
+                        alias,
+                        max_depth=depth,
+                        target_file=target_file,
+                    )
+                    if isinstance(candidate, dict) and candidate.get("error"):
+                        last_error = str(candidate.get("error"))
+                        continue
+                    chosen_alias = alias
+                    payload = candidate if isinstance(candidate, dict) else {}
+                    break
+
+                target_latency_ms = (time.perf_counter() - target_start) * 1000.0
+                impact_latencies.append(float(target_latency_ms))
+                impact_obj = row_out.get("impact")
+                if not isinstance(impact_obj, dict):
+                    impact_obj = {}
+                    row_out["impact"] = impact_obj
+
+                if payload is None:
+                    impact_obj.update(
+                        {
+                            "status": "error",
+                            "latency_ms": float(target_latency_ms),
+                            "caller_count": 0,
+                            "truncated": None,
+                            "callers": [],
+                            "error_code": "impact_not_found",
+                            "message": last_error,
+                        }
+                    )
+                    partial_failures.append(
+                        _lane4_partial_failure(
+                            stage="impact",
+                            code="impact_not_found",
+                            message=last_error,
+                            rank=rank,
+                            file_path=row_out.get("file") if isinstance(row_out.get("file"), str) else None,
+                            symbol=symbol_name if isinstance(symbol_name, str) else None,
+                            recoverable=True,
+                            latency_ms=target_latency_ms,
+                        )
+                    )
+                else:
+                    callers, truncated = _lane4_extract_callers(payload)
+                    impact_obj.update(
+                        {
+                            "status": "ok",
+                            "latency_ms": float(target_latency_ms),
+                            "caller_count": int(len(callers)),
+                            "truncated": bool(truncated),
+                            "callers": callers,
+                            "error_code": None,
+                            "message": None,
+                            "function": chosen_alias,
+                        }
+                    )
+                    impact_ok += 1
+
+    impact_total_ms = float(sum(impact_latencies))
+    impact_p50_ms = float(median(impact_latencies)) if impact_latencies else 0.0
+    total_ms = (time.perf_counter() - total_start) * 1000.0
+
+    partial_failures = sorted(
+        partial_failures,
+        key=lambda item: (
+            str(item.get("stage")),
+            int(item.get("rank")) if isinstance(item.get("rank"), int) else 0,
+            str(item.get("file") or ""),
+            str(item.get("symbol") or ""),
+            str(item.get("code") or ""),
+        ),
+    )
+    impact_partial = sum(1 for item in partial_failures if bool(item.get("recoverable")))
+    impact_error = sum(1 for item in partial_failures if not bool(item.get("recoverable")))
+    status = "ok"
+    if impact_error > 0:
+        status = "error"
+    elif impact_partial > 0:
+        status = "partial"
+
+    payload_tokens_median = (
+        float(median([_row_payload_tokens(row) for row in results])) if results else 0.0
+    )
+
+    return {
+        "schema_version": LANE4_SCHEMA_VERSION,
+        "feature_set_id": LANE4_FEATURE_SET_ID,
+        "status": status,
+        "query": query,
+        "budget_tokens": _safe_int(budget_tokens),
+        "retrieval_mode": str(retrieval_mode or "semantic"),
+        "k_requested": int(k_requested),
+        "k_effective": int(k_effective),
+        "timing_ms": {
+            "total": float(total_ms),
+            "semantic": float(semantic_ms),
+            "impact_total": float(impact_total_ms),
+            "impact_p50": float(impact_p50_ms),
+        },
+        "counts": {
+            "retrieval_results": int(len(results)),
+            "impact_attempted": int(impact_attempted),
+            "impact_ok": int(impact_ok),
+            "impact_partial": int(impact_partial),
+            "impact_error": int(impact_error),
+        },
+        "results": results,
+        "partial_failures": partial_failures,
+        "regression_metadata": {
+            "budget_tokens": _safe_int(budget_tokens),
+            "latency_ms_p50": float(total_ms),
+            "payload_tokens_median": float(payload_tokens_median),
+            "max_latency_ms_p50_ratio": _lane2_ratio(max_latency_ms_p50_ratio),
+            "max_payload_tokens_median_ratio": _lane2_ratio(max_payload_tokens_median_ratio),
+        },
+    }

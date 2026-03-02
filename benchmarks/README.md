@@ -313,6 +313,21 @@ uv run tldrf semantic index --cache-root benchmark/cache-root --index repo:djang
 uv run tldrf semantic index --cache-root benchmark/cache-root --index repo:django --lang python --rebuild benchmark/corpora/django
 ```
 
+## Phase 5b: Compound Semantic+Impact (Deterministic)
+
+Compares lane4 compound retrieval+impact against a sequential baseline (`semantic_search` + bounded `impact_analysis`) with no LLM calls.
+
+```bash
+uv run python scripts/bench_compound_semantic_impact.py \
+  --corpus django \
+  --queries benchmarks/retrieval/django_queries.json \
+  --cache-root benchmark/cache-root \
+  --index repo:django \
+  --budget-tokens 2000 \
+  --retrieval-mode hybrid \
+  --no-result-guard rg_empty
+```
+
 ## Phase 6: Token Efficiency (Fixed Budgets)
 
 Produces fixed-budget curves (`500/1000/2000/5000/10000` tokens by default) for:

@@ -90,6 +90,18 @@ def test_semantic_search_lane3_budget_flag_exposed() -> None:
     assert "--budget-tokens" in option_strings
 
 
+def test_semantic_search_lane4_compound_flags_exposed() -> None:
+    option_strings = _semantic_search_option_strings()
+    expected = {
+        "--compound-impact",
+        "--impact-depth",
+        "--impact-limit",
+        "--impact-language",
+    }
+    missing = expected - option_strings
+    assert not missing, f"missing lane4 semantic search flags: {sorted(missing)}"
+
+
 def test_semantic_search_lane2_flags_parse_values() -> None:
     parser = build_parser()
     args = parser.parse_args(
@@ -133,3 +145,26 @@ def test_semantic_search_lane3_budget_flag_parses_value() -> None:
     )
 
     assert args.budget_tokens == 1500
+
+
+def test_semantic_search_lane4_compound_flags_parse_values() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "semantic",
+            "search",
+            "query text",
+            "--compound-impact",
+            "--impact-depth",
+            "4",
+            "--impact-limit",
+            "2",
+            "--impact-language",
+            "python",
+        ]
+    )
+
+    assert args.compound_impact is True
+    assert args.impact_depth == 4
+    assert args.impact_limit == 2
+    assert args.impact_language == "python"

@@ -171,6 +171,56 @@ This log records keep/rollback outcomes for feature lanes using pinned matrix ro
   - Budget-sensitivity diagnostic: lane3 retrieval-quality run showed budget-varying `effective_k` (`500->3`, `1000->5`, `2000->10`, `5000->25`) with `fpr@5=0.0` across budgets.
   - Drawback observed: matrix export currently depends on compare/assert label alignment with snapshot defaults (`llm-tldr`/`contextplus`), so a normalized-label compare/assert artifact was required.
 
+## Lane4: Compound Semantic+Impact (Phase 5, 2026-03-02)
+
+- Outcome: `KEEP` (workflow lane; provisional until full `stability.two_of_three` sign-off runs are completed).
+- Contract identity:
+  - `feature_set_id`: `feature.compound-semantic-impact.v1`
+  - profile: `benchmarks/head_to_head/tool_profiles/llm_tldr.compound_semantic_impact_lane4.v1.json`
+  - output schema contract implemented in `tldr.semantic.compound_semantic_impact_search(...)`.
+- Before row IDs:
+  - `llm-tldr|bbfee65bc8cc5d5051edb447d689e7ebed987a7c|baseline.run1.fixed.stitched.allowlist|sentence-transformers|profile_unpinned|2000|run1-fixed-stitched-allowlist-20260302T062602Z`
+  - `contextplus|4d7a6c37847c698c850d4b412ddb603dfc47257e|baseline.run1|unknown|unknown|2000|run1-segment-retrieval-b2000`
+- After row IDs:
+  - `llm-tldr|working-tree|feature.compound-semantic-impact.v1|sentence-transformers|profile_unpinned|2000|run1-compound-semantic-impact-lane4-retrieval-b2000-t1-r01-r12-segment`
+  - `contextplus|4d7a6c37847c698c850d4b412ddb603dfc47257e|baseline.run1|unknown|unknown|2000|run1-retrieval-b2000-t1-r01-r12-segment`
+- Decision evidence artifacts:
+  - compound benchmark:
+    - `benchmark/runs/20260302-215311Z-compound-semantic-impact-django-lane4-b2000.json`
+  - retrieval-quality regression:
+    - `benchmark/runs/20260302-214803Z-retrieval-django-lane4-b2000.json`
+  - bounded h2h subset (`R01..R12`, `budget=2000`, `trial=1`):
+    - `benchmark/runs/h2h-suite-segment-retrieval-b2000-t1-r01-r12.v1.json`
+    - `benchmark/runs/h2h-task-manifest-segment-retrieval-r01-r12.json`
+    - `benchmark/runs/h2h-llm-tldr-score-run1-compound-semantic-impact-lane4-retrieval-b2000-t1-r01-r12-segment.json`
+    - `benchmark/runs/h2h-llm-tldr-score-run1-baseline-retrieval-b2000-t1-r01-r12-segment.json`
+    - `benchmark/runs/h2h-contextplus-score-run1-retrieval-b2000-t1-r01-r12-segment.json`
+    - `benchmark/runs/h2h-compare-run1-compound-semantic-impact-lane4-vs-baseline-retrieval-b2000-t1-r01-r12-segment.json`
+    - `benchmark/runs/h2h-compare-run1-compound-semantic-impact-lane4-vs-contextplus-retrieval-b2000-t1-r01-r12-segment.json`
+    - `benchmark/runs/h2h-assert-run1-compound-semantic-impact-lane4-vs-contextplus-retrieval-b2000-t1-r01-r12-segment.json`
+    - `benchmark/runs/matrix/h2h-matrix-long-run1-compound-semantic-impact-lane4-retrieval-b2000-t1-r01-r12-vs-contextplus.json`
+    - `benchmark/runs/matrix/h2h-matrix-long-run1-compound-semantic-impact-lane4-retrieval-b2000-t1-r01-r12-vs-contextplus.csv`
+- Gate interpretation:
+  - Per-run strict gates passed on bounded lane4 subset: `runs[0].strict_gates_passed=true`.
+  - Overall assert remains false only because `stability.two_of_three=false` with reason `insufficient_runs_for_stability_check`.
+
+### Lane4 Comparison Table (Bounded Retrieval Segment `R01..R12`, Budget 2000, Trial 1)
+
+| Metric | llm-tldr lane4 | llm-tldr baseline | contextplus baseline | lane4 - baseline | lane4 - contextplus |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `mrr_mean` | 0.7455 | 0.6394 | 0.2727 | +0.1061 | +0.4727 |
+| `recall@5_mean` | 0.8182 | 0.8182 | 0.3636 | +0.0000 | +0.4545 |
+| `precision@5_mean` | 0.1636 | 0.1636 | 0.0727 | +0.0000 | +0.0909 |
+| `fpr@5_mean` | 0.0000 | 0.0000 | 1.0000 | +0.0000 | -1.0000 |
+| `payload_tokens_median` | 78.5 | 50.0 | 334.0 | +28.5 | -255.5 |
+| `latency_ms_p50` | 5161.943 | 5321.418 | 7654.634 | -159.475 | -2492.692 |
+
+- Rationale summary:
+  - Versus `contextplus`: lane4 wins all primary retrieval metrics (`5/5`) on this bounded subset.
+  - Versus llm baseline: lane4 improves `mrr` and latency while recall/precision/FPR remain flat; payload increases.
+  - Compound benchmark result: `time_to_evidence` is near parity with sequential baseline (`217.036ms` vs `215.425ms`) while payload is lower on this workload (`48.0` vs `1164.5` median tokens).
+  - Drawback to carry forward into lane5: lane4 retrieval payload is higher than llm baseline on this subset and needs full-lane confirmation.
+
 ## Program Rollup (Cross-Lane, As Of 2026-03-02)
 
 This section is the single summary view for "where we stand now" across lanes and tools.
@@ -182,6 +232,7 @@ This section is the single summary view for "where we stand now" across lanes an
 | lane1 (`llm-tldr`) vs `contextplus` | `llm-tldr` | `5-0` | `benchmark/runs/h2h-compare-run1-hybrid-lane1-retrieval-b2000-t123-vs-contextplus-run1-segment.json` |
 | lane2 (`llm-tldr`) vs `contextplus` | `llm-tldr` | `5-0` | `benchmark/runs/h2h-compare-run1-abstain-rerank-lane2-retrieval-b2000-t123-vs-contextplus-run1-segment.json` |
 | lane3 (`llm-tldr`) vs `contextplus` | `llm-tldr` | `5-0` | `benchmark/runs/h2h-compare-run1-budget-aware-lane3-retrieval-b2000-t123-vs-contextplus-run1-segment-normalized-labels.json` |
+| lane4 (`llm-tldr`, bounded `R01..R12`) vs `contextplus` | `llm-tldr` | `5-0` | `benchmark/runs/h2h-compare-run1-compound-semantic-impact-lane4-vs-contextplus-retrieval-b2000-t1-r01-r12-segment.json` |
 | `rg-native` vs `contextplus` | `rg-native` | `5-0` | `benchmark/runs/h2h-compare-run1-rg-native-retrieval-b2000-t123-segment-vs-contextplus-run1-segment.json` |
 | `rg-native` vs `llm-tldr` baseline | `rg-native` | `5-0` | `benchmark/runs/h2h-compare-run1-rg-native-retrieval-b2000-t123-segment-vs-llm-tldr-baseline-segment.json` |
 
@@ -201,10 +252,10 @@ Resolved-row interpretation:
 - `contextplus` and `rg-native` remain strong retrieval baselines but lose structural workflow rows via `N/A`.
 - Final full-product gate close requires resolving the pending workflow rows (explicit `context` row contract, semantic row parity status for `contextplus`, and daemon/index operational artifact).
 
-## Lane4 Handoff (Active Next Loop)
+## Lane5 Handoff (Active Next Loop)
 
-1. Lock lane4 profile identity (`feature.compound-semantic-impact.v1`) and command contract.
-2. Add red tests for compound schema, partial-failure handling, and latency envelope.
-3. Implement compound semantic+impact path behind opt-in controls with default behavior unchanged.
-4. Run deterministic loop: compound benchmark + retrieval regression checks + retrieval segment h2h at budget `2000`.
-5. Append lane4 keep/rollback decision in this log with before/after row IDs and drawback accounting.
+1. Lock lane5 profile identity (`feature.navigate-cluster.v1`) and command contract.
+2. Add red tests for deterministic clustering contract and navigation result stability.
+3. Implement semantic navigation/clustering behind opt-in controls with default behavior unchanged.
+4. Run deterministic loop: lane5 artifact + retrieval regression checks + retrieval segment h2h at budget `2000`.
+5. Run one consolidated Gate B structural sweep (`impact/slice/dfg/cfg`) across lanes 1-5 and append updated quantitative rows.

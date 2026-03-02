@@ -285,3 +285,10 @@ def test_hybrid_search_lane2_bound_metadata_accepts_positive_ratios_only(
     row = out[0]
     assert row.get("max_latency_ms_p50_ratio") == 1.2
     assert "max_payload_tokens_median_ratio" not in row
+
+
+def test_lane4_compound_signature_exposes_impact_controls() -> None:
+    params = set(inspect.signature(semantic.compound_semantic_impact_search).parameters)
+    expected = {"impact_depth", "impact_limit", "impact_language"}
+    missing = expected - params
+    assert not missing, f"missing lane4 compound kwargs: {sorted(missing)}"

@@ -831,7 +831,11 @@ class TLDRDaemon:
         action = command.get("action", "search")
 
         try:
-            from tldr.semantic import build_semantic_index, semantic_search
+            from tldr.semantic import (
+                build_semantic_index,
+                compound_semantic_impact_search,
+                semantic_search,
+            )
 
             if action == "index":
                 language = command.get("language", "python")
@@ -844,7 +848,7 @@ class TLDRDaemon:
                 )
                 return {"status": "ok", "indexed": count}
 
-            elif action == "search":
+            elif action in {"search", "compound"}:
                 def _coerce_bool(value: Any, default: bool = False) -> bool:
                     if value is None:
                         return bool(default)
@@ -885,6 +889,10 @@ class TLDRDaemon:
                     return {"status": "error", "message": "Missing required parameter: query"}
                 k = _coerce_int(command.get("k", 10), 10)
                 retrieval_mode = command.get("retrieval_mode", "semantic")
+                compound_impact = _coerce_bool(
+                    command.get("compound_impact"),
+                    default=(action == "compound"),
+                )
                 no_result_guard = command.get("no_result_guard", "none")
                 rg_pattern = command.get("rg_pattern")
                 rg_glob = command.get("rg_glob")
@@ -917,6 +925,41 @@ class TLDRDaemon:
                     "budget_tokens",
                     self._semantic_config.get("budget_tokens"),
                 )
+                if compound_impact:
+                    result = compound_semantic_impact_search(
+                        str(self.project),
+                        query,
+                        k=k,
+                        retrieval_mode=str(retrieval_mode),
+                        no_result_guard=str(no_result_guard),
+                        rg_pattern=rg_pattern if isinstance(rg_pattern, str) else None,
+                        rg_glob=rg_glob if isinstance(rg_glob, str) and rg_glob.strip() else None,
+                        rrf_k=rrf_k,
+                        abstain_threshold=_coerce_optional_float(abstain_threshold),
+                        abstain_empty=_coerce_bool(abstain_empty, default=False),
+                        rerank=_coerce_bool(rerank, default=False),
+                        rerank_top_n=_coerce_int(rerank_top_n, 5),
+                        max_latency_ms_p50_ratio=_coerce_optional_float(
+                            max_latency_ms_p50_ratio
+                        ),
+                        max_payload_tokens_median_ratio=_coerce_optional_float(
+                            max_payload_tokens_median_ratio
+                        ),
+                        budget_tokens=_coerce_optional_int(budget_tokens),
+                        impact_depth=_coerce_int(command.get("impact_depth", 3), 3),
+                        impact_limit=_coerce_optional_int(command.get("impact_limit", 3)),
+                        impact_language=(
+                            command.get("impact_language")
+                            if isinstance(command.get("impact_language"), str)
+                            else "auto"
+                        ),
+                        index_paths=self.index_paths,
+                        index_config=self.index_config,
+                        ignore_spec=self._ignore_spec,
+                        workspace_root=self._workspace_root,
+                    )
+                    return {"status": "ok", "result": result, "results": result}
+
                 results = semantic_search(
                     str(self.project),
                     query,
