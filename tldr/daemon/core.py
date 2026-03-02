@@ -181,6 +181,12 @@ class TLDRDaemon:
             "enabled": True,
             "auto_reindex_threshold": 20,  # Files changed before auto re-index
             "model": "bge-large-en-v1.5",
+            "abstain_threshold": None,
+            "abstain_empty": False,
+            "rerank": False,
+            "rerank_top_n": 5,
+            "max_latency_ms_p50_ratio": None,
+            "max_payload_tokens_median_ratio": None,
         }
 
         # Try Claude settings first
@@ -838,15 +844,66 @@ class TLDRDaemon:
                 return {"status": "ok", "indexed": count}
 
             elif action == "search":
+                def _coerce_bool(value: Any, default: bool = False) -> bool:
+                    if value is None:
+                        return bool(default)
+                    if isinstance(value, bool):
+                        return value
+                    if isinstance(value, str):
+                        normalized = value.strip().lower()
+                        if normalized in {"1", "true", "yes", "on"}:
+                            return True
+                        if normalized in {"0", "false", "no", "off"}:
+                            return False
+                    return bool(value)
+
+                def _coerce_int(value: Any, default: int) -> int:
+                    try:
+                        return int(value)
+                    except (TypeError, ValueError):
+                        return int(default)
+
+                def _coerce_optional_float(value: Any) -> float | None:
+                    if value is None:
+                        return None
+                    try:
+                        return float(value)
+                    except (TypeError, ValueError):
+                        return None
+
                 query = command.get("query")
                 if not query:
                     return {"status": "error", "message": "Missing required parameter: query"}
-                k = command.get("k", 10)
+                k = _coerce_int(command.get("k", 10), 10)
                 retrieval_mode = command.get("retrieval_mode", "semantic")
                 no_result_guard = command.get("no_result_guard", "none")
                 rg_pattern = command.get("rg_pattern")
                 rg_glob = command.get("rg_glob")
-                rrf_k = command.get("rrf_k", 60)
+                rrf_k = _coerce_int(command.get("rrf_k", 60), 60)
+                abstain_threshold = command.get(
+                    "abstain_threshold",
+                    self._semantic_config.get("abstain_threshold"),
+                )
+                abstain_empty = command.get(
+                    "abstain_empty",
+                    self._semantic_config.get("abstain_empty", False),
+                )
+                rerank = command.get(
+                    "rerank",
+                    self._semantic_config.get("rerank", False),
+                )
+                rerank_top_n = command.get(
+                    "rerank_top_n",
+                    self._semantic_config.get("rerank_top_n", 5),
+                )
+                max_latency_ms_p50_ratio = command.get(
+                    "max_latency_ms_p50_ratio",
+                    self._semantic_config.get("max_latency_ms_p50_ratio"),
+                )
+                max_payload_tokens_median_ratio = command.get(
+                    "max_payload_tokens_median_ratio",
+                    self._semantic_config.get("max_payload_tokens_median_ratio"),
+                )
                 results = semantic_search(
                     str(self.project),
                     query,
@@ -855,7 +912,15 @@ class TLDRDaemon:
                     no_result_guard=str(no_result_guard),
                     rg_pattern=rg_pattern if isinstance(rg_pattern, str) else None,
                     rg_glob=rg_glob if isinstance(rg_glob, str) and rg_glob.strip() else None,
-                    rrf_k=int(rrf_k),
+                    rrf_k=rrf_k,
+                    abstain_threshold=_coerce_optional_float(abstain_threshold),
+                    abstain_empty=_coerce_bool(abstain_empty, default=False),
+                    rerank=_coerce_bool(rerank, default=False),
+                    rerank_top_n=_coerce_int(rerank_top_n, 5),
+                    max_latency_ms_p50_ratio=_coerce_optional_float(max_latency_ms_p50_ratio),
+                    max_payload_tokens_median_ratio=_coerce_optional_float(
+                        max_payload_tokens_median_ratio
+                    ),
                     index_paths=self.index_paths,
                     index_config=self.index_config,
                 )

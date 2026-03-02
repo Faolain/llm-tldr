@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "suite_id": "h2h_llm_tldr_vs_contextplus_v1",
+  "tool_id": "llm-tldr",
+  "feature_set_id": "feature.abstain-rerank.v1",
+  "display_name": "llm-tldr (abstain+rerank lane2)",
+  "version_capture": {
+    "command": ["uv", "run", "tldrf", "--version"],
+    "fallback_command": ["uv", "run", "python", "-c", "import tldr; print(getattr(tldr, '__version__', 'unknown'))"]
+  },
+  "capabilities": {
+    "retrieval": true,
+    "impact": true,
+    "slice": true,
+    "complexity": true,
+    "data_flow": true
+  },
+  "commands": {
+    "retrieval": {
+      "description": "Hybrid retrieval with confidence abstention, optional rerank, and lane2 regression-bound metadata flags.",
+      "template": "uv run tldrf semantic search \"{query}\" --path {repo_root} --k {top_k} --lang python --hybrid --rg-pattern \"{rg_pattern}\" --no-result-guard rg_empty --abstain-threshold 0.35 --abstain-empty --rerank --rerank-top-n 8 --max-latency-ms-p50-ratio 1.10 --max-payload-tokens-median-ratio 0.90"
+    },
+    "impact": {
+      "description": "Caller-set impact analysis for a function scoped by file.",
+      "template": "uv run tldrf impact \"{function}\" \"{repo_root}\" --file \"{file}\" --lang python"
+    },
+    "slice": {
+      "description": "Backward slice at line-level granularity.",
+      "template": "uv run tldrf slice \"{file_abs}\" \"{function}\" {target_line} --lang python"
+    },
+    "complexity": {
+      "description": "Cyclomatic complexity via CFG extraction.",
+      "template": "uv run tldrf cfg \"{file_abs}\" \"{function}\" --lang python"
+    },
+    "data_flow": {
+      "description": "Variable-level data-flow graph extraction.",
+      "template": "uv run tldrf dfg \"{file_abs}\" \"{function}\" --lang python"
+    }
+  },
+  "budget_policy": {
+    "max_payload_tokens": "enforced_by_benchmark_harness",
+    "max_payload_bytes": "enforced_by_benchmark_harness"
+  },
+  "notes": [
+    "Lane2 profile for product-path confidence abstention and optional rerank retrieval controls.",
+    "Defaults remain unchanged unless lane2 flags are explicitly enabled."
+  ]
+}

@@ -523,6 +523,40 @@ Device Selection:
         help="RRF constant for --hybrid ranking (default: 60).",
     )
     search_p.add_argument(
+        "--abstain-threshold",
+        type=float,
+        default=None,
+        help="Optional confidence threshold for abstention.",
+    )
+    search_p.add_argument(
+        "--abstain-empty",
+        action="store_true",
+        help="When threshold abstains, return [] instead of low-confidence rows.",
+    )
+    search_p.add_argument(
+        "--rerank",
+        action="store_true",
+        help="Enable optional deterministic reranking.",
+    )
+    search_p.add_argument(
+        "--rerank-top-n",
+        type=int,
+        default=5,
+        help="Top-N candidates considered by --rerank (default: 5).",
+    )
+    search_p.add_argument(
+        "--max-latency-ms-p50-ratio",
+        type=float,
+        default=None,
+        help="Optional lane2 regression bound metadata for latency p50 ratio.",
+    )
+    search_p.add_argument(
+        "--max-payload-tokens-median-ratio",
+        type=float,
+        default=None,
+        help="Optional lane2 regression bound metadata for payload median-token ratio.",
+    )
+    search_p.add_argument(
         "--model",
         default=None,
         help="Embedding model (uses index model if not specified)",
@@ -1717,6 +1751,12 @@ def main():
                     rg_pattern=args.rg_pattern,
                     rg_glob=args.rg_glob,
                     rrf_k=int(args.rrf_k),
+                    abstain_threshold=args.abstain_threshold,
+                    abstain_empty=bool(args.abstain_empty),
+                    rerank=bool(args.rerank),
+                    rerank_top_n=int(args.rerank_top_n),
+                    max_latency_ms_p50_ratio=args.max_latency_ms_p50_ratio,
+                    max_payload_tokens_median_ratio=args.max_payload_tokens_median_ratio,
                 )
                 print(json.dumps(results, indent=2))
 

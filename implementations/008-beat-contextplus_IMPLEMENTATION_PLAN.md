@@ -48,6 +48,7 @@ Make `llm-tldr` measurably better than `contextplus` using the existing neutral 
   - and append a new run-stamped matrix artifact under `benchmark/runs/matrix/`.
 - [x] Phase 4 lane1 hybrid confirmation executed as a deterministic retrieval-only segment (`budget=2000`, `trials=1..3`) and recorded with score/compare/assert artifacts.
 - [x] Phase 5 lane1 keep/rollback decision recorded in canonical matrix artifacts + lane decision log; execution focus moved to lane2.
+- [x] Lane2 abstain/rerank loop completed (`red->green tests`, deterministic retrieval-quality + segment-scoped h2h score/compare/assert, matrix export, and keep/rollback decision logged).
 - [ ] For each new feature implementation, append a before/after delta row with explicit keep/rollback decision.
 
 Note:
@@ -108,6 +109,10 @@ This track allows progress without executing run2/run3 immediately. It is explic
 - [x] Add first-class stitch allowlist mode for logic-change segment refreshes:
   - `scripts/bench_h2h_stitch.py` now supports explicit row allowlists (`task_id`, `trial`, `budget_tokens`) without failure-class remapping.
 - [x] Defer full 008 sign-off reruns (`run2/run3`) to optional section while comparison-first feature benchmarking continues.
+- [x] Complete lane2 loop end-to-end under deterministic constraints (no LLM calls):
+  - red->green tests, retrieval-quality run, retrieval-segment h2h score/compare/assert, matrix export, and lane decision logging.
+- [ ] Start lane3 (budget-aware retrieval) using the same loop:
+  - lock `feature.budget-aware.v1`, add red tests, implement opt-in controls, run deterministic benchmarks, and append keep/rollback decision.
 
 ## Implementation Progress (2026-03-02)
 
@@ -218,6 +223,12 @@ uv run pytest \
   - Historically, stitch replacement required provider/preflight eligibility only.
   - For the first run1 quality refresh (`r3d10`), a dedicated stitch-allow classification artifact was used to replace targeted rows.
   - This is now addressed with first-class explicit allowlist filters in `bench_h2h_stitch.py`, so logic-change row replacement can be performed without temporary classification remapping.
+- Lane2 retrieval-quality vs h2h caveat (observed in lane2 deterministic loop):
+  - `bench_retrieval_quality.py` lane2 variant and retrieval-only h2h segment can diverge because they answer different questions and task scopes.
+  - For keep/rollback in 008, prioritize canonical h2h segment evidence (`score/compare/assert` at budget `2000`) and record retrieval-quality as supporting diagnostics.
+- Lane2 confidence heuristic caveat:
+  - Confidence must be derived from semantic similarity (not only normalized fused rank), otherwise abstention almost never triggers on low-signal queries.
+  - Mitigation implemented: lane2 confidence prefers per-file semantic score with deterministic fallback path and bounded `[0,1]` clamp.
 
 ## Definition Of Done (Program-Level)
 
@@ -480,6 +491,72 @@ Use this matrix to decide what to implement next and how to judge whether a port
     - implement minimal confidence abstention + optional rerank switches in product retrieval path (default behavior unchanged when disabled).
     - run the same segment-scoped `retrieval@2000,trials=1..3` score/compare/assert loop and export a new canonical matrix row under `benchmark/runs/matrix/`.
     - append lane2 keep/rollback outcome to `implementations/008-canonical-matrix-lane-decisions.md`.
+  - completion update (append-only, 2026-03-02):
+    - [x] contract frozen with lane2 identity and opt-in-only behavior:
+      - `feature_set_id`: `feature.abstain-rerank.v1`
+      - tool profile: `benchmarks/head_to_head/tool_profiles/llm_tldr.abstain_rerank_lane2.v1.json`
+      - explicit retrieval flags: `--abstain-threshold`, `--abstain-empty`, `--rerank`, `--rerank-top-n`, `--max-latency-ms-p50-ratio`, `--max-payload-tokens-median-ratio`.
+    - [x] red->green test-first lane2 coverage:
+      - `tests/test_semantic_hybrid_retrieval.py`:
+        - signature exposure checks for lane2 kwargs.
+        - confidence/rerank metadata checks.
+        - abstain-threshold behavior (`abstain_empty`).
+        - rerank reorder behavior and bound-metadata checks.
+      - `tests/test_cli_semantic_hybrid_flags.py`:
+        - lane2 flag exposure + parse-value checks.
+      - `tests/test_bench_head_to_head_tool_profiles_schema.py`:
+        - lane2 profile schema coverage.
+      - supporting deterministic benchmark helper coverage:
+        - `tests/test_bench_retrieval_quality_helpers.py`.
+    - [x] lane2 implementation behind opt-in controls (default unchanged when disabled):
+      - product retrieval core: `tldr/semantic.py`
+      - CLI wiring: `tldr/cli.py`
+      - daemon wiring: `tldr/daemon/core.py`
+      - MCP wiring: `tldr/mcp_server.py`
+      - deterministic retrieval-quality lane2 variant support: `scripts/bench_retrieval_quality.py`.
+    - [x] deterministic evaluation artifacts (no LLM calls):
+      - retrieval-quality run:
+        - `benchmark/runs/20260302-183458Z-retrieval-django-lane2.json`
+      - h2h segment predictions + scoring:
+        - `benchmark/runs/h2h-llm-tldr-predictions-run1-abstain-rerank-lane2-retrieval-b2000-t123-segment.json`
+        - `benchmark/runs/h2h-failure-classification-run1-llm-tldr-abstain-rerank-lane2-retrieval-b2000-t123.json`
+        - `benchmark/runs/h2h-run-metadata-run1-llm-tldr-abstain-rerank-lane2-retrieval-b2000-t123.json`
+        - `benchmark/runs/h2h-llm-tldr-score-run1-abstain-rerank-lane2-retrieval-b2000-t123-segment.json`
+      - compares:
+        - `benchmark/runs/h2h-compare-run1-abstain-rerank-lane2-retrieval-b2000-t123-vs-contextplus-run1-segment.json`
+        - `benchmark/runs/h2h-compare-run1-llm-tldr-abstain-rerank-lane2-vs-baseline-retrieval-b2000-t123-segment.json`
+        - `benchmark/runs/h2h-compare-run1-llm-tldr-abstain-rerank-lane2-vs-hybrid-lane1-retrieval-b2000-t123-segment.json`
+      - strict assert:
+        - `benchmark/runs/h2h-assert-run1-abstain-rerank-lane2-retrieval-b2000-t123-vs-contextplus-run1-segment.json`
+      - matrix export:
+        - `benchmark/runs/matrix/h2h-matrix-long-run1-abstain-rerank-lane2-retrieval-b2000-t123-vs-contextplus-run1-segment-20260302T185207Z.json`
+        - `benchmark/runs/matrix/h2h-matrix-long-run1-abstain-rerank-lane2-retrieval-b2000-t123-vs-contextplus-run1-segment-20260302T185207Z.csv`
+    - [x] lane2 metrics summary (`budget=2000`, retrieval lane):
+      - lane2 score: `mrr=0.8741`, `recall@5=0.8772`, `precision@5=0.1754`, `fpr@5=0.0`, `payload_tokens_median=78.0`, `latency_ms_p50=4989.022`.
+      - delta vs llm baseline (`lane2 - baseline`): `mrr +0.2623`, `recall@5 +0.0877`, `precision@5 +0.0175`, `fpr@5 +0.0000`, `payload +24.5`, `latency -32.394ms`.
+      - delta vs contextplus (`lane2 - contextplus`): `mrr +0.6585`, `recall@5 +0.5789`, `precision@5 +0.1158`, `fpr@5 -1.0000`, `payload -251.0`, `latency -2728.085ms`.
+      - delta vs lane1 hybrid (`lane2 - lane1`): `mrr +0.0178`, `recall@5 -0.0526`, `precision@5 -0.0105`, `fpr@5 +0.0000`, `payload +0.0`, `latency -437.188ms`.
+      - strict assert interpretation: run-level strict gates pass (`runs[0].strict_gates_passed=true`), overall remains `false` only due `stability.two_of_three`.
+    - [x] lane2 decision recorded in canonical log: `implementations/008-canonical-matrix-lane-decisions.md`.
+    - final findings (verbatim, requested):
+      ```text
+      Short answer: not mutually exclusive. Lane 2 is layered on top of lane 1.
+
+      - Lane 1 = hybrid retrieval core (`rg + semantic + RRF + rg_empty guard`).
+      - Lane 2 = lane 1 plus post-processing controls (`confidence`, `abstain`, `optional rerank`, bound metadata).
+
+      In code, lane2 runs after hybrid ranking in semantic.py, and lane2 profile already invokes `--hybrid` in llm_tldr.abstain_rerank_lane2.v1.json.
+
+      At budget 2000 (retrieval segment):
+      - Lane 1: better `recall@5` and `precision@5`
+      - Lane 2: better `mrr` and better latency, same `fpr@5`, same payload
+
+      So “overall better” depends on objective:
+      - If you value breadth/top-5 coverage more: lane 1 looks better.
+      - If you value first-hit ranking + speed more: lane 2 looks better.
+
+      They can absolutely be combined, and they already are in lane2 profile (hybrid + abstain/rerank). The practical next move is tuning lane2 params (especially `abstain_threshold`/`abstain_empty`/`rerank_top_n`) to recover lane1 recall while keeping lane2 mrr/latency gains.
+      ```
 - [ ] Budget-aware retrieval behavior:
   - owner: `token-efficiency`
   - test-first files: `tests/test_bench_token_efficiency_helpers.py`

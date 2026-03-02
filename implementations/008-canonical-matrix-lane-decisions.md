@@ -46,8 +46,8 @@ This log records keep/rollback outcomes for feature lanes using pinned matrix ro
   - Tradeoff vs llm-tldr baseline: payload `+24.5` tokens median and latency `+404.794ms` p50.
   - Reliability context: segment-scoped run-validity is clean for both tools (`timeout/error/budget_violation=0`).
 - Baseline integrity note:
-  - The run1 baseline snapshot/pivot files remain unchanged.
-  - Lane1 decision evidence is tracked in dedicated segment-scoped matrix artifacts and this decision log to avoid silent baseline mixing.
+  - The run1 snapshot/pivot markdowns now track the latest exported matrix view for active comparison work.
+  - Lane1 baseline evidence remains pinned by its own run-stamped matrix artifacts and row IDs in this log.
 
 ## Lane2 Handoff (Active Next Loop)
 
@@ -56,3 +56,58 @@ This log records keep/rollback outcomes for feature lanes using pinned matrix ro
 3. Implement minimal confidence abstention plus optional rerank switches with default behavior unchanged when disabled.
 4. Run segment-scoped `retrieval@2000,trials=1..3` score/compare/assert and export a new matrix row under `benchmark/runs/matrix/`.
 5. Append lane2 keep/rollback decision in this log.
+
+## Lane2: Confidence Abstention + Optional Rerank (Phase 5, 2026-03-02)
+
+- Outcome: `KEEP` (comparison-first track; provisional until full `stability.two_of_three` sign-off runs are completed).
+- Contract identity:
+  - `feature_set_id`: `feature.abstain-rerank.v1`
+  - profile: `benchmarks/head_to_head/tool_profiles/llm_tldr.abstain_rerank_lane2.v1.json`
+- Before row IDs:
+  - `llm-tldr|bbfee65bc8cc5d5051edb447d689e7ebed987a7c|baseline.run1.fixed.stitched.allowlist|sentence-transformers|profile_unpinned|2000|run1-fixed-stitched-allowlist-20260302T062602Z`
+  - `llm-tldr|4d7a6c37847c698c850d4b412ddb603dfc47257e|feature.hybrid.v1|sentence-transformers|profile_unpinned|2000|run1-hybrid-lane1-retrieval-b2000-t123-segment`
+  - `contextplus|4d7a6c37847c698c850d4b412ddb603dfc47257e|baseline.run1|unknown|unknown|2000|run1-segment-retrieval-b2000`
+- After row IDs:
+  - `llm-tldr|0ead1a11739004a2b12b1d439f10a29a03c64296|feature.abstain-rerank.v1|sentence-transformers|profile_unpinned|2000|run1-abstain-rerank-lane2-retrieval-b2000-t123-segment`
+  - `contextplus|4d7a6c37847c698c850d4b412ddb603dfc47257e|baseline.run1|unknown|unknown|2000|run1-segment-retrieval-b2000`
+- Decision evidence artifacts:
+  - `benchmark/runs/20260302-183458Z-retrieval-django-lane2.json`
+  - `benchmark/runs/h2h-llm-tldr-predictions-run1-abstain-rerank-lane2-retrieval-b2000-t123-segment.json`
+  - `benchmark/runs/h2h-failure-classification-run1-llm-tldr-abstain-rerank-lane2-retrieval-b2000-t123.json`
+  - `benchmark/runs/h2h-run-metadata-run1-llm-tldr-abstain-rerank-lane2-retrieval-b2000-t123.json`
+  - `benchmark/runs/h2h-llm-tldr-score-run1-abstain-rerank-lane2-retrieval-b2000-t123-segment.json`
+  - `benchmark/runs/h2h-compare-run1-abstain-rerank-lane2-retrieval-b2000-t123-vs-contextplus-run1-segment.json`
+  - `benchmark/runs/h2h-compare-run1-llm-tldr-abstain-rerank-lane2-vs-baseline-retrieval-b2000-t123-segment.json`
+  - `benchmark/runs/h2h-compare-run1-llm-tldr-abstain-rerank-lane2-vs-hybrid-lane1-retrieval-b2000-t123-segment.json`
+  - `benchmark/runs/h2h-assert-run1-abstain-rerank-lane2-retrieval-b2000-t123-vs-contextplus-run1-segment.json`
+  - `benchmark/runs/matrix/h2h-matrix-long-run1-abstain-rerank-lane2-retrieval-b2000-t123-vs-contextplus-run1-segment-20260302T185207Z.json`
+  - `benchmark/runs/matrix/h2h-matrix-long-run1-abstain-rerank-lane2-retrieval-b2000-t123-vs-contextplus-run1-segment-20260302T185207Z.csv`
+- Gate interpretation:
+  - Per-run strict gates passed: `runs[0].strict_gates_passed=true`.
+  - Overall assert remains false only because `stability.two_of_three=false` with reason `insufficient_runs_for_stability_check`.
+
+### Lane2 Comparison Table (Retrieval Segment, Budget 2000, Trials 1..3)
+
+| Metric | llm-tldr lane2 | llm-tldr lane1 | llm-tldr baseline | contextplus baseline | lane2 - lane1 | lane2 - baseline | lane2 - contextplus |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `mrr_mean` | 0.8741 | 0.8563 | 0.6119 | 0.2156 | +0.0178 | +0.2623 | +0.6585 |
+| `recall@5_mean` | 0.8772 | 0.9298 | 0.7895 | 0.2982 | -0.0526 | +0.0877 | +0.5789 |
+| `precision@5_mean` | 0.1754 | 0.1860 | 0.1579 | 0.0596 | -0.0105 | +0.0175 | +0.1158 |
+| `fpr@5_mean` | 0.0000 | 0.0000 | 0.0000 | 1.0000 | +0.0000 | +0.0000 | -1.0000 |
+| `payload_tokens_median` | 78.0 | 78.0 | 53.5 | 329.0 | +0.0 | +24.5 | -251.0 |
+| `latency_ms_p50` | 4989.022 | 5426.209 | 5021.415 | 7717.107 | -437.188 | -32.394 | -2728.085 |
+
+- Rationale summary:
+  - Versus `contextplus`: lane2 wins all primary retrieval metrics (`5/5`) with clean run-validity (`timeout/error/budget_violation=0`).
+  - Versus llm baseline: lane2 wins `4/5` primary retrieval metrics (all except payload), while keeping `fpr@5=0`.
+  - Versus lane1: lane2 improves `mrr_mean` and latency, with flat payload and `fpr@5`, but gives up some `recall@5` and `precision@5`.
+  - Keep decision basis: 008 canonical gate surface is h2h segment at budget `2000`; lane2 remains superior to baseline/contextplus and passes run-level strict gates.
+  - Drawback to carry forward into lane3: lane2 quality tradeoff against lane1 (`recall/precision` drop) must be monitored when budget-aware behavior is added.
+
+## Lane3 Handoff (Active Next Loop)
+
+1. Lock lane3 profile identity (`feature.budget-aware.v1`) and retrieval command contract with budget-variant behavior explicit in profile/template flags.
+2. Add red tests for budget-driven retrieval packing behavior (non-decreasing quality across budgets + payload scaling + no violations).
+3. Implement budget-aware retrieval path behind opt-in controls with default behavior unchanged.
+4. Run deterministic loop: retrieval-quality (multi-budget) + retrieval segment h2h at budget `2000` + matrix export.
+5. Append lane3 keep/rollback decision in this log with before/after row IDs and drawback accounting.

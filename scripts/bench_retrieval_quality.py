@@ -142,6 +142,26 @@ def _semantic_rank_files(
     return out
 
 
+def _rank_files_from_result_rows(rows: list[dict[str, Any]] | None) -> list[str]:
+    ranked: list[str] = []
+    for r in rows or []:
+        if not isinstance(r, dict):
+            continue
+        fp = r.get("file") or r.get("path")
+        if isinstance(fp, str):
+            if fp.startswith("./"):
+                fp = fp[2:]
+            ranked.append(fp)
+    seen = set()
+    out: list[str] = []
+    for fp in ranked:
+        if fp in seen:
+            continue
+        seen.add(fp)
+        out.append(fp)
+    return out
+
+
 def _rrf_fuse(rankings: list[list[str]], *, k: int = 60) -> list[str]:
     # Reciprocal Rank Fusion (RRF). Score = sum(1 / (k + rank)).
     scores: dict[str, float] = {}
@@ -210,6 +230,12 @@ def main() -> int:
             "'rg_empty' suppresses semantic/hybrid when rg finds no matches for the query's rg_pattern."
         ),
     )
+    ap.add_argument("--lane2-abstain-threshold", type=float, default=None)
+    ap.add_argument("--lane2-abstain-empty", action="store_true")
+    ap.add_argument("--lane2-rerank", action="store_true")
+    ap.add_argument("--lane2-rerank-top-n", type=int, default=5)
+    ap.add_argument("--lane2-max-latency-ms-p50-ratio", type=float, default=None)
+    ap.add_argument("--lane2-max-payload-tokens-median-ratio", type=float, default=None)
     ap.add_argument("--out", default=None, help="Write JSON report to this path (default under benchmark/runs/).")
     args = ap.parse_args()
 
@@ -250,6 +276,13 @@ def main() -> int:
     glob = str(args.rg_glob)
     glob_arg = glob if glob.strip() else None
     no_result_guard = str(args.no_result_guard)
+    lane2_enabled = (
+        args.lane2_abstain_threshold is not None
+        or bool(args.lane2_abstain_empty)
+        or bool(args.lane2_rerank)
+        or args.lane2_max_latency_ms_p50_ratio is not None
+        or args.lane2_max_payload_tokens_median_ratio is not None
+    )
 
     per_query: list[dict[str, Any]] = []
 
@@ -259,11 +292,15 @@ def main() -> int:
         "semantic": {"mrr": [], **{f"recall@{k}": [] for k in ks}, **{f"precision@{k}": [] for k in ks}},
         "hybrid_rrf": {"mrr": [], **{f"recall@{k}": [] for k in ks}, **{f"precision@{k}": [] for k in ks}},
     }
+    if lane2_enabled:
+        agg["hybrid_lane2"] = {"mrr": [], **{f"recall@{k}": [] for k in ks}, **{f"precision@{k}": [] for k in ks}}
     neg_fpr: dict[str, dict[str, list[float]]] = {
         "rg": {f"fpr@{k}": [] for k in ks},
         "semantic": {f"fpr@{k}": [] for k in ks},
         "hybrid_rrf": {f"fpr@{k}": [] for k in ks},
     }
+    if lane2_enabled:
+        neg_fpr["hybrid_lane2"] = {f"fpr@{k}": [] for k in ks}
 
     semantic_available = (
         index_ctx.paths is not None
@@ -300,6 +337,28 @@ def main() -> int:
         hybrid_rank: list[str] | None = None
         if sem_rank is not None:
             hybrid_rank = _rrf_fuse([rg_rank[:max_k], sem_rank[:max_k]])
+        lane2_rank: list[str] | None = None
+        if lane2_enabled and semantic_available and index_ctx.paths is not None and index_ctx.config is not None:
+            from tldr.semantic import semantic_search
+
+            lane2_rows = semantic_search(
+                str(repo_root),
+                q.query,
+                k=max_k,
+                index_paths=index_ctx.paths,
+                index_config=index_ctx.config,
+                retrieval_mode="hybrid",
+                no_result_guard=no_result_guard,
+                rg_pattern=rg_pattern,
+                rg_glob=glob_arg,
+                abstain_threshold=args.lane2_abstain_threshold,
+                abstain_empty=bool(args.lane2_abstain_empty),
+                rerank=bool(args.lane2_rerank),
+                rerank_top_n=int(args.lane2_rerank_top_n),
+                max_latency_ms_p50_ratio=args.lane2_max_latency_ms_p50_ratio,
+                max_payload_tokens_median_ratio=args.lane2_max_payload_tokens_median_ratio,
+            )
+            lane2_rank = _rank_files_from_result_rows(lane2_rows)
 
         def record(method: str, ranking: list[str]) -> dict[str, Any]:
             out = {
@@ -340,6 +399,11 @@ def main() -> int:
             q_res["hybrid_rrf"] = record("hybrid_rrf", hybrid_rank)
         else:
             q_res["hybrid_rrf"] = {"skipped": True, "reason": "semantic ranking unavailable"}
+        if lane2_enabled:
+            if lane2_rank is not None:
+                q_res["hybrid_lane2"] = record("hybrid_lane2", lane2_rank)
+            else:
+                q_res["hybrid_lane2"] = {"skipped": True, "reason": "semantic ranking unavailable"}
 
         per_query.append(q_res)
 
@@ -353,6 +417,9 @@ def main() -> int:
             if hybrid_rank is not None:
                 for k in ks:
                     neg_fpr["hybrid_rrf"][f"fpr@{k}"].append(_fpr_at_k(hybrid_rank, k=k))
+            if lane2_enabled and lane2_rank is not None:
+                for k in ks:
+                    neg_fpr["hybrid_lane2"][f"fpr@{k}"].append(_fpr_at_k(lane2_rank, k=k))
         else:
             agg["rg"]["mrr"].append(_mrr(rg_rank, relevant))
             for k in ks:
@@ -370,6 +437,11 @@ def main() -> int:
                 for k in ks:
                     agg["hybrid_rrf"][f"recall@{k}"].append(_recall_at_k(hybrid_rank, relevant, k))
                     agg["hybrid_rrf"][f"precision@{k}"].append(_precision_at_k(hybrid_rank, relevant, k))
+            if lane2_enabled and lane2_rank is not None:
+                agg["hybrid_lane2"]["mrr"].append(_mrr(lane2_rank, relevant))
+                for k in ks:
+                    agg["hybrid_lane2"][f"recall@{k}"].append(_recall_at_k(lane2_rank, relevant, k))
+                    agg["hybrid_lane2"][f"precision@{k}"].append(_precision_at_k(lane2_rank, relevant, k))
 
     def summarize(xs: dict[str, list[float]]) -> dict[str, Any]:
         out: dict[str, Any] = {}
@@ -388,6 +460,15 @@ def main() -> int:
             "ks": ks,
             "rg_glob": glob_arg,
             "no_result_guard": no_result_guard,
+            "lane2_enabled": bool(lane2_enabled),
+            "lane2": {
+                "abstain_threshold": args.lane2_abstain_threshold,
+                "abstain_empty": bool(args.lane2_abstain_empty),
+                "rerank": bool(args.lane2_rerank),
+                "rerank_top_n": int(args.lane2_rerank_top_n),
+                "max_latency_ms_p50_ratio": args.lane2_max_latency_ms_p50_ratio,
+                "max_payload_tokens_median_ratio": args.lane2_max_payload_tokens_median_ratio,
+            },
             "semantic_available": bool(semantic_available),
             "semantic_model": semantic_meta.get("model") if isinstance(semantic_meta, dict) else None,
             "semantic_dimension": semantic_meta.get("dimension") if isinstance(semantic_meta, dict) else None,
@@ -408,11 +489,13 @@ def main() -> int:
                 "rg": summarize(agg["rg"]),
                 "semantic": summarize(agg["semantic"]),
                 "hybrid_rrf": summarize(agg["hybrid_rrf"]),
+                **({"hybrid_lane2": summarize(agg["hybrid_lane2"])} if lane2_enabled else {}),
             },
             "agg_negative": {
                 "rg": summarize(neg_fpr["rg"]),
                 "semantic": summarize(neg_fpr["semantic"]),
                 "hybrid_rrf": summarize(neg_fpr["hybrid_rrf"]),
+                **({"hybrid_lane2": summarize(neg_fpr["hybrid_lane2"])} if lane2_enabled else {}),
             },
             "per_query": per_query,
         },

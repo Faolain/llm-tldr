@@ -48,6 +48,19 @@ def test_lane1_llm_tldr_profile_schema():
     _assert_profile_shape(lane1)
 
 
+def test_lane2_llm_tldr_profile_schema():
+    repo_root = Path(__file__).resolve().parents[1]
+    lane2 = (
+        repo_root
+        / "benchmarks"
+        / "head_to_head"
+        / "tool_profiles"
+        / "llm_tldr.abstain_rerank_lane2.v1.json"
+    )
+
+    _assert_profile_shape(lane2)
+
+
 def test_contextplus_profile_is_real_profile_not_template():
     repo_root = Path(__file__).resolve().parents[1]
     profile_path = repo_root / "benchmarks" / "head_to_head" / "tool_profiles" / "contextplus.v1.json"

@@ -490,6 +490,12 @@ def semantic(
     rg_pattern: str | None = None,
     rg_glob: str | None = None,
     rrf_k: int = 60,
+    abstain_threshold: float | None = None,
+    abstain_empty: bool = False,
+    rerank: bool = False,
+    rerank_top_n: int = 5,
+    max_latency_ms_p50_ratio: float | None = None,
+    max_payload_tokens_median_ratio: float | None = None,
 ) -> dict:
     """Semantic code search using embeddings.
 
@@ -505,6 +511,12 @@ def semantic(
         rg_pattern: Optional regex for lexical stage.
         rg_glob: Optional ripgrep --glob filter for lexical stage.
         rrf_k: RRF constant used in hybrid mode.
+        abstain_threshold: Optional confidence threshold for abstention.
+        abstain_empty: If abstaining, return an empty result list.
+        rerank: Enable deterministic reranking stage.
+        rerank_top_n: Candidate count used by reranking.
+        max_latency_ms_p50_ratio: Optional latency ratio bound metadata.
+        max_payload_tokens_median_ratio: Optional payload ratio bound metadata.
     """
     return _send_command(
         project,
@@ -518,6 +530,12 @@ def semantic(
             "rg_pattern": rg_pattern,
             "rg_glob": rg_glob,
             "rrf_k": int(rrf_k),
+            "abstain_threshold": abstain_threshold,
+            "abstain_empty": bool(abstain_empty),
+            "rerank": bool(rerank),
+            "rerank_top_n": int(rerank_top_n) if rerank_top_n is not None else 5,
+            "max_latency_ms_p50_ratio": max_latency_ms_p50_ratio,
+            "max_payload_tokens_median_ratio": max_payload_tokens_median_ratio,
         },
     )
 

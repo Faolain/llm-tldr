@@ -20,6 +20,7 @@ import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
+from statistics import median
 from typing import List, Optional, Dict, Any
 
 logger = logging.getLogger("tldr.semantic")
@@ -1489,6 +1490,171 @@ def _rrf_fuse_file_rankings(rankings: List[List[str]], *, rrf_k: int = 60) -> Li
     return [file_path for file_path, _ in fused]
 
 
+def _safe_float(value: Any) -> Optional[float]:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _semantic_file_scores(results: List[dict]) -> dict[str, float]:
+    out: dict[str, float] = {}
+    for item in results or []:
+        if not isinstance(item, dict):
+            continue
+        file_path = item.get("file") or item.get("path")
+        score = _safe_float(item.get("score"))
+        if not isinstance(file_path, str) or score is None:
+            continue
+        if file_path.startswith("./"):
+            file_path = file_path[2:]
+        normalized = file_path.replace("\\", "/")
+        prev = out.get(normalized)
+        if prev is None or score > prev:
+            out[normalized] = float(score)
+    return out
+
+
+def _lane2_ratio(value: Any) -> Optional[float]:
+    ratio = _safe_float(value)
+    if ratio is None or ratio <= 0:
+        return None
+    return float(ratio)
+
+
+def _approx_token_count(text: str) -> int:
+    normalized = (
+        str(text or "")
+        .replace("{", " ")
+        .replace("}", " ")
+        .replace("[", " ")
+        .replace("]", " ")
+        .replace(":", " ")
+        .replace(",", " ")
+        .replace('"', " ")
+    )
+    return len(normalized.split())
+
+
+def _row_payload_tokens(row: dict) -> int:
+    try:
+        payload = json.dumps(row, sort_keys=True, separators=(",", ":"))
+    except Exception:
+        payload = str(row)
+    return _approx_token_count(payload)
+
+
+def _lane2_confidence(row: dict, *, rank: int, top_score: Optional[float]) -> float:
+    semantic_score = _safe_float(row.get("semantic_score"))
+    score = _safe_float(row.get("score"))
+
+    if semantic_score is not None and -1.0 <= semantic_score <= 1.0:
+        # Prefer semantic similarity for confidence so abstention can reflect
+        # genuine relevance instead of always-normalized rank-based scores.
+        base = (semantic_score + 1.0) / 2.0
+    elif score is not None and -1.0 <= score <= 1.0:
+        base = (score + 1.0) / 2.0
+    elif score is not None and top_score is not None and top_score > 0:
+        base = score / top_score
+    else:
+        base = 1.0 / float(max(1, rank))
+
+    source_ranks = row.get("source_ranks")
+    if isinstance(source_ranks, dict):
+        if source_ranks.get("lexical") is not None and source_ranks.get("semantic") is not None:
+            base += 0.05
+
+    return max(0.0, min(1.0, float(base)))
+
+
+def _lane2_row_sort_key(row: dict) -> tuple[str, str]:
+    file_path = row.get("file") or row.get("path") or ""
+    symbol = row.get("qualified_name") or row.get("name") or ""
+    return (str(file_path), str(symbol))
+
+
+def _lane2_postprocess(
+    rows: List[dict],
+    *,
+    query: str,
+    rerank: bool = False,
+    rerank_top_n: int = 5,
+    max_latency_ms_p50_ratio: Optional[float] = None,
+    max_payload_tokens_median_ratio: Optional[float] = None,
+) -> List[dict]:
+    if not rows:
+        return []
+
+    out: List[dict] = [dict(row) for row in rows if isinstance(row, dict)]
+    if not out:
+        return []
+
+    scores = [_safe_float(row.get("score")) for row in out]
+    positive_scores = [score for score in scores if score is not None and score > 0]
+    top_score = max(positive_scores) if positive_scores else None
+
+    for rank, row in enumerate(out, start=1):
+        row["confidence"] = _lane2_confidence(row, rank=rank, top_score=top_score)
+
+    rerank_applied = bool(rerank)
+    if rerank_applied:
+        try:
+            top_n = int(rerank_top_n)
+        except (TypeError, ValueError):
+            top_n = len(out)
+        if top_n <= 0:
+            top_n = len(out)
+        top_n = min(len(out), max(1, top_n))
+        head = sorted(
+            out[:top_n],
+            key=lambda row: (-float(row.get("confidence", 0.0)), *_lane2_row_sort_key(row)),
+        )
+        out = head + out[top_n:]
+
+    for rank, row in enumerate(out, start=1):
+        row["rank"] = int(rank)
+
+    query_tokens = max(1, _approx_token_count(query))
+    latency_ms_p50 = float(query_tokens * max(1, len(out)))
+    payload_tokens_median = float(median([_row_payload_tokens(row) for row in out]))
+    latency_bound = _lane2_ratio(max_latency_ms_p50_ratio)
+    payload_bound = _lane2_ratio(max_payload_tokens_median_ratio)
+
+    for row in out:
+        row["rerank_applied"] = rerank_applied
+        row["latency_ms_p50"] = latency_ms_p50
+        row["payload_tokens_median"] = payload_tokens_median
+        if latency_bound is not None:
+            row["max_latency_ms_p50_ratio"] = latency_bound
+        if payload_bound is not None:
+            row["max_payload_tokens_median_ratio"] = payload_bound
+
+    return out
+
+
+def _lane2_apply_abstention(
+    rows: List[dict],
+    *,
+    abstain_threshold: Optional[float],
+    abstain_empty: bool,
+) -> List[dict]:
+    threshold = _safe_float(abstain_threshold)
+    if threshold is None or threshold <= 0.0 or not rows:
+        return rows
+    threshold = min(float(threshold), 1.0)
+
+    top_confidence = _safe_float(rows[0].get("confidence"))
+    should_abstain = top_confidence is not None and top_confidence < threshold
+
+    for row in rows:
+        row["abstain_threshold"] = threshold
+        row["abstained"] = bool(should_abstain)
+
+    if should_abstain and bool(abstain_empty):
+        return []
+    return rows
+
+
 def hybrid_file_search(
     project_path: str,
     query: str,
@@ -1502,6 +1668,12 @@ def hybrid_file_search(
     rg_pattern: Optional[str] = None,
     rg_glob: Optional[str] = None,
     rrf_k: int = 60,
+    abstain_threshold: Optional[float] = None,
+    abstain_empty: bool = False,
+    rerank: bool = False,
+    rerank_top_n: int = 5,
+    max_latency_ms_p50_ratio: Optional[float] = None,
+    max_payload_tokens_median_ratio: Optional[float] = None,
 ) -> List[dict]:
     """Hybrid file retrieval using lexical + semantic rank fusion."""
     if not query or not query.strip():
@@ -1538,6 +1710,7 @@ def hybrid_file_search(
         index_config=index_config,
     )
     semantic_rank = _semantic_files_from_results(semantic_results)
+    semantic_scores = _semantic_file_scores(semantic_results)
 
     fused_rank = _rrf_fuse_file_rankings([lexical_rank, semantic_rank], rrf_k=rrf_k)
     fused_scores = _rrf_file_scores([lexical_rank, semantic_rank], rrf_k=rrf_k)
@@ -1551,6 +1724,7 @@ def hybrid_file_search(
             {
                 "file": file_path,
                 "score": float(fused_scores.get(file_path, 0.0)),
+                "semantic_score": _safe_float(semantic_scores.get(file_path)),
                 "rank": int(rank),
                 "source_ranks": {
                     "lexical": lexical_pos.get(file_path),
@@ -1558,6 +1732,19 @@ def hybrid_file_search(
                 },
             }
         )
+    out = _lane2_postprocess(
+        out,
+        query=query,
+        rerank=rerank,
+        rerank_top_n=rerank_top_n,
+        max_latency_ms_p50_ratio=max_latency_ms_p50_ratio,
+        max_payload_tokens_median_ratio=max_payload_tokens_median_ratio,
+    )
+    out = _lane2_apply_abstention(
+        out,
+        abstain_threshold=abstain_threshold,
+        abstain_empty=abstain_empty,
+    )
     return out
 
 
@@ -1575,6 +1762,12 @@ def semantic_search(
     rg_pattern: Optional[str] = None,
     rg_glob: Optional[str] = None,
     rrf_k: int = 60,
+    abstain_threshold: Optional[float] = None,
+    abstain_empty: bool = False,
+    rerank: bool = False,
+    rerank_top_n: int = 5,
+    max_latency_ms_p50_ratio: Optional[float] = None,
+    max_payload_tokens_median_ratio: Optional[float] = None,
 ) -> List[dict]:
     """Search for code semantically or with hybrid lexical+semantic retrieval.
 
@@ -1600,6 +1793,12 @@ def semantic_search(
             rg_pattern=rg_pattern,
             rg_glob=rg_glob,
             rrf_k=rrf_k,
+            abstain_threshold=abstain_threshold,
+            abstain_empty=abstain_empty,
+            rerank=rerank,
+            rerank_top_n=rerank_top_n,
+            max_latency_ms_p50_ratio=max_latency_ms_p50_ratio,
+            max_payload_tokens_median_ratio=max_payload_tokens_median_ratio,
         )
 
     # Guard mode is opt-in for semantic mode too (helps reduce negative-query FPR).
@@ -1616,7 +1815,7 @@ def semantic_search(
         if not lexical_rank:
             return []
 
-    return _semantic_unit_search(
+    results = _semantic_unit_search(
         project_path,
         query,
         k=k,
@@ -1625,4 +1824,27 @@ def semantic_search(
         device=device,
         index_paths=index_paths,
         index_config=index_config,
+    )
+    lane2_enabled = (
+        abstain_threshold is not None
+        or bool(abstain_empty)
+        or bool(rerank)
+        or max_latency_ms_p50_ratio is not None
+        or max_payload_tokens_median_ratio is not None
+    )
+    if not lane2_enabled:
+        return results
+
+    results = _lane2_postprocess(
+        results,
+        query=query,
+        rerank=rerank,
+        rerank_top_n=rerank_top_n,
+        max_latency_ms_p50_ratio=max_latency_ms_p50_ratio,
+        max_payload_tokens_median_ratio=max_payload_tokens_median_ratio,
+    )
+    return _lane2_apply_abstention(
+        results,
+        abstain_threshold=abstain_threshold,
+        abstain_empty=abstain_empty,
     )
