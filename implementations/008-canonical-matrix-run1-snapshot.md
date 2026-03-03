@@ -86,8 +86,9 @@ This board is separate from the shared-capability retrieval gate. It evaluates e
 | `slice (+anchor) -> dfg` (debug path) | `slice: f1=0.919, recall=0.884, noise_reduction=0.657, p50=145.627ms, tok=11`; `dfg: origin=1.000, flow=1.000, p50=148.132ms, tok=13` | `N/A` | `N/A` | `benchmark/runs/h2h-llm-tldr-score-run1-fixed-stitched-allowlist-20260302T062602Z.json` |
 | Semantic search (concept path) | `semantic strategy: mrr=0.247, r@5=0.456, p@5=0.091, fpr@5=0.000` | `pending (not isolated)` | `N/A` | `benchmark/runs/20260302-195057Z-retrieval-django-lane3-b2000.json` |
 | `cfg` / complexity | `accuracy=0.600`, `mae=1.800`, `p50=151.115ms`, `tok=8` | `N/A` | `N/A` | `benchmark/runs/h2h-llm-tldr-score-run1-fixed-stitched-allowlist-20260302T062602Z.json` |
-| Daemon/index operational metrics | `build_s=1.231`, `patch_s=0.815`, `full_rebuild_after_touch_s=1.070`; `daemon-vs-cli p50 pending` | `N/A` | `N/A` | `benchmark/runs/20260209-044240Z-ts-perf-ts-monorepo.json`; `benchmark/runs/phase5-daemon-vs-cli.json` (pending) |
+| Daemon/index operational metrics | `build_s=1.231`, `patch_s=0.815`, `full_rebuild_after_touch_s=1.070`; daemon retrieval `p50=296.9ms` vs subprocess `p50=5776.5ms` (`19.5x` speedup, MPS GPU); 60/60 results identical | `N/A` | `N/A` | `benchmark/runs/20260209-044240Z-ts-perf-ts-monorepo.json`; `/tmp/bench_lane1_daemon_predictions.json`; `/tmp/bench_lane1_subprocess_predictions.json` |
 
 Resolved-row provisional picture:
 - `llm-tldr` leads on resolved full-product workflow rows.
 - `contextplus` and `rg-native` are competitive on retrieval but lose rows where capabilities are `N/A`.
+- Daemon/index operational row now resolved: `--use-daemon` eliminates subprocess startup overhead (`19.5x` speedup at p50, MPS GPU confirmed).

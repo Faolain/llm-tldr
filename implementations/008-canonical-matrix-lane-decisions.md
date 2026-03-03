@@ -294,7 +294,7 @@ This section is the single summary view for "where we stand now" across lanes an
 | `slice (+anchor) -> dfg` (debug path) | `slice f1=0.919, recall=0.884, noise=0.657; dfg origin=1.000, flow=1.000` | `N/A` | `N/A` | resolved |
 | Semantic search (concept path) | `semantic mrr=0.247, r@5=0.456, p@5=0.091, fpr@5=0.000` | pending | `N/A` | partial |
 | `cfg` / complexity | `accuracy=0.600, mae=1.800, p50=151.115ms, tok=8` | `N/A` | `N/A` | resolved |
-| Daemon/index operational metrics | `build_s=1.231, patch_s=0.815, rebuild_s=1.070; daemon-vs-cli pending` | `N/A` | `N/A` | pending |
+| Daemon/index operational metrics | `build_s=1.231, patch_s=0.815, rebuild_s=1.070`; daemon retrieval `p50=296.9ms` vs subprocess `p50=5776.5ms` (`19.5x` speedup, MPS GPU) | `N/A` | `N/A` | resolved |
 
 Resolved-row interpretation:
 - `llm-tldr` is currently the provisional full-product winner on resolved workflow rows.
@@ -306,6 +306,59 @@ Resolved-row interpretation:
 1. Run one consolidated Gate B structural sweep (`impact/slice/dfg/cfg`) across lanes 1-5 and append updated quantitative rows.
 2. Decide lane6 scope (`feature.ollama-backend.v1`) as optional/non-gating for this cycle and lock provider-selection contract.
 3. If lane6 proceeds, run the same deterministic loop: red tests -> implementation behind opt-in -> retrieval regression at `2000` -> retrieval segment h2h compare + canonical row export.
+
+## Daemon Mode Benchmark (Lane1 Retrieval, 2026-03-03)
+
+Benchmark of `--use-daemon` mode on lane1 hybrid retrieval (60 queries, budget 2000, trial 1, Django corpus).
+MPS GPU confirmed via `torch.backends.mps.is_available()=True`, inference device `mps`.
+Result correctness: 60/60 predictions byte-identical between subprocess and daemon modes.
+
+### Daemon vs Subprocess Latency (Lane1 Retrieval)
+
+| Metric | Subprocess | Daemon | Speedup |
+| --- | ---: | ---: | ---: |
+| p50 latency | 5776.5 ms | 296.9 ms | **19.5x** |
+| p90 latency | 6023.9 ms | 319.7 ms | **18.8x** |
+| p99 latency | 6182.3 ms | 5072.3 ms | **1.2x** |
+| mean latency | 5509.5 ms | 373.8 ms | **14.7x** |
+| min latency | 385.2 ms | 141.3 ms | **2.7x** |
+| max latency | 6182.3 ms | 5072.3 ms | **1.2x** |
+| total wall time | 330.6s | 22.4s | **14.8x** |
+| ok / timeout / error | 60/0/0 | 60/0/0 | identical |
+| result correctness | - | 60/60 match | **100%** |
+
+### Daemon vs rg-native Latency Comparison
+
+| Metric | rg-native | Daemon (lane1) | Daemon / rg-native ratio |
+| --- | ---: | ---: | ---: |
+| p50 latency | 216.2 ms | 296.9 ms | 1.37x |
+
+- Daemon-mode lane1 is now within `1.37x` of rg-native p50 (was `25.1x` in subprocess mode).
+- The remaining gap is embedding inference cost (semantic+hybrid) vs pure regex.
+
+### Verified
+
+- **Daemon used**: `execution_mode: "daemon"` in run metadata
+- **GPU (MPS) used**: `_get_device()` returns `"mps"` -- the daemon auto-detects and uses Apple Silicon GPU
+- **Result parity**: All 60 retrieval predictions are byte-identical between subprocess and daemon modes
+
+### Daemon usage instructions
+
+```bash
+# With daemon (recommended for repeated queries):
+uv run python scripts/bench_h2h_predict.py \
+  --suite benchmarks/head_to_head/suite.v1.json \
+  --tasks benchmark/runs/h2h-task-manifest.json \
+  --tool-profile benchmarks/head_to_head/tool_profiles/llm_tldr.hybrid_lane1.v1.json \
+  --use-daemon \
+  --category retrieval \
+  --trial 1 \
+  --budget-tokens 2000 \
+  --out /tmp/daemon-predictions.json \
+  --run-metadata-out /tmp/daemon-metadata.json
+
+# Add --daemon-keep-alive to leave daemon running between invocations.
+```
 
 ### * Remaining TODOs (Explicit)
 

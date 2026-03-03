@@ -82,6 +82,21 @@ uv run python scripts/bench_head_to_head.py score \
   --out benchmark/runs/h2h-rg-native-score.json
 ```
 
+### Optional: Daemon Mode for llm-tldr Profiles
+
+Adding `--use-daemon` routes queries through the llm-tldr daemon instead of spawning a subprocess per query, eliminating startup + model-load overhead. Achieves **19.5x p50 latency speedup** with byte-identical results. Requires `tool_id='llm-tldr'` in the profile; non-daemon templates fall back to subprocess automatically.
+
+```bash
+uv run python scripts/bench_h2h_predict.py \
+  --suite benchmarks/head_to_head/suite.v1.json \
+  --tasks benchmark/runs/h2h-task-manifest.json \
+  --tool-profile benchmarks/head_to_head/tool_profiles/llm_tldr.hybrid_lane1.v1.json \
+  --use-daemon \
+  --out benchmark/runs/h2h-llm-tldr-predictions-daemon.json
+
+# --daemon-keep-alive: leave daemon running between invocations
+```
+
 5. Score each tool independently:
 
 ```bash

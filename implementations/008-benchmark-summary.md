@@ -95,6 +95,32 @@ uv run python scripts/bench_h2h_predict.py \
   --run-metadata-out benchmark/runs/h2h-run-metadata-run1-llm-tldr-navigate-cluster-lane5-retrieval-b2000-t123.json
 ```
 
+### 4a) Using daemon mode (recommended for llm-tldr profiles)
+
+Adding `--use-daemon` routes queries through the llm-tldr daemon's Unix socket instead of spawning a subprocess per query. This eliminates ~500-1000ms startup + model-load overhead on each prediction and achieves a **19.5x p50 latency speedup** (5776ms -> 297ms on lane1 retrieval).
+
+The daemon auto-detects MPS GPU when available. Results are byte-identical to subprocess mode.
+
+```bash
+# Daemon mode (llm-tldr profiles only, tool_id must be 'llm-tldr'):
+uv run python scripts/bench_h2h_predict.py \
+  --suite benchmark/runs/h2h-suite-segment-retrieval-b2000.v1.json \
+  --tasks benchmark/runs/h2h-task-manifest-segment-retrieval.json \
+  --tool-profile benchmarks/head_to_head/tool_profiles/llm_tldr.navigate_cluster_lane5.v1.json \
+  --use-daemon \
+  --category retrieval \
+  --out benchmark/runs/h2h-llm-tldr-predictions-daemon.json \
+  --run-metadata-out benchmark/runs/h2h-run-metadata-daemon.json
+
+# Add --daemon-keep-alive to leave the daemon running between invocations
+# (useful when running multiple profiles back-to-back).
+```
+
+Notes:
+- `--use-daemon` is only supported for `tool_id='llm-tldr'` profiles. Non-daemon templates (contextplus, rg-native) automatically fall back to subprocess.
+- The daemon is started automatically before the prediction loop and stopped after (unless `--daemon-keep-alive` is set).
+- Run metadata records `"execution_mode": "daemon"` for auditability.
+
 ### 5) Score, compare, assert
 ```bash
 uv run python scripts/bench_head_to_head.py score \
@@ -174,7 +200,7 @@ Then run the same pipeline:
 | `tldr/cli.py` | CLI exposure and routing for lane controls |
 | `tldr/daemon/core.py` | daemon command plumbing for semantic/lane controls |
 | `tldr/mcp_server.py` | MCP semantic tool forwarding for lane controls |
-| `scripts/bench_h2h_predict.py` | canonical row generation |
+| `scripts/bench_h2h_predict.py` | canonical row generation (`--use-daemon` for 19.5x latency speedup) |
 | `scripts/bench_h2h_stitch.py` | deterministic stitcher + audit |
 | `scripts/bench_h2h_assert.py` | strict gates and stability checks |
 | `scripts/bench_h2h_export_matrix_run1.py` | long-format matrix export |
