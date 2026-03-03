@@ -66,10 +66,6 @@ cli = [
     "rich>=13.0",
     "shtab>=1.7.0",
 ]
-onnx = [
-    "onnxruntime>=1.18.0",
-    "optimum[onnxruntime]>=1.24.0",
-]
 dev = [
     "pytest>=6.0",
     "pytest-cov>=2.0",
