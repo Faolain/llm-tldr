@@ -811,7 +811,17 @@ def _daemon_response_to_stdout(category: str, response: dict[str, Any]) -> str:
         return json.dumps(response)
 
     if category == "impact":
-        # Daemon returns {"status":"ok","callers":[...]} — pass directly.
+        # Daemon returns {"status":"ok","callers":[{"caller":...}],"result":{"targets":{...}}}.
+        # The top-level "callers" use key "caller" but _parse_impact_result expects "function".
+        # Normalize by renaming "caller" -> "function" in each entry.
+        callers = response.get("callers")
+        if isinstance(callers, list):
+            normalized = []
+            for entry in callers:
+                if isinstance(entry, dict) and "caller" in entry and "function" not in entry:
+                    entry = {**entry, "function": entry.pop("caller")}
+                normalized.append(entry)
+            response = {**response, "callers": normalized}
         return json.dumps(response)
 
     if category == "slice":
