@@ -306,3 +306,8 @@ Resolved-row interpretation:
 1. Run one consolidated Gate B structural sweep (`impact/slice/dfg/cfg`) across lanes 1-5 and append updated quantitative rows.
 2. Decide lane6 scope (`feature.ollama-backend.v1`) as optional/non-gating for this cycle and lock provider-selection contract.
 3. If lane6 proceeds, run the same deterministic loop: red tests -> implementation behind opt-in -> retrieval regression at `2000` -> retrieval segment h2h compare + canonical row export.
+
+### * Remaining TODOs (Explicit)
+
+- [ ] * The consolidated "across lanes 1-5" Gate B structural sweep is still pending.
+- [ ] * lane6 (`feature.ollama-backend.v1`) remains pending (optional/non-gating for this cycle).

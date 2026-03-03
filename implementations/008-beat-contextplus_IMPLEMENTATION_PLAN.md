@@ -128,6 +128,11 @@ This track allows progress without executing run2/run3 immediately. It is explic
 - [ ] Start lane6 (optional Ollama backend) only after lane5 Gate B sweep is recorded:
   - keep lane6 as optional/non-gating for current 008 comparison loop.
 
+### * Remaining TODOs (Explicit)
+
+- [ ] * The consolidated "across lanes 1-5" Gate B structural sweep is still pending.
+- [ ] * lane6 (`feature.ollama-backend.v1`) remains pending (optional/non-gating for this cycle).
+
 ## Implementation Progress (2026-03-02)
 
 ### Completed Delivery (Code + Tests)
