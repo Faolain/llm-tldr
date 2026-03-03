@@ -328,6 +328,26 @@ uv run python scripts/bench_compound_semantic_impact.py \
   --no-result-guard rg_empty
 ```
 
+## Phase 5c: Semantic Navigation/Clustering (Deterministic)
+
+Runs lane5 deterministic navigation metrics (no LLM calls): clustering coverage, assignment determinism, and query-cluster recall.
+
+```bash
+uv run python scripts/bench_navigate_cluster.py \
+  --corpus django \
+  --queries benchmarks/retrieval/django_queries.json \
+  --cache-root benchmark/cache-root \
+  --index repo:django \
+  --budget-tokens 2000 \
+  --trials 3 \
+  --retrieval-mode hybrid \
+  --no-result-guard rg_empty \
+  --abstain-threshold 0.35 \
+  --abstain-empty \
+  --rerank \
+  --rerank-top-n 8
+```
+
 ## Phase 6: Token Efficiency (Fixed Budgets)
 
 Produces fixed-budget curves (`500/1000/2000/5000/10000` tokens by default) for:

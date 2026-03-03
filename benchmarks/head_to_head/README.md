@@ -22,6 +22,7 @@ It explicitly separates:
 - Tool profiles:
   - `benchmarks/head_to_head/tool_profiles/llm_tldr.v1.json`
   - `benchmarks/head_to_head/tool_profiles/llm_tldr.compound_semantic_impact_lane4.v1.json`
+  - `benchmarks/head_to_head/tool_profiles/llm_tldr.navigate_cluster_lane5.v1.json`
   - `benchmarks/head_to_head/tool_profiles/contextplus.v1.json`
   - `benchmarks/head_to_head/tool_profiles/rg_native.v1.json` (retrieval-only lexical baseline)
 - Query datasets:

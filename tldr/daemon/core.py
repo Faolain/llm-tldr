@@ -834,6 +834,7 @@ class TLDRDaemon:
             from tldr.semantic import (
                 build_semantic_index,
                 compound_semantic_impact_search,
+                semantic_navigation_cluster_search,
                 semantic_search,
             )
 
@@ -925,6 +926,59 @@ class TLDRDaemon:
                     "budget_tokens",
                     self._semantic_config.get("budget_tokens"),
                 )
+                navigate_cluster = _coerce_bool(
+                    command.get("navigate_cluster"),
+                    default=False,
+                )
+                cluster_count = command.get(
+                    "cluster_count",
+                    self._semantic_config.get("cluster_count"),
+                )
+                cluster_min_size = command.get(
+                    "cluster_min_size",
+                    self._semantic_config.get("cluster_min_size", 1),
+                )
+                cluster_max_members = command.get(
+                    "cluster_max_members",
+                    self._semantic_config.get("cluster_max_members", 5),
+                )
+                cluster_label_mode = command.get(
+                    "cluster_label_mode",
+                    self._semantic_config.get("cluster_label_mode", "auto"),
+                )
+                if navigate_cluster:
+                    result = semantic_navigation_cluster_search(
+                        str(self.project),
+                        query,
+                        k=k,
+                        retrieval_mode=str(retrieval_mode),
+                        no_result_guard=str(no_result_guard),
+                        rg_pattern=rg_pattern if isinstance(rg_pattern, str) else None,
+                        rg_glob=rg_glob if isinstance(rg_glob, str) and rg_glob.strip() else None,
+                        rrf_k=rrf_k,
+                        abstain_threshold=_coerce_optional_float(abstain_threshold),
+                        abstain_empty=_coerce_bool(abstain_empty, default=False),
+                        rerank=_coerce_bool(rerank, default=False),
+                        rerank_top_n=_coerce_int(rerank_top_n, 5),
+                        max_latency_ms_p50_ratio=_coerce_optional_float(
+                            max_latency_ms_p50_ratio
+                        ),
+                        max_payload_tokens_median_ratio=_coerce_optional_float(
+                            max_payload_tokens_median_ratio
+                        ),
+                        budget_tokens=_coerce_optional_int(budget_tokens),
+                        cluster_count=_coerce_optional_int(cluster_count),
+                        cluster_min_size=_coerce_int(cluster_min_size, 1),
+                        cluster_max_members=_coerce_optional_int(cluster_max_members),
+                        cluster_label_mode=(
+                            str(cluster_label_mode)
+                            if isinstance(cluster_label_mode, str)
+                            else "auto"
+                        ),
+                        index_paths=self.index_paths,
+                        index_config=self.index_config,
+                    )
+                    return {"status": "ok", "result": result, "results": result}
                 if compound_impact:
                     result = compound_semantic_impact_search(
                         str(self.project),

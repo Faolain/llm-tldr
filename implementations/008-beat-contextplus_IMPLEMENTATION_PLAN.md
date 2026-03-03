@@ -2,7 +2,7 @@
 
 - Status: In Progress (comparison-first metric board active; run1 baseline seeded; full 008 sign-off track deferred/optional pending provider window and multi-run stability)
 - Owner: TBD
-- Last updated: 2026-03-02
+- Last updated: 2026-03-03
 - Related spec: `specs/008-head-to-head-benchmark-llm-tldr-vs-contextplus.md`
 
 ## Objective
@@ -117,14 +117,16 @@ This track allows progress without executing run2/run3 immediately. It is explic
   - locked feature identity, added red->green contract tests, implemented opt-in compound path, ran deterministic benchmarks, and appended keep/rollback decision.
 - [ ] Promote lane4 bounded retrieval h2h subset (`R01..R12`, `trial=1`) to full retrieval segment (`trials=1..3`) when runtime window allows:
   - keep current bounded artifacts as provisional evidence and replace with full-lane artifacts once completed.
-- [ ] Start lane5 (semantic navigation/clustering) with the same loop:
-  - lock feature identity, add red tests, implement behind opt-in controls, run deterministic benchmarks, and append keep/rollback decision.
+- [x] Start lane5 (semantic navigation/clustering) with the same loop:
+  - locked `feature.navigate-cluster.v1`, added red->green deterministic contract tests, implemented opt-in lane5 routing, ran deterministic artifacts + retrieval segment h2h compare/assert, and appended keep/rollback decision.
 - [ ] Run one consolidated Gate B structural sweep across completed lanes:
-  - collect `impact/slice/dfg/cfg` per-lane numbers in one pass for clean comparability.
+  - collect `impact/slice/dfg/cfg` per-lane numbers in one pass for clean comparability (now lanes 1-5).
 - [ ] Resolve pending full-product workflow rows so the new overall winner gate is fully computable:
   - add a deterministic benchmark row contract for `impact -> context -> rg` (explicit context-path metric + thresholds).
   - add an isolated semantic concept-path probe for `contextplus` so semantic row is not `pending`.
   - produce daemon/index operational artifact (`bench_perf_daemon_vs_cli.py`) for llm-tldr and record row result.
+- [ ] Start lane6 (optional Ollama backend) only after lane5 Gate B sweep is recorded:
+  - keep lane6 as optional/non-gating for current 008 comparison loop.
 
 ## Implementation Progress (2026-03-02)
 
@@ -743,13 +745,61 @@ Use this matrix to decide what to implement next and how to judge whether a port
       - lane4 vs contextplus: `mrr +0.4727`, `recall@5 +0.4545`, `precision@5 +0.0909`, `fpr@5 -1.0000`, `latency -2492.692ms`, `payload -255.5`.
       - assert interpretation: run-level strict gates pass (`runs[0].strict_gates_passed=true`), overall remains `false` only due `stability.two_of_three`.
   - lane4 decision (Phase 5): `KEEP` (workflow lane, provisional; retrieval baseline tradeoff to monitor is payload increase vs baseline on this subset).
-- [ ] Semantic navigation/clustering (`tldrf navigate`):
+- [x] Semantic navigation/clustering (`tldrf navigate`):
   - owner: `navigation-exploration`
-  - test-first files: deterministic cluster fixture tests
-  - implementation artifacts: navigation/clustering implementation + deterministic cluster output helpers.
-  - before/after artifacts: cluster coverage/determinism report + retrieval regression rows + canonical matrix export.
-  - before row IDs: llm baseline + context baseline at budget `2000`.
-  - after row IDs: `llm-tldr|<post-change-tool-version>|feature.navigate-cluster.v1|sentence-transformers|<embedding_model>|2000|<run_id>`
+  - contract identity:
+    - `feature_set_id`: `feature.navigate-cluster.v1`
+    - lane5 h2h profile: `benchmarks/head_to_head/tool_profiles/llm_tldr.navigate_cluster_lane5.v1.json`
+  - test-first files (red->green):
+    - `tests/test_semantic_navigate_lane5.py`
+    - `tests/test_daemon_semantic_navigate.py`
+    - `tests/test_mcp_semantic_navigate.py`
+    - updates in `tests/test_cli_semantic_hybrid_flags.py`
+    - updates in `tests/test_semantic_hybrid_retrieval.py`
+    - updates in `tests/test_bench_head_to_head_tool_profiles_schema.py`
+  - implementation artifacts:
+    - `tldr/semantic.py`: `semantic_navigation_cluster_search(...)` deterministic lane5 contract + stable cluster IDs + assignment digest.
+    - `tldr/cli.py`: lane5 opt-in flags on `semantic search` (`--navigate-cluster`, `--cluster-count`, `--cluster-min-size`, `--cluster-max-members`, `--cluster-label-mode`).
+    - `tldr/daemon/core.py`: lane5 routing via `navigate_cluster` while preserving lane4/default paths.
+    - `tldr/mcp_server.py`: lane5 controls forwarded through `semantic(...)`.
+    - `scripts/bench_navigate_cluster.py`: deterministic lane5 navigation benchmark artifact generator.
+  - command/API contract (locked):
+    - CLI shape:
+      - `uv run tldrf semantic search "<query>" --path <repo> --k <k> --hybrid --no-result-guard rg_empty --budget-tokens 2000 --navigate-cluster --cluster-count 8 --cluster-min-size 1 --cluster-max-members 12 --cluster-label-mode auto`
+    - Daemon shape:
+      - `{\"cmd\":\"semantic\",\"action\":\"search\",\"query\":\"...\",\"navigate_cluster\":true,\"cluster_count\":8,\"cluster_min_size\":1,\"cluster_max_members\":12,\"cluster_label_mode\":\"auto\",...}`
+    - Output schema keys:
+      - top-level: `schema_version`, `feature_set_id`, `status`, `query`, `budget_tokens`, `retrieval_mode`, `k_requested`, `k_effective`, `timing_ms`, `clustering`, `counts`, `results`, `clusters`, `partial_failures`, `regression_metadata`.
+  - deterministic evidence artifacts (no LLM calls):
+    - lane5 navigation benchmark:
+      - `benchmark/runs/20260303-001504Z-navigate-cluster-django-lane5-b2000.json`
+    - retrieval-quality regression at budget `2000`:
+      - `benchmark/runs/20260303-001634Z-retrieval-django-lane5-b2000.json`
+    - lane5 retrieval h2h segment (`budget=2000`, `trials=1..3`):
+      - predictions/classification/run metadata:
+        - `benchmark/runs/h2h-llm-tldr-predictions-run1-navigate-cluster-lane5-retrieval-b2000-t123-segment.json`
+        - `benchmark/runs/h2h-failure-classification-run1-llm-tldr-navigate-cluster-lane5-retrieval-b2000-t123.json`
+        - `benchmark/runs/h2h-run-metadata-run1-llm-tldr-navigate-cluster-lane5-retrieval-b2000-t123.json`
+      - score/compare/assert:
+        - `benchmark/runs/h2h-llm-tldr-score-run1-navigate-cluster-lane5-retrieval-b2000-t123-segment.json`
+        - `benchmark/runs/h2h-compare-run1-navigate-cluster-lane5-retrieval-b2000-t123-vs-contextplus-run1-segment.json`
+        - `benchmark/runs/h2h-compare-run1-llm-tldr-navigate-cluster-lane5-vs-baseline-retrieval-b2000-t123-segment.json`
+        - `benchmark/runs/h2h-assert-run1-navigate-cluster-lane5-retrieval-b2000-t123-vs-contextplus-run1-segment.json`
+      - matrix export:
+        - `benchmark/runs/matrix/h2h-matrix-long-run1-navigate-cluster-lane5-retrieval-b2000-t123-vs-contextplus-run1-segment.json`
+        - `benchmark/runs/matrix/h2h-matrix-long-run1-navigate-cluster-lane5-retrieval-b2000-t123-vs-contextplus-run1-segment.csv`
+  - lane5 quantitative summary:
+    - lane5 navigation benchmark (`n=180`): `cluster_coverage_rate_mean=1.000`, `determinism_assignment_digest_match_rate=1.000`, `query_cluster_recall@1_mean=0.7193`, `query_cluster_recall@3_mean=0.9825`, `latency_ms_p50=302.423`, `payload_tokens_median=29.0`, `error_rate=0.0`.
+    - retrieval-quality (`budget=2000`): `hybrid_rrf mrr=0.8189`, `recall@5=0.9123`, `precision@5=0.1825`, `fpr@5=0.0`.
+    - h2h retrieval segment (`budget=2000`, `trials=1..3`):
+      - lane5 vs contextplus: `mrr +0.6585`, `recall@5 +0.5789`, `precision@5 +0.1158`, `fpr@5 -1.0000`, `latency -2546.704ms`, `payload -251.0`.
+      - lane5 vs llm baseline: `mrr +0.2623`, `recall@5 +0.0877`, `precision@5 +0.0175`, `fpr@5 +0.0000`, `latency +148.988ms`, `payload +24.5`.
+      - assert interpretation: run-level strict gates pass (`runs[0].strict_gates_passed=true`), overall remains `false` only due `stability.two_of_three`.
+  - gotchas/learnings (append-only):
+    - lane5 clustering currently operates over retrieval result rows, so `cluster_coverage_rate_mean=1.0` is retrieval-coverage, not full index-coverage; keep these metrics in the lane5 benchmark lane only.
+    - retrieval h2h deltas for lane5 are expected to track lane3 command path because lane5 profile intentionally keeps retrieval command parity for regression comparability.
+    - enabling lane5 is opt-in (`--navigate-cluster`); default search behavior remains unchanged for backward compatibility and fair lane comparisons.
+  - lane5 decision (Phase 5): `KEEP` (workflow lane; provisional until consolidated Gate B sweep and optional stability reruns are recorded).
 - [ ] Optional Ollama backend:
   - owner: `runtime-platform`
   - test-first files: provider-selection and fallback tests

@@ -595,6 +595,41 @@ Device Selection:
         ),
     )
     search_p.add_argument(
+        "--navigate-cluster",
+        action="store_true",
+        help=(
+            "Opt-in lane5 structured output: deterministic semantic "
+            "navigation/clustering."
+        ),
+    )
+    search_p.add_argument(
+        "--cluster-count",
+        type=int,
+        default=None,
+        help=(
+            "Target number of clusters for --navigate-cluster "
+            "(default: deterministic auto)."
+        ),
+    )
+    search_p.add_argument(
+        "--cluster-min-size",
+        type=int,
+        default=1,
+        help="Minimum cluster size for --navigate-cluster (default: 1).",
+    )
+    search_p.add_argument(
+        "--cluster-max-members",
+        type=int,
+        default=5,
+        help="Max members emitted per cluster for --navigate-cluster (default: 5).",
+    )
+    search_p.add_argument(
+        "--cluster-label-mode",
+        default="auto",
+        choices=["auto", "file", "symbol"],
+        help="Cluster label strategy for --navigate-cluster.",
+    )
+    search_p.add_argument(
         "--model",
         default=None,
         help="Embedding model (uses index model if not specified)",
@@ -1748,6 +1783,7 @@ def main():
             from .semantic import (
                 build_semantic_index,
                 compound_semantic_impact_search,
+                semantic_navigation_cluster_search,
                 semantic_search,
             )
 
@@ -1780,7 +1816,34 @@ def main():
                 )
                 index_ctx = _get_index_ctx(scan_root, allow_create=False)
                 retrieval_mode = "hybrid" if bool(args.hybrid) else "semantic"
-                if bool(args.compound_impact):
+                if bool(args.navigate_cluster):
+                    results = semantic_navigation_cluster_search(
+                        scan_root,
+                        args.query,
+                        k=args.k,
+                        expand_graph=args.expand,
+                        model=args.model,
+                        device=args.device,
+                        index_paths=getattr(index_ctx, "paths", None),
+                        index_config=getattr(index_ctx, "config", None),
+                        retrieval_mode=retrieval_mode,
+                        no_result_guard=str(args.no_result_guard),
+                        rg_pattern=args.rg_pattern,
+                        rg_glob=args.rg_glob,
+                        rrf_k=int(args.rrf_k),
+                        abstain_threshold=args.abstain_threshold,
+                        abstain_empty=bool(args.abstain_empty),
+                        rerank=bool(args.rerank),
+                        rerank_top_n=int(args.rerank_top_n),
+                        max_latency_ms_p50_ratio=args.max_latency_ms_p50_ratio,
+                        max_payload_tokens_median_ratio=args.max_payload_tokens_median_ratio,
+                        budget_tokens=args.budget_tokens,
+                        cluster_count=args.cluster_count,
+                        cluster_min_size=int(args.cluster_min_size),
+                        cluster_max_members=int(args.cluster_max_members),
+                        cluster_label_mode=str(args.cluster_label_mode),
+                    )
+                elif bool(args.compound_impact):
                     ignore_spec = get_ignore_spec(scan_root, index_ctx)
                     workspace_root = _workspace_root(scan_root, index_ctx)
                     results = compound_semantic_impact_search(

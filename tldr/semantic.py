@@ -13,8 +13,10 @@ and FAISS for fast vector similarity search.
 """
 
 import json
+import hashlib
 import logging
 import os
+import re
 import subprocess
 import sys
 import time
@@ -62,6 +64,47 @@ LANE4_SCHEMA_VERSION = 1
 LANE4_FEATURE_SET_ID = "feature.compound-semantic-impact.v1"
 LANE4_IMPACT_DEFAULT_DEPTH = 3
 LANE4_IMPACT_DEFAULT_LIMIT = 3
+LANE5_SCHEMA_VERSION = 1
+LANE5_FEATURE_SET_ID = "feature.navigate-cluster.v1"
+LANE5_DEFAULT_CLUSTER_COUNT = 5
+LANE5_DEFAULT_CLUSTER_MIN_SIZE = 1
+LANE5_DEFAULT_CLUSTER_MAX_MEMBERS = 5
+LANE5_CLUSTER_LABEL_MODES = {"auto", "file", "symbol"}
+LANE5_TOKEN_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "api",
+    "app",
+    "bin",
+    "c",
+    "cc",
+    "cpp",
+    "file",
+    "for",
+    "go",
+    "h",
+    "hpp",
+    "in",
+    "index",
+    "init",
+    "is",
+    "java",
+    "js",
+    "lib",
+    "main",
+    "of",
+    "on",
+    "or",
+    "pkg",
+    "py",
+    "rs",
+    "src",
+    "test",
+    "to",
+    "ts",
+    "tsx",
+}
 LANE4_CALL_GRAPH_LANGUAGES = {"python", "typescript", "go", "rust", "java", "c", "php"}
 LANE4_EXTENSION_TO_CALL_GRAPH_LANGUAGE = {
     ".py": "python",
@@ -1974,6 +2017,761 @@ def _lane4_partial_failure(
     if latency_ms is not None:
         out["latency_ms"] = float(latency_ms)
     return out
+
+
+def _lane5_normalize_label_mode(label_mode: Any) -> str:
+    mode = str(label_mode or "auto").strip().lower()
+    if mode not in LANE5_CLUSTER_LABEL_MODES:
+        return "auto"
+    return mode
+
+
+def _lane5_tokens(value: Any) -> List[str]:
+    if not isinstance(value, str):
+        return []
+    pieces = re.split(r"[^A-Za-z0-9]+", value.strip().lower())
+    tokens: List[str] = []
+    for piece in pieces:
+        if len(piece) < 2:
+            continue
+        if piece in LANE5_TOKEN_STOPWORDS:
+            continue
+        tokens.append(piece)
+    return _dedupe_preserve(tokens)
+
+
+def _lane5_file_tokens(file_path: Any) -> List[str]:
+    if not isinstance(file_path, str):
+        return []
+    normalized = file_path.replace("\\", "/")
+    if normalized.startswith("./"):
+        normalized = normalized[2:]
+    tokens: List[str] = []
+    for segment in normalized.split("/"):
+        tokens.extend(_lane5_tokens(segment))
+    return _dedupe_preserve(tokens)
+
+
+def _lane5_symbol_tokens(row: dict) -> List[str]:
+    values: List[str] = []
+    for key in ("qualified_name", "name"):
+        value = row.get(key)
+        if isinstance(value, str) and value.strip():
+            values.append(value)
+    tokens: List[str] = []
+    for value in values:
+        tokens.extend(_lane5_tokens(value))
+    return _dedupe_preserve(tokens)
+
+
+def _lane5_member_sort_key(member: dict) -> tuple[int, str, str, str]:
+    return (
+        int(member.get("rank", 0)),
+        str(member.get("file") or ""),
+        str(member.get("qualified_name") or member.get("name") or ""),
+        str(member.get("line") if isinstance(member.get("line"), int) else ""),
+    )
+
+
+def _lane5_cluster_anchor_key(cluster: dict) -> tuple[int, str, str]:
+    members = cluster.get("members")
+    if not isinstance(members, list) or not members:
+        return (0, "", "")
+    first = min(
+        (member for member in members if isinstance(member, dict)),
+        key=_lane5_member_sort_key,
+        default={},
+    )
+    return (
+        int(first.get("rank", 0)),
+        str(first.get("file") or ""),
+        str(first.get("qualified_name") or first.get("name") or ""),
+    )
+
+
+def _lane5_overlap_signature(
+    *,
+    lhs_file: set[str],
+    lhs_symbol: set[str],
+    lhs_all: set[str],
+    rhs_file: set[str],
+    rhs_symbol: set[str],
+    rhs_all: set[str],
+) -> tuple[int, int, int, int]:
+    file_overlap = len(lhs_file.intersection(rhs_file))
+    symbol_overlap = len(lhs_symbol.intersection(rhs_symbol))
+    any_overlap = len(lhs_all.intersection(rhs_all))
+    total = file_overlap + symbol_overlap + any_overlap
+    return (int(total), int(file_overlap), int(symbol_overlap), int(any_overlap))
+
+
+def _lane5_cluster_pair_overlap(lhs: dict, rhs: dict) -> tuple[int, int, int, int]:
+    return _lane5_overlap_signature(
+        lhs_file=set(lhs.get("tokens_file", set())),
+        lhs_symbol=set(lhs.get("tokens_symbol", set())),
+        lhs_all=set(lhs.get("tokens_all", set())),
+        rhs_file=set(rhs.get("tokens_file", set())),
+        rhs_symbol=set(rhs.get("tokens_symbol", set())),
+        rhs_all=set(rhs.get("tokens_all", set())),
+    )
+
+
+def _lane5_merge_clusters(dst: dict, src: dict) -> None:
+    dst_members = dst.get("members")
+    src_members = src.get("members")
+    if not isinstance(dst_members, list) or not isinstance(src_members, list):
+        return
+    dst_members.extend(member for member in src_members if isinstance(member, dict))
+    dst["tokens_file"] = set(dst.get("tokens_file", set())).union(set(src.get("tokens_file", set())))
+    dst["tokens_symbol"] = set(dst.get("tokens_symbol", set())).union(
+        set(src.get("tokens_symbol", set()))
+    )
+    dst["tokens_all"] = set(dst.get("tokens_all", set())).union(set(src.get("tokens_all", set())))
+
+
+def _lane5_row_identity(member: dict) -> str:
+    symbol = member.get("qualified_name") or member.get("name") or ""
+    line = member.get("line") if isinstance(member.get("line"), int) else ""
+    return (
+        f"{member.get('row_id') or ''}|{member.get('file') or ''}|"
+        f"{symbol}|{line}|{member.get('rank') or ''}"
+    )
+
+
+def _lane5_cluster_id(cluster: dict) -> str:
+    members = cluster.get("members")
+    if not isinstance(members, list):
+        return "cluster-000000000000"
+    identities = [
+        _lane5_row_identity(member)
+        for member in members
+        if isinstance(member, dict)
+    ]
+    payload = "|".join(sorted(identities))
+    digest = hashlib.sha1(payload.encode("utf-8")).hexdigest()[:12]
+    return f"cluster-{digest}"
+
+
+def _lane5_assignment_digest(clusters: List[dict]) -> str:
+    rows: List[str] = []
+    for cluster in clusters:
+        if not isinstance(cluster, dict):
+            continue
+        cluster_id = str(cluster.get("cluster_id") or "")
+        members = cluster.get("members")
+        if not isinstance(members, list):
+            rows.append(cluster_id)
+            continue
+        member_rows: List[str] = []
+        for member in members:
+            if not isinstance(member, dict):
+                continue
+            symbol = member.get("symbol")
+            if isinstance(symbol, dict):
+                symbol_name = symbol.get("qualified_name") or symbol.get("name") or ""
+                line = symbol.get("line")
+            else:
+                symbol_name = member.get("qualified_name") or member.get("name") or ""
+                line = member.get("line")
+            member_rows.append(
+                f"{member.get('file') or ''}|{symbol_name}|{line or ''}|{member.get('rank') or ''}"
+            )
+        rows.append(f"{cluster_id}:{'|'.join(sorted(member_rows))}")
+    payload = "||".join(sorted(rows))
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()
+
+
+def _lane5_top_token(token_sets: List[set[str]]) -> Optional[str]:
+    counts: dict[str, int] = {}
+    for token_set in token_sets:
+        for token in sorted(token_set):
+            counts[token] = counts.get(token, 0) + 1
+    if not counts:
+        return None
+    return sorted(counts.items(), key=lambda item: (-int(item[1]), str(item[0])))[0][0]
+
+
+def _lane5_cluster_label(cluster: dict, *, label_mode: str) -> str:
+    members = cluster.get("members")
+    if not isinstance(members, list) or not members:
+        return "cluster"
+
+    first = min(
+        (member for member in members if isinstance(member, dict)),
+        key=_lane5_member_sort_key,
+        default={},
+    )
+    file_token = _lane5_top_token(
+        [
+            set(member.get("tokens_file", set()))
+            for member in members
+            if isinstance(member, dict)
+        ]
+    )
+    symbol_token = _lane5_top_token(
+        [
+            set(member.get("tokens_symbol", set()))
+            for member in members
+            if isinstance(member, dict)
+        ]
+    )
+    first_file = str(first.get("file") or "")
+    first_symbol = str(first.get("qualified_name") or first.get("name") or "")
+
+    mode = _lane5_normalize_label_mode(label_mode)
+    if mode == "file":
+        if isinstance(file_token, str):
+            return file_token
+        if first_file:
+            return Path(first_file).name or first_file
+        return "cluster"
+    if mode == "symbol":
+        if isinstance(symbol_token, str):
+            return symbol_token
+        if first_symbol:
+            return first_symbol
+        if first_file:
+            return Path(first_file).stem or first_file
+        return "cluster"
+
+    # auto
+    if isinstance(file_token, str) and isinstance(symbol_token, str):
+        return f"{file_token}:{symbol_token}"
+    if isinstance(symbol_token, str):
+        return symbol_token
+    if isinstance(file_token, str):
+        return file_token
+    if first_symbol:
+        return first_symbol
+    if first_file:
+        return Path(first_file).name or first_file
+    return "cluster"
+
+
+def _lane5_common_tokens(members: List[dict], field: str) -> List[str]:
+    if not members:
+        return []
+    common: Optional[set[str]] = None
+    for member in members:
+        token_set = set(member.get(field, set()))
+        if common is None:
+            common = token_set
+            continue
+        common = common.intersection(token_set)
+    if common is None:
+        return []
+    return sorted(common)
+
+
+def _lane5_result_row(member: dict) -> dict:
+    retrieval: dict[str, Any] = {
+        "score": _safe_float(member.get("score")),
+        "semantic_score": _safe_float(member.get("semantic_score")),
+    }
+    confidence = _safe_float(member.get("confidence"))
+    if confidence is not None:
+        retrieval["confidence"] = confidence
+    source_ranks = member.get("source_ranks")
+    if isinstance(source_ranks, dict):
+        retrieval["source_ranks"] = source_ranks
+
+    return {
+        "rank": int(member.get("rank", 0)),
+        "file": member.get("file") if isinstance(member.get("file"), str) else None,
+        "symbol": {
+            "name": member.get("name") if isinstance(member.get("name"), str) else None,
+            "qualified_name": (
+                member.get("qualified_name")
+                if isinstance(member.get("qualified_name"), str)
+                else None
+            ),
+            "line": member.get("line") if isinstance(member.get("line"), int) else None,
+            "unit_type": (
+                member.get("unit_type") if isinstance(member.get("unit_type"), str) else None
+            ),
+        },
+        "retrieval": retrieval,
+    }
+
+
+def _lane5_normalize_semantic_rows(rows: List[dict]) -> List[dict]:
+    prepared: List[tuple[int, int, str, str, str, dict]] = []
+    for idx, row in enumerate(rows, start=1):
+        if not isinstance(row, dict):
+            continue
+
+        input_rank = _safe_int(row.get("rank"))
+        if input_rank is None or input_rank <= 0:
+            input_rank = idx
+
+        file_path = row.get("file")
+        if isinstance(file_path, str):
+            file_path = file_path.replace("\\", "/")
+            if file_path.startswith("./"):
+                file_path = file_path[2:]
+        else:
+            file_path = None
+
+        name = row.get("name") if isinstance(row.get("name"), str) else None
+        qualified_name = row.get("qualified_name") if isinstance(row.get("qualified_name"), str) else None
+        line = row.get("line") if isinstance(row.get("line"), int) else None
+        file_tokens = set(_lane5_file_tokens(file_path))
+        symbol_tokens = set(_lane5_symbol_tokens(row))
+        all_tokens = set(file_tokens).union(symbol_tokens)
+
+        member = {
+            "row_id": f"row-{idx:04d}",
+            "rank": int(input_rank),
+            "file": file_path,
+            "name": name,
+            "qualified_name": qualified_name,
+            "line": line,
+            "unit_type": row.get("unit_type") if isinstance(row.get("unit_type"), str) else None,
+            "score": _safe_float(row.get("score")),
+            "semantic_score": _safe_float(row.get("semantic_score")),
+            "confidence": _safe_float(row.get("confidence")),
+            "source_ranks": row.get("source_ranks") if isinstance(row.get("source_ranks"), dict) else None,
+            "tokens_file": file_tokens,
+            "tokens_symbol": symbol_tokens,
+            "tokens_all": all_tokens,
+        }
+        prepared.append(
+            (
+                int(input_rank),
+                idx,
+                str(file_path or ""),
+                str(qualified_name or name or ""),
+                str(line if line is not None else ""),
+                member,
+            )
+        )
+
+    prepared = sorted(prepared, key=lambda item: (item[0], item[1], item[2], item[3], item[4]))
+    out: List[dict] = []
+    for rank, (_, _, _, _, _, member) in enumerate(prepared, start=1):
+        member["rank"] = int(rank)
+        member["row_id"] = f"row-{rank:04d}"
+        out.append(member)
+    return out
+
+
+def _lane5_cluster_rows(
+    members: List[dict],
+    *,
+    cluster_count: Optional[int],
+    cluster_min_size: int,
+) -> List[dict]:
+    clusters: List[dict] = []
+    target_count = _safe_int(cluster_count)
+    if target_count is not None and target_count <= 0:
+        target_count = None
+    min_size = _safe_int(cluster_min_size)
+    if min_size is None or min_size <= 0:
+        min_size = LANE5_DEFAULT_CLUSTER_MIN_SIZE
+
+    for member in members:
+        best_idx: Optional[int] = None
+        best_overlap = (0, 0, 0, 0)
+        for idx, cluster in enumerate(clusters):
+            overlap = _lane5_overlap_signature(
+                lhs_file=set(member.get("tokens_file", set())),
+                lhs_symbol=set(member.get("tokens_symbol", set())),
+                lhs_all=set(member.get("tokens_all", set())),
+                rhs_file=set(cluster.get("tokens_file", set())),
+                rhs_symbol=set(cluster.get("tokens_symbol", set())),
+                rhs_all=set(cluster.get("tokens_all", set())),
+            )
+            if overlap[0] <= 0:
+                continue
+            if best_idx is None or overlap > best_overlap:
+                best_idx = idx
+                best_overlap = overlap
+                continue
+            if overlap == best_overlap:
+                if _lane5_cluster_anchor_key(cluster) < _lane5_cluster_anchor_key(clusters[best_idx]):
+                    best_idx = idx
+                    best_overlap = overlap
+
+        if best_idx is None:
+            if target_count is None or len(clusters) < target_count:
+                clusters.append(
+                    {
+                        "members": [member],
+                        "tokens_file": set(member.get("tokens_file", set())),
+                        "tokens_symbol": set(member.get("tokens_symbol", set())),
+                        "tokens_all": set(member.get("tokens_all", set())),
+                    }
+                )
+                continue
+
+            # Target count reached: deterministically assign by smallest cluster first.
+            fallback_idx = min(
+                range(len(clusters)),
+                key=lambda i: (len(clusters[i].get("members", [])), _lane5_cluster_anchor_key(clusters[i])),
+            )
+            _lane5_merge_clusters(
+                clusters[fallback_idx],
+                {
+                    "members": [member],
+                    "tokens_file": set(member.get("tokens_file", set())),
+                    "tokens_symbol": set(member.get("tokens_symbol", set())),
+                    "tokens_all": set(member.get("tokens_all", set())),
+                },
+            )
+            continue
+
+        _lane5_merge_clusters(
+            clusters[best_idx],
+            {
+                "members": [member],
+                "tokens_file": set(member.get("tokens_file", set())),
+                "tokens_symbol": set(member.get("tokens_symbol", set())),
+                "tokens_all": set(member.get("tokens_all", set())),
+            },
+        )
+
+    if min_size > 1:
+        while len(clusters) > 1:
+            small_indexes = [
+                idx for idx, cluster in enumerate(clusters) if len(cluster.get("members", [])) < min_size
+            ]
+            if not small_indexes:
+                break
+
+            source_idx = min(small_indexes, key=lambda idx: _lane5_cluster_anchor_key(clusters[idx]))
+            source = clusters[source_idx]
+
+            best_target_idx: Optional[int] = None
+            best_overlap = (-1, -1, -1, -1)
+            for idx, candidate in enumerate(clusters):
+                if idx == source_idx:
+                    continue
+                overlap = _lane5_cluster_pair_overlap(source, candidate)
+                if best_target_idx is None or overlap > best_overlap:
+                    best_target_idx = idx
+                    best_overlap = overlap
+                    continue
+                if overlap == best_overlap:
+                    if _lane5_cluster_anchor_key(candidate) < _lane5_cluster_anchor_key(
+                        clusters[best_target_idx]
+                    ):
+                        best_target_idx = idx
+                        best_overlap = overlap
+
+            if best_target_idx is None:
+                break
+
+            _lane5_merge_clusters(clusters[best_target_idx], source)
+            del clusters[source_idx]
+
+    for cluster in clusters:
+        members_sorted = sorted(
+            [
+                member
+                for member in cluster.get("members", [])
+                if isinstance(member, dict)
+            ],
+            key=_lane5_member_sort_key,
+        )
+        cluster["members"] = members_sorted
+
+    return sorted(
+        clusters,
+        key=lambda cluster: (
+            -max(
+                [
+                    float(member.get("score"))
+                    for member in cluster.get("members", [])
+                    if _safe_float(member.get("score")) is not None
+                ]
+                or [0.0]
+            ),
+            _lane5_cluster_anchor_key(cluster),
+        ),
+    )
+
+
+def semantic_navigation_cluster_search(
+    project_path: str,
+    query: str,
+    k: int = 5,
+    *,
+    expand_graph: bool = False,
+    model: Optional[str] = None,
+    device: Optional[str] = None,
+    index_paths=None,
+    index_config=None,
+    retrieval_mode: str = "semantic",
+    no_result_guard: str = "none",
+    rg_pattern: Optional[str] = None,
+    rg_glob: Optional[str] = None,
+    rrf_k: int = 60,
+    abstain_threshold: Optional[float] = None,
+    abstain_empty: bool = False,
+    rerank: bool = False,
+    rerank_top_n: int = 5,
+    max_latency_ms_p50_ratio: Optional[float] = None,
+    max_payload_tokens_median_ratio: Optional[float] = None,
+    budget_tokens: Optional[int] = None,
+    cluster_count: Optional[int] = None,
+    cluster_min_size: int = LANE5_DEFAULT_CLUSTER_MIN_SIZE,
+    cluster_max_members: Optional[int] = LANE5_DEFAULT_CLUSTER_MAX_MEMBERS,
+    cluster_label_mode: str = "auto",
+) -> dict:
+    """Lane5 deterministic semantic navigation/clustering contract."""
+    total_started = time.perf_counter()
+
+    k_requested = _safe_int(k)
+    if k_requested is None or k_requested <= 0:
+        k_requested = 5
+    k_effective = int(k_requested)
+    if budget_tokens is not None:
+        k_effective = _effective_k_from_budget_tokens(k_requested, budget_tokens=budget_tokens)
+
+    requested_cluster_count = _safe_int(cluster_count)
+    if requested_cluster_count is not None and requested_cluster_count <= 0:
+        requested_cluster_count = None
+    requested_min_size = _safe_int(cluster_min_size)
+    if requested_min_size is None or requested_min_size <= 0:
+        requested_min_size = LANE5_DEFAULT_CLUSTER_MIN_SIZE
+    requested_max_members = _safe_int(cluster_max_members)
+    if requested_max_members is None or requested_max_members <= 0:
+        requested_max_members = LANE5_DEFAULT_CLUSTER_MAX_MEMBERS
+    requested_label_mode = _lane5_normalize_label_mode(cluster_label_mode)
+
+    default_cluster_count = min(LANE5_DEFAULT_CLUSTER_COUNT, max(1, int(k_effective)))
+    cluster_count_target = (
+        int(requested_cluster_count)
+        if requested_cluster_count is not None
+        else int(default_cluster_count)
+    )
+
+    semantic_started = time.perf_counter()
+    try:
+        semantic_rows = semantic_search(
+            project_path,
+            query,
+            k=k_requested,
+            expand_graph=expand_graph,
+            model=model,
+            device=device,
+            index_paths=index_paths,
+            index_config=index_config,
+            retrieval_mode=retrieval_mode,
+            no_result_guard=no_result_guard,
+            rg_pattern=rg_pattern,
+            rg_glob=rg_glob,
+            rrf_k=rrf_k,
+            abstain_threshold=abstain_threshold,
+            abstain_empty=abstain_empty,
+            rerank=rerank,
+            rerank_top_n=rerank_top_n,
+            max_latency_ms_p50_ratio=max_latency_ms_p50_ratio,
+            max_payload_tokens_median_ratio=max_payload_tokens_median_ratio,
+            budget_tokens=budget_tokens,
+        )
+    except Exception as exc:
+        total_ms = max(0.0, (time.perf_counter() - total_started) * 1000.0)
+        latency_bound = _lane2_ratio(max_latency_ms_p50_ratio)
+        payload_bound = _lane2_ratio(max_payload_tokens_median_ratio)
+        return {
+            "schema_version": LANE5_SCHEMA_VERSION,
+            "feature_set_id": LANE5_FEATURE_SET_ID,
+            "status": "error",
+            "query": query,
+            "budget_tokens": budget_tokens,
+            "retrieval_mode": str(retrieval_mode or "semantic"),
+            "k_requested": int(k_requested),
+            "k_effective": int(k_effective),
+            "timing_ms": {
+                "total": float(total_ms),
+                "semantic": float(total_ms),
+                "clustering": 0.0,
+                "labeling": 0.0,
+            },
+            "clustering": {
+                "cluster_count_requested": requested_cluster_count,
+                "cluster_count_target": int(cluster_count_target),
+                "cluster_min_size": int(requested_min_size),
+                "cluster_max_members": int(requested_max_members),
+                "cluster_label_mode": requested_label_mode,
+            },
+            "counts": {
+                "retrieval_results": 0,
+                "clusters": 0,
+                "cluster_count": 0,
+                "clustered_results": 0,
+                "unclustered_results": 0,
+                "truncated_clusters": 0,
+            },
+            "results": [],
+            "clusters": [],
+            "partial_failures": [
+                {
+                    "stage": "semantic",
+                    "code": "semantic_runtime_error",
+                    "message": str(exc),
+                    "recoverable": False,
+                }
+            ],
+            "regression_metadata": {
+                "budget_tokens": budget_tokens,
+                "max_latency_ms_p50_ratio": latency_bound,
+                "max_payload_tokens_median_ratio": payload_bound,
+                "latency_ms_p50": float(total_ms),
+                "payload_tokens_median": 0.0,
+                "assignment_digest": "",
+            },
+        }
+    semantic_ms = max(0.0, (time.perf_counter() - semantic_started) * 1000.0)
+
+    members = _lane5_normalize_semantic_rows(
+        [row for row in semantic_rows if isinstance(row, dict)]
+    )
+    if members:
+        cluster_count_target = max(1, min(int(cluster_count_target), len(members)))
+    else:
+        cluster_count_target = 0
+
+    clustering_started = time.perf_counter()
+    internal_clusters = _lane5_cluster_rows(
+        members,
+        cluster_count=cluster_count_target if cluster_count_target > 0 else None,
+        cluster_min_size=int(requested_min_size),
+    )
+    clustering_ms = max(0.0, (time.perf_counter() - clustering_started) * 1000.0)
+
+    labeling_started = time.perf_counter()
+    internal_rows: List[dict] = []
+    truncated_clusters = 0
+
+    for cluster in internal_clusters:
+        cluster_id = _lane5_cluster_id(cluster)
+        label = _lane5_cluster_label(cluster, label_mode=requested_label_mode)
+        cluster_members = [
+            member for member in cluster.get("members", []) if isinstance(member, dict)
+        ]
+        overflow = max(0, len(cluster_members) - int(requested_max_members))
+        if overflow > 0:
+            truncated_clusters += 1
+        visible_members = (
+            cluster_members[: int(requested_max_members)]
+            if requested_max_members > 0
+            else cluster_members
+        )
+
+        member_rows: List[dict] = []
+        for member in visible_members:
+            member_row = _lane5_result_row(member)
+            member_row["cluster_id"] = cluster_id
+            member_rows.append(member_row)
+
+        internal_rows.append(
+            {
+                "cluster_id": cluster_id,
+                "label": label,
+                "size": len(cluster_members),
+                "truncated": bool(overflow > 0),
+                "member_overflow": int(overflow),
+                "tokens": {
+                    "file": _lane5_common_tokens(cluster_members, "tokens_file"),
+                    "symbol": _lane5_common_tokens(cluster_members, "tokens_symbol"),
+                },
+                "members": member_rows,
+                "_all_members": cluster_members,
+            }
+        )
+
+    internal_rows = sorted(
+        internal_rows,
+        key=lambda cluster: (
+            str(cluster.get("cluster_id") or ""),
+            str(cluster.get("label") or ""),
+        ),
+    )
+    row_to_cluster: dict[str, tuple[str, int]] = {}
+    clusters: List[dict] = []
+    for cluster_rank, cluster in enumerate(internal_rows, start=1):
+        all_members = cluster.get("_all_members")
+        if isinstance(all_members, list):
+            for member in all_members:
+                if not isinstance(member, dict):
+                    continue
+                row_to_cluster[str(member.get("row_id"))] = (
+                    str(cluster.get("cluster_id") or ""),
+                    int(cluster_rank),
+                )
+        cluster["rank"] = int(cluster_rank)
+        for row in cluster.get("members", []):
+            if isinstance(row, dict):
+                row["cluster_rank"] = int(cluster_rank)
+        cluster.pop("_all_members", None)
+        clusters.append(cluster)
+    labeling_ms = max(0.0, (time.perf_counter() - labeling_started) * 1000.0)
+
+    results: List[dict] = []
+    for member in members:
+        row = _lane5_result_row(member)
+        cluster_info = row_to_cluster.get(str(member.get("row_id")))
+        if cluster_info is not None:
+            row["cluster_id"] = cluster_info[0]
+            row["cluster_rank"] = int(cluster_info[1])
+        results.append(row)
+
+    latency_bound = _lane2_ratio(max_latency_ms_p50_ratio)
+    payload_bound = _lane2_ratio(max_payload_tokens_median_ratio)
+    payload_tokens_median = (
+        float(median([_row_payload_tokens(row) for row in results])) if results else 0.0
+    )
+    unclustered_results = max(0, len(results) - len(row_to_cluster))
+    total_ms = max(0.0, (time.perf_counter() - total_started) * 1000.0)
+    return {
+        "schema_version": LANE5_SCHEMA_VERSION,
+        "feature_set_id": LANE5_FEATURE_SET_ID,
+        "status": "ok",
+        "query": query,
+        "budget_tokens": budget_tokens,
+        "retrieval_mode": str(retrieval_mode or "semantic"),
+        "k_requested": int(k_requested),
+        "k_effective": int(k_effective),
+        "timing_ms": {
+            "total": float(total_ms),
+            "semantic": float(semantic_ms),
+            "clustering": float(clustering_ms),
+            "labeling": float(labeling_ms),
+        },
+        "clustering": {
+            "cluster_count_requested": requested_cluster_count,
+            "cluster_count_target": int(cluster_count_target),
+            "cluster_min_size": int(requested_min_size),
+            "cluster_max_members": int(requested_max_members),
+            "cluster_label_mode": requested_label_mode,
+        },
+        "counts": {
+            "retrieval_results": len(members),
+            "clusters": len(clusters),
+            "cluster_count": len(clusters),
+            "clustered_results": len(results),
+            "unclustered_results": int(unclustered_results),
+            "truncated_clusters": int(truncated_clusters),
+        },
+        "results": results,
+        "clusters": clusters,
+        "partial_failures": [],
+        "regression_metadata": {
+            "budget_tokens": budget_tokens,
+            "max_latency_ms_p50_ratio": latency_bound,
+            "max_payload_tokens_median_ratio": payload_bound,
+            "latency_ms_p50": float(total_ms),
+            "payload_tokens_median": float(payload_tokens_median),
+            "assignment_digest": _lane5_assignment_digest(clusters),
+        },
+    }
+
+
+semantic_navigate_cluster_search = semantic_navigation_cluster_search
+navigate_cluster_search = semantic_navigation_cluster_search
+semantic_navigate_search = semantic_navigation_cluster_search
 
 
 def hybrid_file_search(

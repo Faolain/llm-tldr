@@ -82,6 +82,40 @@ def test_lane3_llm_tldr_profile_schema():
     assert "--budget-tokens {budget_tokens}" in retrieval_template
 
 
+def test_lane5_llm_tldr_profile_schema():
+    repo_root = Path(__file__).resolve().parents[1]
+    lane3 = (
+        repo_root
+        / "benchmarks"
+        / "head_to_head"
+        / "tool_profiles"
+        / "llm_tldr.budget_aware_lane3.v1.json"
+    )
+    lane5 = (
+        repo_root
+        / "benchmarks"
+        / "head_to_head"
+        / "tool_profiles"
+        / "llm_tldr.navigate_cluster_lane5.v1.json"
+    )
+
+    _assert_profile_shape(lane5)
+
+    lane3_profile = json.loads(lane3.read_text())
+    lane5_profile = json.loads(lane5.read_text())
+    assert lane5_profile.get("feature_set_id") == "feature.navigate-cluster.v1"
+
+    lane3_retrieval_template = (
+        lane3_profile.get("commands", {}).get("retrieval", {}).get("template")
+    )
+    lane5_retrieval_template = (
+        lane5_profile.get("commands", {}).get("retrieval", {}).get("template")
+    )
+    assert isinstance(lane5_retrieval_template, str)
+    assert "--budget-tokens {budget_tokens}" in lane5_retrieval_template
+    assert lane5_retrieval_template == lane3_retrieval_template
+
+
 def test_contextplus_profile_is_real_profile_not_template():
     repo_root = Path(__file__).resolve().parents[1]
     profile_path = repo_root / "benchmarks" / "head_to_head" / "tool_profiles" / "contextplus.v1.json"

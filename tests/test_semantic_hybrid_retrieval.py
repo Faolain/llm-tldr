@@ -292,3 +292,29 @@ def test_lane4_compound_signature_exposes_impact_controls() -> None:
     expected = {"impact_depth", "impact_limit", "impact_language"}
     missing = expected - params
     assert not missing, f"missing lane4 compound kwargs: {sorted(missing)}"
+
+
+def _lane5_navigate_callable():
+    for name in (
+        "semantic_navigate_search",
+        "navigate_cluster_search",
+        "semantic_navigate_cluster_search",
+    ):
+        candidate = getattr(semantic, name, None)
+        if callable(candidate):
+            return candidate
+    raise AssertionError("missing lane5 semantic navigate callable")
+
+
+def test_lane5_navigate_signature_exposes_cluster_controls() -> None:
+    params = set(inspect.signature(_lane5_navigate_callable()).parameters)
+    expected = {
+        "query",
+        "budget_tokens",
+        "cluster_count",
+        "cluster_min_size",
+        "cluster_max_members",
+        "cluster_label_mode",
+    }
+    missing = expected - params
+    assert not missing, f"missing lane5 kwargs: {sorted(missing)}"

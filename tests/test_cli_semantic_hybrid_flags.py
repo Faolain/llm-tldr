@@ -56,6 +56,7 @@ def test_semantic_search_hybrid_flags_default_to_legacy_behavior() -> None:
     assert args.command == "semantic"
     assert args.action == "search"
     assert args.hybrid is False
+    assert args.navigate_cluster is False
     assert args.no_result_guard == "none"
     assert args.rg_pattern is None
     assert args.rg_glob is None
@@ -100,6 +101,19 @@ def test_semantic_search_lane4_compound_flags_exposed() -> None:
     }
     missing = expected - option_strings
     assert not missing, f"missing lane4 semantic search flags: {sorted(missing)}"
+
+
+def test_semantic_search_lane5_navigate_cluster_flag_exposed() -> None:
+    option_strings = _semantic_search_option_strings()
+    expected = {
+        "--navigate-cluster",
+        "--cluster-count",
+        "--cluster-min-size",
+        "--cluster-max-members",
+        "--cluster-label-mode",
+    }
+    missing = expected - option_strings
+    assert not missing, f"missing lane5 semantic search flags: {sorted(missing)}"
 
 
 def test_semantic_search_lane2_flags_parse_values() -> None:
@@ -168,3 +182,29 @@ def test_semantic_search_lane4_compound_flags_parse_values() -> None:
     assert args.impact_depth == 4
     assert args.impact_limit == 2
     assert args.impact_language == "python"
+
+
+def test_semantic_search_lane5_navigate_cluster_flag_parses_value() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "semantic",
+            "search",
+            "query text",
+            "--navigate-cluster",
+            "--cluster-count",
+            "8",
+            "--cluster-min-size",
+            "2",
+            "--cluster-max-members",
+            "11",
+            "--cluster-label-mode",
+            "symbol",
+        ]
+    )
+
+    assert args.navigate_cluster is True
+    assert args.cluster_count == 8
+    assert args.cluster_min_size == 2
+    assert args.cluster_max_members == 11
+    assert args.cluster_label_mode == "symbol"

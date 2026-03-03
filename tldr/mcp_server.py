@@ -487,6 +487,11 @@ def semantic(
     k: int = 10,
     budget_tokens: int | None = None,
     hybrid: bool = False,
+    navigate_cluster: bool = False,
+    cluster_count: int | None = None,
+    cluster_min_size: int = 1,
+    cluster_max_members: int = 5,
+    cluster_label_mode: str = "auto",
     compound_impact: bool = False,
     impact_depth: int = 3,
     impact_limit: int = 3,
@@ -513,6 +518,11 @@ def semantic(
         k: Number of results to return
         budget_tokens: Optional lane3 budget-aware retrieval control.
         hybrid: Enable deterministic lexical+semantic hybrid retrieval.
+        navigate_cluster: Opt-in lane5 semantic navigation/clustering output.
+        cluster_count: Target cluster count for lane5 output.
+        cluster_min_size: Minimum lane5 cluster size.
+        cluster_max_members: Max members emitted per lane5 cluster.
+        cluster_label_mode: Lane5 cluster label strategy.
         compound_impact: Opt-in lane4 compound retrieval + impact output.
         impact_depth: Max reverse-call depth for lane4 impact stage.
         impact_limit: Max semantic rows enriched by lane4 impact stage.
@@ -537,6 +547,13 @@ def semantic(
             "k": k,
             "budget_tokens": budget_tokens,
             "retrieval_mode": "hybrid" if bool(hybrid) else "semantic",
+            "navigate_cluster": bool(navigate_cluster),
+            "cluster_count": int(cluster_count) if cluster_count is not None else None,
+            "cluster_min_size": int(cluster_min_size),
+            "cluster_max_members": (
+                int(cluster_max_members) if cluster_max_members is not None else None
+            ),
+            "cluster_label_mode": str(cluster_label_mode),
             "compound_impact": bool(compound_impact),
             "impact_depth": int(impact_depth),
             "impact_limit": int(impact_limit),
