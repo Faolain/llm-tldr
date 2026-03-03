@@ -39,6 +39,11 @@ if sys.platform == "darwin":
 _model = None
 _model_name = None  # Track which model is loaded
 _model_device = None  # Track device used for cached model
+_onnx_model = None
+_onnx_tokenizer = None
+_onnx_model_name = None
+_onnx_provider = None
+_onnx_pooling_mode = None
 
 # Supported models with approximate download sizes
 SUPPORTED_MODELS = {
@@ -204,6 +209,23 @@ class EmbeddingUnit:
 MODEL_NAME = "BAAI/bge-large-en-v1.5"  # Legacy, use SUPPORTED_MODELS
 
 
+def _resolve_hf_model_name(model_name: Optional[str]) -> str:
+    if model_name is None:
+        model_name = DEFAULT_MODEL
+    if model_name in SUPPORTED_MODELS:
+        return SUPPORTED_MODELS[model_name]["hf_name"]
+    return model_name
+
+
+def _get_backend() -> str:
+    backend = os.environ.get("TLDR_BACKEND", "pytorch").strip().lower()
+    if backend in {"", "pytorch", "torch"}:
+        return "pytorch"
+    if backend == "onnx":
+        return "onnx"
+    raise ValueError("Invalid TLDR_BACKEND. Expected one of: pytorch, onnx.")
+
+
 def _canonical_model_id(model_name: Optional[str]) -> Optional[str]:
     if model_name is None:
         return None
@@ -262,7 +284,7 @@ def _confirm_download(model_key: str) -> bool:
 
 
 def _get_device() -> str:
-    """Determine inference device, defaulting to CPU on macOS for stability."""
+    """Determine inference device, honoring TLDR_DEVICE override."""
     env_device = os.environ.get("TLDR_DEVICE")
     if env_device:
         return env_device
@@ -271,12 +293,11 @@ def _get_device() -> str:
         import torch
         if torch.cuda.is_available():
             return "cuda"
+        mps_backend = getattr(torch.backends, "mps", None)
+        if mps_backend is not None and mps_backend.is_available():
+            return "mps"
     except Exception:
         pass
-
-    # If MPS fallback enabled, prefer CPU for stability on macOS
-    if sys.platform == "darwin" and os.environ.get("PYTORCH_ENABLE_MPS_FALLBACK") == "1":
-        return "cpu"
 
     return "cpu"
 
@@ -297,15 +318,7 @@ def get_model(model_name: Optional[str] = None, device: Optional[str] = None):
     global _model, _model_name, _model_device
 
     # Resolve model name
-    if model_name is None:
-        model_name = DEFAULT_MODEL
-
-    # Get HuggingFace name
-    if model_name in SUPPORTED_MODELS:
-        hf_name = SUPPORTED_MODELS[model_name]["hf_name"]
-    else:
-        # Allow arbitrary HuggingFace model names
-        hf_name = model_name
+    hf_name = _resolve_hf_model_name(model_name)
 
     if device is None:
         device = _get_device()
@@ -329,6 +342,244 @@ def get_model(model_name: Optional[str] = None, device: Optional[str] = None):
     _model_name = hf_name
     _model_device = device
     return _model
+
+
+def _select_onnx_provider(device: Optional[str]) -> str:
+    norm_device = str(device or "cpu").lower()
+    preferred: List[str]
+    if norm_device.startswith("cuda"):
+        preferred = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    elif norm_device.startswith("mps"):
+        preferred = ["CoreMLExecutionProvider", "CPUExecutionProvider"]
+    else:
+        preferred = ["CPUExecutionProvider"]
+
+    try:
+        import onnxruntime as ort
+
+        available = set(ort.get_available_providers())
+        for provider in preferred:
+            if provider in available:
+                return provider
+    except Exception:
+        pass
+
+    return "CPUExecutionProvider"
+
+
+def _get_pooling_mode(hf_name: str) -> str:
+    default_mode = "cls" if "bge" in hf_name.lower() else "mean"
+    try:
+        from huggingface_hub import hf_hub_download
+
+        config_path = hf_hub_download(repo_id=hf_name, filename="1_Pooling/config.json")
+        pooling_config = json.loads(Path(config_path).read_text())
+        if pooling_config.get("pooling_mode_cls_token"):
+            return "cls"
+        if pooling_config.get("pooling_mode_mean_tokens"):
+            return "mean"
+    except Exception:
+        pass
+    return default_mode
+
+
+def _onnx_local_cache_dir(hf_name: str) -> Path:
+    cache_root = os.environ.get("TLDR_CACHE_ROOT")
+    if cache_root:
+        base = Path(cache_root).expanduser().resolve() / "onnx_models"
+    else:
+        base = Path.home() / ".cache" / "tldr" / "onnx_models"
+    safe_name = hf_name.replace("/", "__")
+    return base / safe_name
+
+
+def get_onnx_model(model_name: Optional[str] = None, device: Optional[str] = None):
+    global _onnx_model, _onnx_tokenizer, _onnx_model_name, _onnx_provider, _onnx_pooling_mode
+
+    hf_name = _resolve_hf_model_name(model_name)
+
+    if device is None:
+        device = _get_device()
+    provider = _select_onnx_provider(device)
+
+    if _onnx_model is not None and _onnx_model_name == hf_name and _onnx_provider == provider:
+        return _onnx_model, _onnx_tokenizer, _onnx_pooling_mode
+
+    if not _model_exists_locally(hf_name):
+        model_key = model_name if model_name in SUPPORTED_MODELS else None
+        if model_key and not _confirm_download(model_key):
+            raise ValueError("Model download declined. Use --model to choose a smaller model.")
+
+    try:
+        from optimum.onnxruntime import ORTModelForFeatureExtraction
+        from transformers import AutoTokenizer
+    except ImportError as exc:
+        raise ImportError(
+            "ONNX backend requires optional dependencies. "
+            "Install with: uv pip install onnxruntime optimum[onnxruntime] transformers tokenizers"
+        ) from exc
+
+    local_cache_dir = _onnx_local_cache_dir(hf_name)
+    if local_cache_dir.exists():
+        try:
+            logger.info("Loading ONNX model from local cache %s", local_cache_dir)
+            _onnx_model = ORTModelForFeatureExtraction.from_pretrained(
+                str(local_cache_dir),
+                provider=provider,
+                local_files_only=True,
+            )
+            _onnx_tokenizer = AutoTokenizer.from_pretrained(str(local_cache_dir), use_fast=True)
+            _onnx_pooling_mode = _get_pooling_mode(hf_name)
+            _onnx_model_name = hf_name
+            _onnx_provider = provider
+            return _onnx_model, _onnx_tokenizer, _onnx_pooling_mode
+        except Exception:
+            logger.warning("Failed to load cached ONNX model at %s; regenerating.", local_cache_dir)
+
+    logger.info("Loading ONNX model %s with provider: %s", hf_name, provider)
+    try:
+        _onnx_model = ORTModelForFeatureExtraction.from_pretrained(
+            hf_name,
+            provider=provider,
+        )
+    except Exception:
+        logger.info("ONNX weights not found for %s; exporting from PyTorch checkpoint", hf_name)
+        _onnx_model = ORTModelForFeatureExtraction.from_pretrained(
+            hf_name,
+            export=True,
+            provider=provider,
+        )
+    _onnx_tokenizer = AutoTokenizer.from_pretrained(hf_name, use_fast=True)
+    try:
+        local_cache_dir.mkdir(parents=True, exist_ok=True)
+        _onnx_model.save_pretrained(str(local_cache_dir))
+        _onnx_tokenizer.save_pretrained(str(local_cache_dir))
+    except Exception:
+        logger.debug("Failed to persist ONNX model cache at %s", local_cache_dir, exc_info=True)
+    _onnx_pooling_mode = _get_pooling_mode(hf_name)
+    _onnx_model_name = hf_name
+    _onnx_provider = provider
+    return _onnx_model, _onnx_tokenizer, _onnx_pooling_mode
+
+
+def _l2_normalize_rows(matrix):
+    import numpy as np
+
+    norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+    norms = np.clip(norms, a_min=1e-12, a_max=None)
+    return matrix / norms
+
+
+def compute_embeddings_pytorch(
+    texts: List[str],
+    model_name: Optional[str] = None,
+    device: Optional[str] = None,
+    batch_size: int = 64,
+):
+    import numpy as np
+
+    model = get_model(model_name, device=device)
+    result = model.encode(
+        texts,
+        batch_size=batch_size,
+        normalize_embeddings=True,
+        show_progress_bar=False,
+    )
+    return np.array(result, dtype=np.float32)
+
+
+def compute_embeddings_onnx(
+    texts: List[str],
+    model_name: Optional[str] = None,
+    device: Optional[str] = None,
+    batch_size: int = 64,
+):
+    import numpy as np
+
+    model, tokenizer, pooling_mode = get_onnx_model(model_name, device=device)
+
+    all_embeddings = []
+    for i in range(0, len(texts), batch_size):
+        chunk_texts = texts[i:i + batch_size]
+        inputs = tokenizer(
+            chunk_texts,
+            padding=True,
+            truncation=True,
+            max_length=512,
+            return_tensors="np",
+        )
+        try:
+            outputs = model(**inputs)
+        except Exception:
+            inputs = tokenizer(
+                chunk_texts,
+                padding=True,
+                truncation=True,
+                max_length=512,
+                return_tensors="pt",
+            )
+            outputs = model(**inputs)
+
+        hidden_states = outputs.last_hidden_state
+        if hasattr(hidden_states, "detach"):
+            hidden_states = hidden_states.detach().cpu().numpy()
+        else:
+            hidden_states = np.asarray(hidden_states)
+
+        attention_mask = inputs.get("attention_mask")
+        if hasattr(attention_mask, "detach"):
+            attention_mask = attention_mask.detach().cpu().numpy()
+        else:
+            attention_mask = np.asarray(attention_mask)
+
+        if pooling_mode == "mean":
+            mask = attention_mask[..., None].astype(np.float32)
+            summed = (hidden_states * mask).sum(axis=1)
+            counts = np.clip(mask.sum(axis=1), a_min=1e-12, a_max=None)
+            pooled = summed / counts
+        else:
+            pooled = hidden_states[:, 0, :]
+
+        all_embeddings.append(_l2_normalize_rows(np.asarray(pooled, dtype=np.float32)))
+
+    if not all_embeddings:
+        return np.empty((0, 0), dtype=np.float32)
+    return np.vstack(all_embeddings).astype(np.float32)
+
+
+def compute_embedding_onnx(
+    text: str,
+    model_name: Optional[str] = None,
+    device: Optional[str] = None,
+):
+    return compute_embeddings_onnx(
+        [text],
+        model_name=model_name,
+        device=device,
+        batch_size=1,
+    )[0]
+
+
+def compute_embeddings(
+    texts: List[str],
+    model_name: Optional[str] = None,
+    device: Optional[str] = None,
+    batch_size: int = 64,
+):
+    backend = _get_backend()
+    if backend == "onnx":
+        return compute_embeddings_onnx(
+            texts,
+            model_name=model_name,
+            device=device,
+            batch_size=batch_size,
+        )
+    return compute_embeddings_pytorch(
+        texts,
+        model_name=model_name,
+        device=device,
+        batch_size=batch_size,
+    )
 
 
 def build_embedding_text(unit: EmbeddingUnit) -> str:
@@ -394,15 +645,16 @@ def compute_embedding(text: str, model_name: Optional[str] = None, device: Optio
     Returns:
         numpy array with L2-normalized embedding.
     """
-    import numpy as np
-
-    model = get_model(model_name, device=device)
-
-    # BGE models work best with instruction prefix for queries
-    # For document embedding, we use text directly
-    embedding = model.encode(text, normalize_embeddings=True)
-
-    return np.array(embedding, dtype=np.float32)
+    backend = _get_backend()
+    if backend == "onnx":
+        return compute_embedding_onnx(text, model_name=model_name, device=device)
+    embeddings = compute_embeddings_pytorch(
+        [text],
+        model_name=model_name,
+        device=device,
+        batch_size=1,
+    )
+    return embeddings[0]
 
 
 def extract_units_from_project(
@@ -1279,7 +1531,6 @@ def build_semantic_index(
         ) as progress:
             task = progress.add_task("Computing embeddings...", total=num_units)
 
-            model_obj = get_model(model, device=device)
             all_embeddings = []
 
             for i in range(0, num_units, BATCH_SIZE):
@@ -1290,25 +1541,24 @@ def build_semantic_index(
                 short_path = current_unit.file if len(current_unit.file) < 40 else "..." + current_unit.file[-37:]
                 progress.update(task, description=f"[bold green]Embedding {short_path}::{current_unit.name}")
 
-                result = model_obj.encode(
+                result = compute_embeddings(
                     chunk_texts,
+                    model_name=model,
+                    device=device,
                     batch_size=BATCH_SIZE,
-                    normalize_embeddings=True,
-                    show_progress_bar=False
                 )
-                all_embeddings.extend(np.array(result, dtype=np.float32))
+                all_embeddings.append(result)
 
                 progress.update(task, completed=chunk_end)
 
             embeddings_matrix = np.vstack(all_embeddings)
     else:
-        model_obj = get_model(model, device=device)
-        result = model_obj.encode(
+        embeddings_matrix = compute_embeddings(
             texts,
+            model_name=model,
+            device=device,
             batch_size=BATCH_SIZE,
-            normalize_embeddings=True
         )
-        embeddings_matrix = np.array(result, dtype=np.float32)
 
     import faiss
     dimension = embeddings_matrix.shape[1]
