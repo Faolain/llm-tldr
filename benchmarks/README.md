@@ -8,6 +8,9 @@ All **untracked** run artifacts live under the gitignored `benchmark/` directory
 - `benchmark/cache-root/`          Index-mode caches (`--cache-root benchmark/cache-root`)
 - `benchmark/runs/<timestamp>/`    JSON reports produced by scripts
 
+Operator handoff summary for the 008 comparison-first benchmark program:
+- `implementations/008-benchmark-summary.md`
+
 ## Why We Run Multiple Benchmark Families
 
 Yes, ultimate goal is one thing: better real outcomes.
