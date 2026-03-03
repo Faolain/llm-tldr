@@ -4,7 +4,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import shlex
+import socket
 import string
 import subprocess
 import time
@@ -684,6 +686,215 @@ def _run_command_once(*, argv: list[str], cwd: Path, timeout_s: float) -> Comman
     )
 
 
+# ---------------------------------------------------------------------------
+# Daemon execution path
+# ---------------------------------------------------------------------------
+
+_DAEMON_SUPPORTED_CATEGORIES = frozenset({"retrieval", "impact", "complexity", "data_flow", "slice"})
+
+# Templates that invoke non-daemon executables (fall back to subprocess).
+_NON_DAEMON_TEMPLATE_PREFIXES = ("contextplus", "rg ")
+
+
+def _extract_template_flag(template: str, flag: str) -> str | None:
+    """Extract the literal value following *flag* in a template string.
+
+    >>> _extract_template_flag("--abstain-threshold 0.35 --rerank", "--abstain-threshold")
+    '0.35'
+    >>> _extract_template_flag("--rerank --k 10", "--rerank") is None
+    True
+    """
+    m = re.search(rf"{re.escape(flag)}\s+(\S+)", template)
+    return m.group(1) if m else None
+
+
+def _cli_template_to_daemon_command(
+    category: str,
+    template: str,
+    values: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Map a category + CLI template + rendered values to a daemon command dict.
+
+    Returns ``None`` when the template cannot be served by the daemon (e.g.
+    contextplus or rg-native templates), in which case the caller should fall
+    back to subprocess execution.
+    """
+    if category not in _DAEMON_SUPPORTED_CATEGORIES:
+        return None
+
+    tmpl_lower = template.lower()
+    for prefix in _NON_DAEMON_TEMPLATE_PREFIXES:
+        if tmpl_lower.lstrip().startswith(prefix):
+            return None
+
+    if category == "retrieval":
+        cmd: dict[str, Any] = {
+            "cmd": "semantic",
+            "action": "search",
+            "query": values.get("query", ""),
+            "k": int(values.get("top_k", 10)),
+        }
+        if "--hybrid" in template:
+            cmd["retrieval_mode"] = "hybrid"
+        rg_pattern = values.get("rg_pattern")
+        if rg_pattern is not None:
+            cmd["rg_pattern"] = str(rg_pattern)
+        if "--rerank" in template:
+            cmd["rerank"] = True
+            rerank_top_n = _extract_template_flag(template, "--rerank-top-n")
+            if rerank_top_n is not None:
+                cmd["rerank_top_n"] = int(rerank_top_n)
+        abstain_thresh = _extract_template_flag(template, "--abstain-threshold")
+        if abstain_thresh is not None:
+            cmd["abstain_threshold"] = float(abstain_thresh)
+        if "--abstain-empty" in template:
+            cmd["abstain_empty"] = True
+        budget_tokens = values.get("budget_tokens")
+        if budget_tokens is not None:
+            cmd["budget_tokens"] = int(budget_tokens)
+        no_result_guard = _extract_template_flag(template, "--no-result-guard")
+        if no_result_guard is not None:
+            cmd["no_result_guard"] = no_result_guard
+        max_latency = _extract_template_flag(template, "--max-latency-ms-p50-ratio")
+        if max_latency is not None:
+            cmd["max_latency_ms_p50_ratio"] = float(max_latency)
+        max_payload = _extract_template_flag(template, "--max-payload-tokens-median-ratio")
+        if max_payload is not None:
+            cmd["max_payload_tokens_median_ratio"] = float(max_payload)
+        return cmd
+
+    if category == "impact":
+        return {
+            "cmd": "impact",
+            "func": values.get("function", ""),
+            "file": values.get("file", ""),
+        }
+
+    if category == "complexity":
+        return {
+            "cmd": "cfg",
+            "file": values.get("file_abs", values.get("file", "")),
+            "function": values.get("function", ""),
+        }
+
+    if category == "data_flow":
+        return {
+            "cmd": "dfg",
+            "file": values.get("file_abs", values.get("file", "")),
+            "function": values.get("function", ""),
+        }
+
+    if category == "slice":
+        return {
+            "cmd": "slice",
+            "file": values.get("file_abs", values.get("file", "")),
+            "function": values.get("function", ""),
+            "line": int(values.get("target_line", 0)),
+        }
+
+    return None
+
+
+def _daemon_response_to_stdout(category: str, response: dict[str, Any]) -> str:
+    """Convert a daemon JSON response into the stdout text that ``_result_from_output`` expects.
+
+    The downstream parsing pipeline (``_result_from_output``) calls
+    ``_extract_json_from_text()`` on stdout, so we emit JSON that the existing
+    parsers already know how to handle.
+    """
+    if response.get("status") != "ok":
+        return json.dumps(response)
+
+    if category == "retrieval":
+        # Daemon returns {"status":"ok","results":[...]} — pass the full response;
+        # _parse_retrieval_result handles dicts with a "results" key.
+        return json.dumps(response)
+
+    if category == "impact":
+        # Daemon returns {"status":"ok","callers":[...]} — pass directly.
+        return json.dumps(response)
+
+    if category == "slice":
+        # Daemon returns {"status":"ok","lines":[...],"count":N}.
+        return json.dumps(response)
+
+    if category in ("complexity", "data_flow"):
+        # Daemon wraps the analysis in a "result" key — unwrap it so the
+        # category-specific parsers see the shape they expect.
+        inner = response.get("result")
+        if isinstance(inner, dict):
+            return json.dumps(inner)
+        return json.dumps(response)
+
+    return json.dumps(response)
+
+
+def _run_daemon_query_once(
+    *,
+    command: dict[str, Any],
+    category: str,
+    corpus_root: Path,
+    timeout_s: float,
+    argv_for_log: list[str],
+) -> CommandAttempt:
+    """Execute a single query via the daemon, returning a ``CommandAttempt``."""
+    from tldr.daemon.startup import query_daemon
+
+    t0 = time.perf_counter()
+    try:
+        response = query_daemon(
+            project_path=corpus_root,
+            command=command,
+            timeout=timeout_s,
+        )
+    except socket.timeout:
+        latency_ms = (time.perf_counter() - t0) * 1000.0
+        return CommandAttempt(
+            status="timeout",
+            returncode=None,
+            latency_ms=latency_ms,
+            stdout="",
+            stderr="",
+            error=f"daemon query timed out after {timeout_s:.3f}s",
+            argv=argv_for_log,
+        )
+    except (ConnectionRefusedError, FileNotFoundError, OSError) as exc:
+        latency_ms = (time.perf_counter() - t0) * 1000.0
+        return CommandAttempt(
+            status="error",
+            returncode=None,
+            latency_ms=latency_ms,
+            stdout="",
+            stderr="",
+            error=f"daemon connection error: {exc}",
+            argv=argv_for_log,
+        )
+
+    latency_ms = (time.perf_counter() - t0) * 1000.0
+    stdout_text = _daemon_response_to_stdout(category, response)
+
+    if response.get("status") == "ok":
+        return CommandAttempt(
+            status="ok",
+            returncode=0,
+            latency_ms=latency_ms,
+            stdout=stdout_text,
+            stderr="",
+            error=None,
+            argv=argv_for_log,
+        )
+
+    return CommandAttempt(
+        status="error",
+        returncode=1,
+        latency_ms=latency_ms,
+        stdout=stdout_text,
+        stderr=response.get("message", ""),
+        error=response.get("message", "daemon returned error"),
+        argv=argv_for_log,
+    )
+
+
 def _write_raw_log(
     *,
     path: Path,
@@ -967,6 +1178,20 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional rerun filter; repeat or use comma-separated integers.",
     )
+    ap.add_argument(
+        "--use-daemon",
+        dest="use_daemon",
+        action="store_true",
+        default=False,
+        help="Use the llm-tldr daemon instead of spawning subprocesses per query.",
+    )
+    ap.add_argument(
+        "--daemon-keep-alive",
+        dest="daemon_keep_alive",
+        action="store_true",
+        default=False,
+        help="Leave the daemon running after predictions (default: stop it).",
+    )
     return ap
 
 
@@ -1093,6 +1318,24 @@ def main() -> int:
     else:
         feature_set_id = feature_set_id.strip()
 
+    # ---- daemon lifecycle ----
+    use_daemon = bool(getattr(args, "use_daemon", False))
+    daemon_keep_alive = bool(getattr(args, "daemon_keep_alive", False))
+
+    if use_daemon:
+        if tool_id != "llm-tldr":
+            raise SystemExit("error: --use-daemon is only supported for tool_id='llm-tldr'")
+        from tldr.daemon.startup import start_daemon, stop_daemon, query_daemon as _ping_daemon
+
+        start_daemon(corpus_root)
+        # Ping to confirm the daemon is alive.
+        try:
+            ping_resp = _ping_daemon(corpus_root, {"cmd": "ping"}, timeout=5.0)
+            if ping_resp.get("status") != "ok":
+                raise SystemExit(f"error: daemon ping failed: {ping_resp}")
+        except Exception as exc:
+            raise SystemExit(f"error: daemon not reachable after start: {exc}") from exc
+
     predictions: list[dict[str, Any]] = []
     classification_rows: list[dict[str, Any]] = []
     retrieval_pattern_hit_cache: dict[str, bool] = {}
@@ -1183,9 +1426,23 @@ def main() -> int:
                         )
                     )
                 else:
+                    daemon_cmd = (
+                        _cli_template_to_daemon_command(category, template, context)
+                        if use_daemon
+                        else None
+                    )
                     max_attempts = 1 + int(retry_on_timeout)
                     for _ in range(max_attempts):
-                        attempt = _run_command_once(argv=argv, cwd=corpus_root, timeout_s=timeout_s)
+                        if daemon_cmd is not None:
+                            attempt = _run_daemon_query_once(
+                                command=daemon_cmd,
+                                category=category,
+                                corpus_root=corpus_root,
+                                timeout_s=timeout_s,
+                                argv_for_log=argv,
+                            )
+                        else:
+                            attempt = _run_command_once(argv=argv, cwd=corpus_root, timeout_s=timeout_s)
                         attempts.append(attempt)
                         total_latency_ms += float(attempt.latency_ms)
                         final_status = attempt.status
@@ -1247,6 +1504,11 @@ def main() -> int:
                         "raw_log": str(raw_log),
                     }
                 )
+
+    # ---- daemon teardown ----
+    if use_daemon and not daemon_keep_alive:
+        from tldr.daemon.startup import stop_daemon
+        stop_daemon(corpus_root)
 
     _validate_no_duplicate_prediction_rows(predictions)
 
@@ -1310,6 +1572,7 @@ def main() -> int:
             "corpus_root": str(corpus_root),
             "required_categories": sorted(required_categories),
             "prediction_count": len(predictions),
+            "execution_mode": "daemon" if use_daemon else "subprocess",
         }
         write_report(metadata_path, metadata_doc)
 
