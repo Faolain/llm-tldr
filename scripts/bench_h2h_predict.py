@@ -293,7 +293,7 @@ def _parse_impact_result(parsed: Any) -> dict[str, Any]:
                 if not isinstance(item, dict):
                     continue
                 fp = item.get("file")
-                fn = item.get("function")
+                fn = item.get("function") or item.get("caller")
                 if isinstance(fp, str) and isinstance(fn, str):
                     callers.append({"file": _normalize_rel_path(fp), "function": fn})
 
@@ -309,7 +309,7 @@ def _parse_impact_result(parsed: Any) -> dict[str, Any]:
                     if not isinstance(item, dict):
                         continue
                     fp = item.get("file")
-                    fn = item.get("function")
+                    fn = item.get("function") or item.get("caller")
                     if isinstance(fp, str) and isinstance(fn, str):
                         callers.append({"file": _normalize_rel_path(fp), "function": fn})
 
@@ -318,7 +318,7 @@ def _parse_impact_result(parsed: Any) -> dict[str, Any]:
             if not isinstance(item, dict):
                 continue
             fp = item.get("file")
-            fn = item.get("function")
+            fn = item.get("function") or item.get("caller")
             if isinstance(fp, str) and isinstance(fn, str):
                 callers.append({"file": _normalize_rel_path(fp), "function": fn})
 
@@ -812,14 +812,15 @@ def _daemon_response_to_stdout(category: str, response: dict[str, Any]) -> str:
 
     if category == "impact":
         # Daemon returns {"status":"ok","callers":[{"caller":...}],"result":{"targets":{...}}}.
-        # The top-level "callers" use key "caller" but _parse_impact_result expects "function".
-        # Normalize by renaming "caller" -> "function" in each entry.
+        # Canonicalize top-level "callers" to use "function" for downstream consistency.
         callers = response.get("callers")
         if isinstance(callers, list):
             normalized = []
             for entry in callers:
                 if isinstance(entry, dict) and "caller" in entry and "function" not in entry:
-                    entry = {**entry, "function": entry.pop("caller")}
+                    new_entry = {k: v for k, v in entry.items() if k != "caller"}
+                    new_entry["function"] = entry["caller"]
+                    entry = new_entry
                 normalized.append(entry)
             response = {**response, "callers": normalized}
         return json.dumps(response)
