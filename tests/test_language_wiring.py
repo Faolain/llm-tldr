@@ -19,7 +19,7 @@ from pathlib import Path
 SUPPORTED_LANGUAGES = {
     "python": [".py"],
     "typescript": [".ts", ".tsx"],
-    "javascript": [".js", ".jsx"],  # .mjs/.cjs not in cli.py yet
+    "javascript": [".js", ".jsx", ".mjs", ".cjs"],
     "go": [".go"],
     "rust": [".rs"],
     "java": [".java"],
@@ -146,9 +146,8 @@ class TestCFGExtractors:
     """Test that CFG extractors exist for each language."""
 
     # Languages that have dedicated CFG extractors
-    # Note: javascript uses typescript extractor
     CFG_LANGUAGES = [
-        "python", "typescript", "go", "rust", "java",
+        "python", "typescript", "javascript", "go", "rust", "java",
         "c", "cpp", "ruby", "php", "kotlin", "swift", "csharp",
         "scala", "lua", "luau", "elixir"
     ]

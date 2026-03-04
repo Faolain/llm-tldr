@@ -49,6 +49,8 @@ EXTENSION_TO_LANGUAGE = {
     '.tsx': 'typescript',
     '.js': 'javascript',
     '.jsx': 'javascript',
+    '.mjs': 'javascript',
+    '.cjs': 'javascript',
     '.go': 'go',
     '.rs': 'rust',
     '.c': 'c',

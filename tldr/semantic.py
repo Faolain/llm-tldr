@@ -113,6 +113,8 @@ LANE4_EXTENSION_TO_CALL_GRAPH_LANGUAGE = {
     ".tsx": "typescript",
     ".js": "typescript",
     ".jsx": "typescript",
+    ".mjs": "typescript",
+    ".cjs": "typescript",
     ".go": "go",
     ".rs": "rust",
     ".java": "java",
@@ -643,7 +645,7 @@ def _get_cfg_summary(file_path: Path, func_name: str, lang: str) -> str:
         extractor_map = {
             "python": cfg_extractor.extract_python_cfg,
             "typescript": cfg_extractor.extract_typescript_cfg,
-            "javascript": cfg_extractor.extract_typescript_cfg,  # JS uses TS extractor
+            "javascript": cfg_extractor.extract_javascript_cfg,
             "go": cfg_extractor.extract_go_cfg,
             "rust": cfg_extractor.extract_rust_cfg,
             "java": cfg_extractor.extract_java_cfg,
@@ -1031,6 +1033,8 @@ def _detect_project_languages(
         '.tsx': 'typescript',
         '.js': 'javascript',
         '.jsx': 'javascript',
+        '.mjs': 'javascript',
+        '.cjs': 'javascript',
         '.go': 'go',
         '.rs': 'rust',
         '.c': 'c',
