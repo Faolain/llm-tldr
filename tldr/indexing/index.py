@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import shutil
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -412,9 +413,20 @@ def get_index_context(
     if cache_root_value.lower() == "git":
         from tldr.tldrignore import resolve_git_root
 
-        git_root = resolve_git_root(scan_root)
+        temp_root = Path(tempfile.gettempdir()).resolve()
+
+        def _usable_git_root(path: Path | None) -> Path | None:
+            if path is None:
+                return None
+            resolved = path.resolve()
+            # Ignore ambient repos rooted at the shared OS temp dir.
+            if resolved == temp_root:
+                return None
+            return resolved
+
+        git_root = _usable_git_root(resolve_git_root(scan_root))
         if git_root is None:
-            git_root = resolve_git_root(Path.cwd())
+            git_root = _usable_git_root(resolve_git_root(Path.cwd()))
         if git_root is None:
             raise ValueError("cache_root 'git' requested but no git repository found")
         cache_root = git_root

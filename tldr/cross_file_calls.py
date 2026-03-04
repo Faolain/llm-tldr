@@ -301,9 +301,9 @@ def scan_project(
     Returns:
         List of absolute paths to source files
     """
-    from .tldrignore import IgnoreSpec
+    from .tldrignore import IgnoreSpec, has_negation_for_file
 
-    root = Path(root)
+    root = Path(root).resolve()
     files = []
 
     # Load ignore patterns if respecting ignore rules
@@ -320,17 +320,6 @@ def scan_project(
         and bool(getattr(ignore_spec, "use_gitignore", True))
         and bool(getattr(ignore_spec, "_is_git", False))
     )
-    negation_patterns = []
-    if use_batch_gitignore:
-        try:
-            negation_patterns = [
-                p
-                for p in getattr(ignore_spec, "_spec").patterns
-                if getattr(p, "include", None) is True
-            ]
-        except Exception:
-            negation_patterns = []
-
     if language == "python":
         extensions = {'.py'}
     elif language == "typescript":
@@ -411,14 +400,7 @@ def scan_project(
                             continue
                         # If .tldrignore has an explicit negation for this path,
                         # it overrides gitignore entirely.
-                        has_neg = False
-                        for pat in negation_patterns:
-                            try:
-                                if pat.match_file(rel_path):
-                                    has_neg = True
-                                    break
-                            except Exception:
-                                continue
+                        has_neg = has_negation_for_file(spec, rel_path)
                         if has_neg:
                             kept_due_to_negation.append((file_path, rel_path))
                         else:
@@ -2011,7 +1993,7 @@ def build_function_index(
     Returns:
         Dict mapping (module, func_name) tuples to relative file paths
     """
-    root = Path(root)
+    root = Path(root).resolve()
     index = {}
 
     for src_file in scan_project(
@@ -3404,7 +3386,7 @@ def build_project_call_graph(
     Returns:
         ProjectCallGraph with edges as (src_file, src_func, dst_file, dst_func)
     """
-    root = Path(root)
+    root = Path(root).resolve()
     graph = ProjectCallGraph()
 
     # Load workspace config if enabled

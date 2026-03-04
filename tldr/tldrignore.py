@@ -325,7 +325,7 @@ class IgnoreSpec:
         rel_path_str = str(rel_path)
 
         # Check .tldrignore first
-        has_negation = _has_negation_for_file(self._spec, rel_path_str)
+        has_negation = has_negation_for_file(self._spec, rel_path_str)
 
         if has_negation:
             # .tldrignore has explicit opinion via negation
@@ -365,7 +365,7 @@ class IgnoreSpec:
     def match_file_cached(self, rel_path: str) -> bool:
         """Check if file should be ignored, using preloaded cache if available."""
         # Check .tldrignore first
-        has_negation = _has_negation_for_file(self._spec, rel_path)
+        has_negation = has_negation_for_file(self._spec, rel_path)
 
         if has_negation:
             return self._spec.match_file(rel_path)
@@ -447,6 +447,12 @@ def should_ignore(
     if spec is None:
         spec = load_ignore_patterns(project_dir, ignore_file=ignore_file)
 
+    # Preserve trailing slash semantics for directory-style patterns.
+    # Path() normalization strips trailing slashes, but pathspec relies on
+    # them for patterns like ".venv/" and "node_modules/".
+    orig_str = str(file_path)
+    has_trailing_slash = orig_str.endswith("/")
+
     project_path = Path(project_dir)
     file_path = Path(file_path)
 
@@ -458,6 +464,8 @@ def should_ignore(
         rel_path = file_path
 
     rel_path_str = str(rel_path)
+    if has_trailing_slash and not rel_path_str.endswith("/"):
+        rel_path_str += "/"
 
     # .tldrignore is the final authority - it can:
     # - Add ignores (positive patterns)
@@ -469,7 +477,7 @@ def should_ignore(
 
     # Check if .tldrignore has an explicit opinion via negation
     # by checking if any negation pattern matches this file
-    has_negation = _has_negation_for_file(spec, rel_path_str)
+    has_negation = has_negation_for_file(spec, rel_path_str)
 
     if has_negation:
         # .tldrignore explicitly un-ignores this file - respect that
@@ -492,20 +500,26 @@ def should_ignore(
     return False
 
 
-def _has_negation_for_file(spec: "PathSpec", rel_path: str) -> bool:
+def has_negation_for_file(spec: "PathSpec", rel_path: str) -> bool:
     """Check if any negation pattern in the spec would match this file.
 
     This helps determine if .tldrignore has an explicit opinion about
     including a file (via ! pattern) vs simply not matching it.
     """
     for pattern in spec.patterns:
-        # Check if this is a negation (include) pattern
-        # pathspec uses 'include' attribute: True = negation (! pattern)
-        if getattr(pattern, 'include', None) is True:
+        # Check if this is a negation pattern ("!foo").
+        # In pathspec's gitwildmatch implementation, negations carry
+        # include=False, while positive patterns carry include=True.
+        if getattr(pattern, 'include', None) is False:
             # This is a negation pattern - check if it matches
             if pattern.match_file(rel_path):
                 return True
     return False
+
+
+def _has_negation_for_file(spec: "PathSpec", rel_path: str) -> bool:
+    """Backward-compatible private alias for older call sites."""
+    return has_negation_for_file(spec, rel_path)
 
 
 def filter_files(
@@ -547,7 +561,7 @@ def filter_files(
             rel_path = str(f)
 
         # Check if .tldrignore has explicit negation (!) for this file
-        has_negation = _has_negation_for_file(spec, rel_path)
+        has_negation = has_negation_for_file(spec, rel_path)
 
         if has_negation:
             # .tldrignore explicitly includes/excludes - use its decision
