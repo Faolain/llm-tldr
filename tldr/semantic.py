@@ -19,6 +19,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -145,9 +146,13 @@ def _find_project_root(start_path: Path) -> Path:
 
     # Walk up looking for project markers
     current = start_path.resolve()
+    temp_root = Path(tempfile.gettempdir()).resolve()
     while current != current.parent:
         for marker in PROJECT_ROOT_MARKERS:
             if (current / marker).exists():
+                # Ignore ambient markers at the shared OS temp directory.
+                if current == temp_root:
+                    break
                 return current
         current = current.parent
 

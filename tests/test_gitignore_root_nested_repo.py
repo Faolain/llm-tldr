@@ -61,3 +61,40 @@ def test_index_mode_uses_scan_root_gitignore_for_nested_repo(tmp_path: Path):
     )
     assert any(Path(p).name == "keep.py" for p in files)
 
+
+@pytest.mark.skipif(not _git_available(), reason="git not available")
+def test_scan_project_relative_root_respects_gitignore(tmp_path: Path, monkeypatch):
+    """Relative roots should still honor gitignore and return absolute paths."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+
+    (repo / ".gitignore").write_text("ignored.py\n")
+    (repo / "ignored.py").write_text("def ignored():\n    return 0\n")
+    (repo / "keep.py").write_text("def keep():\n    return 1\n")
+
+    monkeypatch.chdir(tmp_path)
+    ignore_spec = IgnoreSpec(Path("repo"))
+
+    files = scan_project(
+        Path("repo"),
+        language="python",
+        respect_ignore=True,
+        ignore_spec=ignore_spec,
+    )
+
+    file_names = {Path(p).name for p in files}
+    assert file_names == {"keep.py"}
+    assert all(Path(p).is_absolute() for p in files)
+
+
+def test_scan_project_relative_root_returns_absolute_paths(tmp_path: Path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "mod.py").write_text("def foo():\n    return 1\n")
+
+    monkeypatch.chdir(tmp_path)
+    files = scan_project(Path("repo"), language="python", respect_ignore=False)
+
+    assert files
+    assert all(Path(p).is_absolute() for p in files)
