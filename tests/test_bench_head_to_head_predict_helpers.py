@@ -1,5 +1,6 @@
 import json
 import runpy
+import shutil
 import sys
 from pathlib import Path
 
@@ -216,6 +217,7 @@ def test_failure_class_marks_semantic_index_missing_as_preflight():
     assert out == "preflight_semantic_index_missing"
 
 
+@pytest.mark.skipif(shutil.which("rg") is None, reason="rg (ripgrep) not installed")
 def test_retrieval_rg_pattern_guard_forces_empty_when_pattern_has_zero_hits(tmp_path: Path):
     mod = _load_mod()
     apply_guard = mod["_apply_retrieval_rg_pattern_guard"]
@@ -238,6 +240,7 @@ def test_retrieval_rg_pattern_guard_forces_empty_when_pattern_has_zero_hits(tmp_
     assert out == {"ranked_files": []}
 
 
+@pytest.mark.skipif(shutil.which("rg") is None, reason="rg (ripgrep) not installed")
 def test_retrieval_rg_pattern_guard_keeps_result_when_pattern_has_hits(tmp_path: Path):
     mod = _load_mod()
     apply_guard = mod["_apply_retrieval_rg_pattern_guard"]
