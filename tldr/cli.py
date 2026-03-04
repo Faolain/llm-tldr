@@ -285,14 +285,39 @@ Device Selection:
 
     # tldr context <entry>
     ctx_p = subparsers.add_parser(
-        "context", help="Get relevant context for LLM", parents=[index_parent]
+        "context",
+        help="Get relevant context for LLM",
+        description=(
+            "Get token-efficient context for an entry.\n"
+            "Dispatch rule: '/' with no '.' uses module mode; otherwise symbol mode.\n"
+            "Use-case fit: architecture/surface browsing (module) vs "
+            "debugging/refactor impact flow (symbol).\n"
+            "Depth behavior: --depth applies to symbol mode; module mode "
+            "returns exports at depth 0."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  tldrf context providers/auth --project .  # module mode\n"
+            "  tldrf context login --project .           # symbol mode\n"
+            "  tldrf context pkg/mod.py --project .      # symbol mode (contains '.')"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        parents=[index_parent],
     )
     ctx_p.add_argument(
         "entry",
-        help="Entry (function_name, Class.method, or module/path)",
+        help=(
+            "Entry (function_name, Class.method, or module/path). "
+            "'/' without '.' => module mode"
+        ),
     )
     ctx_p.add_argument("--project", default=".", help="Project root directory")
-    ctx_p.add_argument("--depth", type=int, default=2, help="Call depth (default: 2)")
+    ctx_p.add_argument(
+        "--depth",
+        type=int,
+        default=2,
+        help="Call depth for symbol mode (module mode returns depth 0)",
+    )
     ctx_p.add_argument(
         "--lang",
         default="python",

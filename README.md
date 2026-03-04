@@ -214,6 +214,14 @@ tldrf semantic "error handling"  # Find by behavior
 
 `context` dispatch rule: if `<entry>` contains `/` and no `.`, TLDR treats it as a module path. Otherwise TLDR treats it as a symbol.
 
+Examples:
+- `tldrf context providers/auth --project .` -> module mode
+- `tldrf context login --project .` -> symbol mode
+- `tldrf context pkg/mod.py --project .` -> symbol mode (because of `.`)
+
+`--depth` applies to symbol mode (call-graph traversal). Module mode returns module exports at depth `0`.
+Use-case fit: architecture/surface browsing (module) vs debugging/refactor impact flow (symbol).
+
 ---
 
 ## Benchmark Quick TLDR (Required Before Full H2H Runs)

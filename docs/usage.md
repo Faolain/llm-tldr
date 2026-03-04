@@ -163,6 +163,21 @@ Result correctness: all predictions byte-identical between subprocess and daemon
 The MCP server does this automatically. For benchmarks, add `--use-daemon`.
 For shell scripts, start the daemon first with `tldrf daemon start`.
 
+## Context Entry Modes (`tldrf context`)
+
+`tldrf context <entry>` has two modes selected by entry shape:
+
+- If `<entry>` contains `/` and no `.`, it runs in module mode.
+- Otherwise, it runs in symbol mode.
+
+Examples:
+- `tldrf context providers/auth --project .` -> module mode
+- `tldrf context login --project .` -> symbol mode
+- `tldrf context pkg/mod.py --project .` -> symbol mode (because of `.`)
+
+`--depth` applies to symbol mode (call-graph traversal). Module mode returns module exports at depth `0`.
+Use-case fit: architecture/surface browsing (module) vs debugging/refactor impact flow (symbol).
+
 ## Gap: No `--use-daemon` on CLI Commands (Yet)
 
 There is currently no `tldrf semantic search --use-daemon` flag that would
