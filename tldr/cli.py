@@ -665,11 +665,20 @@ Device Selection:
     )
     daemon_status_p.add_argument("--project", "-p", default=".", help="Project path (default: current directory)")
 
-    # tldr daemon query CMD [--project PATH]
+    # tldr daemon query [CMD|--json PAYLOAD] [--project PATH]
     daemon_query_p = daemon_sub.add_parser(
-        "query", help="Send raw JSON command to daemon", parents=[index_parent]
+        "query", help="Send command to daemon", parents=[index_parent]
     )
-    daemon_query_p.add_argument("cmd", help="Command to send (e.g., ping, status, search)")
+    daemon_query_p.add_argument(
+        "cmd",
+        nargs="?",
+        help="Simple command to send (e.g., ping, status). Ignored when --json is provided.",
+    )
+    daemon_query_p.add_argument(
+        "--json",
+        dest="json_payload",
+        help="Raw JSON command payload to send (e.g., '{\"cmd\":\"semantic\",\"action\":\"search\",\"query\":\"...\"}').",
+    )
     daemon_query_p.add_argument("--project", "-p", default=".", help="Project path (default: current directory)")
 
     # tldr daemon notify FILE [--project PATH]
@@ -2150,9 +2159,33 @@ def main():
 
             elif args.action == "query":
                 try:
+                    if args.json_payload is not None:
+                        try:
+                            command = json.loads(args.json_payload)
+                        except json.JSONDecodeError as exc:
+                            print(f"Error: invalid JSON for --json: {exc}", file=sys.stderr)
+                            sys.exit(1)
+
+                        if not isinstance(command, dict):
+                            print("Error: JSON payload must be an object", file=sys.stderr)
+                            sys.exit(1)
+
+                        cmd_value = command.get("cmd")
+                        if not isinstance(cmd_value, str) or not cmd_value.strip():
+                            print(
+                                "Error: JSON payload must include a non-empty 'cmd'",
+                                file=sys.stderr,
+                            )
+                            sys.exit(1)
+                    else:
+                        if not args.cmd:
+                            print("Error: either CMD or --json must be provided", file=sys.stderr)
+                            sys.exit(1)
+                        command = {"cmd": args.cmd}
+
                     result = query_daemon(
                         project_path,
-                        {"cmd": args.cmd},
+                        command,
                         index_ctx=index_ctx,
                         cache_root=Path(args.cache_root).resolve() if args.cache_root else None,
                         index_id=args.index_id,
