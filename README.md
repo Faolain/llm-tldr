@@ -21,6 +21,7 @@ TLDR extracts *structure* instead of dumping *text*. The result: **95% fewer tok
 pip install llm-tldr
 tldrf warm .                    # Index your project
 tldrf context main --project .  # Get LLM-ready summary
+tldrf context providers/auth --project . --lang python  # Module exports summary
 ```
 
 ---
@@ -205,10 +206,13 @@ This builds all analysis layers and starts the daemon. Takes 30-60 seconds for a
 ### 3. Start Using
 
 ```bash
-tldrf context main --project .   # Get context for a function
+tldrf context login --project .  # Symbol mode (function/method call-graph context)
+tldrf context providers/auth --project . --lang python  # Module-path mode (module exports)
 tldrf impact helper_func .       # See who calls it
 tldrf semantic "error handling"  # Find by behavior
 ```
+
+`context` dispatch rule: if `<entry>` contains `/` and no `.`, TLDR treats it as a module path. Otherwise TLDR treats it as a symbol.
 
 ---
 
@@ -318,7 +322,7 @@ The bug is obvious. Line 28 uses `user` without going through the null check pat
 ### Analysis
 | Command | What It Does |
 |---------|--------------|
-| `tldrf context <func> --project <path>` | LLM-ready summary (95% savings) |
+| `tldrf context <entry> --project <path>` | LLM-ready summary for a symbol or module path (95% savings) |
 | `tldrf cfg <file> <function>` | Control flow graph |
 | `tldrf dfg <file> <function>` | Data flow graph |
 | `tldrf slice <file> <func> <line>` | Program slice |

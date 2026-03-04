@@ -287,7 +287,10 @@ Device Selection:
     ctx_p = subparsers.add_parser(
         "context", help="Get relevant context for LLM", parents=[index_parent]
     )
-    ctx_p.add_argument("entry", help="Entry point (function_name or Class.method)")
+    ctx_p.add_argument(
+        "entry",
+        help="Entry (function_name, Class.method, or module/path)",
+    )
     ctx_p.add_argument("--project", default=".", help="Project root directory")
     ctx_p.add_argument("--depth", type=int, default=2, help="Call depth (default: 2)")
     ctx_p.add_argument(

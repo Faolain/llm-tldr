@@ -83,3 +83,84 @@ def test_python_package_fallback_via_init_py_still_works(
     api._get_module_exports(project, "pkg", language="python")
 
     assert extracted_paths == [init_file]
+
+
+def test_get_relevant_context_dispatches_to_module_mode_for_slash_without_dot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+
+    fake_ctx = api.RelevantContext(entry_point="src/components/Button", depth=0, functions=[])
+    module_call: dict[str, object] = {}
+
+    def fake_module_exports(
+        project_path: Path,
+        module_path: str,
+        language: str = "python",
+        include_docstrings: bool = True,
+    ) -> api.RelevantContext:
+        module_call["project"] = project_path
+        module_call["module_path"] = module_path
+        module_call["language"] = language
+        module_call["include_docstrings"] = include_docstrings
+        return fake_ctx
+
+    def fail_build_project_call_graph(*_args, **_kwargs):
+        raise AssertionError("symbol mode call graph should not run for module entry")
+
+    monkeypatch.setattr(api, "_get_module_exports", fake_module_exports)
+    monkeypatch.setattr(api, "build_project_call_graph", fail_build_project_call_graph)
+
+    result = api.get_relevant_context(
+        project,
+        "src/components/Button",
+        depth=3,
+        language="typescript",
+        include_docstrings=False,
+    )
+
+    assert result is fake_ctx
+    assert module_call == {
+        "project": project,
+        "module_path": "src/components/Button",
+        "language": "typescript",
+        "include_docstrings": False,
+    }
+
+
+def test_get_relevant_context_keeps_dotted_entry_in_symbol_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+
+    call_graph_call: dict[str, object] = {}
+
+    def fail_module_exports(*_args, **_kwargs):
+        raise AssertionError("module mode should not run for dotted entry")
+
+    def fake_build_project_call_graph(
+        project_path: str,
+        language: str = "python",
+        ignore_spec=None,
+        workspace_root=None,
+    ) -> SimpleNamespace:
+        call_graph_call["project_path"] = project_path
+        call_graph_call["language"] = language
+        call_graph_call["ignore_spec"] = ignore_spec
+        call_graph_call["workspace_root"] = workspace_root
+        return SimpleNamespace(edges=set())
+
+    monkeypatch.setattr(api, "_get_module_exports", fail_module_exports)
+    monkeypatch.setattr(api, "build_project_call_graph", fake_build_project_call_graph)
+    monkeypatch.setattr("tldr.cross_file_calls.scan_project", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr("tldr.workspace.load_workspace_config", lambda *_args, **_kwargs: None)
+
+    result = api.get_relevant_context(project, "pkg/mod.py", depth=1, language="python")
+
+    assert call_graph_call["project_path"] == str(project)
+    assert call_graph_call["language"] == "python"
+    assert result.entry_point == "pkg/mod.py"
+    assert result.depth == 1
+    assert [ctx.name for ctx in result.functions] == ["pkg/mod.py"]
