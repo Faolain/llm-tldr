@@ -390,7 +390,14 @@ def slice(
 
 
 @mcp.tool()
-def impact(project: str, function: str) -> dict:
+def impact(
+    project: str,
+    function: str,
+    file: str | None = None,
+    depth: int = 3,
+    language: str = "python",
+    ensure_warm: bool = True,
+) -> dict:
     """Find all callers of a function (reverse call graph).
 
     Useful before refactoring to understand what would break.
@@ -398,8 +405,36 @@ def impact(project: str, function: str) -> dict:
     Args:
         project: Project root directory
         function: Function name to find callers of
+        file: Optional file filter to disambiguate common function names
+        depth: Max caller traversal depth
+        language: Language used when warming call graph fallback
+        ensure_warm: Retry once after warming call graph if function is not found
     """
-    return _send_command(project, {"cmd": "impact", "func": function})
+    command: dict[str, object] = {
+        "cmd": "impact",
+        "func": function,
+        "depth": int(depth),
+    }
+    if file:
+        command["file"] = file
+
+    result = _send_command(project, command)
+    if ensure_warm and _impact_not_found(result):
+        _send_command(project, {"cmd": "warm", "language": language})
+        result = _send_command(project, command)
+    return result
+
+
+def _impact_not_found(result: dict) -> bool:
+    if result.get("status") != "ok":
+        return False
+    payload = result.get("result")
+    if not isinstance(payload, dict):
+        return False
+    message = payload.get("error")
+    if not isinstance(message, str):
+        return False
+    return "not found in call graph" in message.lower()
 
 
 @mcp.tool()
