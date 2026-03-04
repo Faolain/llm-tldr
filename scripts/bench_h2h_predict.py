@@ -898,6 +898,8 @@ def _daemon_response_to_stdout(category: str, response: dict[str, Any]) -> str:
         # Daemon returns {"status":"ok","result":{"entry_point":...,"functions":[...]}}.
         # Unwrap inner "result" so the context parser sees the shape it expects.
         inner = response.get("result", {})
+        if isinstance(inner, str):
+            return inner
         if isinstance(inner, dict):
             return json.dumps(inner)
         return json.dumps(response)
