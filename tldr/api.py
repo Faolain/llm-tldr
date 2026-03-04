@@ -449,25 +449,49 @@ def _get_module_exports(
     Returns:
         RelevantContext with all functions/classes from the module
     """
+    project = project.resolve()
     ext_map = {
-        "python": ".py",
-        "typescript": ".ts",
-        "go": ".go",
-        "rust": ".rs"
+        "python": [".py"],
+        "typescript": [".ts", ".tsx"],
+        "javascript": [".js", ".jsx"],
+        "go": [".go"],
+        "rust": [".rs"],
     }
-    ext = ext_map.get(language, ".py")
+    extensions = ext_map.get(language, [".py"])
 
     # Try to find the module file
     # module_path "providers/anthropic" -> providers/anthropic.py
-    module_file = project / f"{module_path}{ext}"
+    module_file: Path | None = None
+    candidate_files = []
+    for ext in extensions:
+        candidate = (project / f"{module_path}{ext}").resolve()
+        if not candidate.is_relative_to(project):
+            raise PathTraversalError(
+                f"Module path '{module_path}' escapes project root '{project}'"
+            )
+        candidate_files.append(candidate)
+        if candidate.exists():
+            module_file = candidate
+            break
 
-    if not module_file.exists():
+    if module_file is None and language == "python":
         # Try as directory with __init__.py (Python package)
-        init_file = project / module_path / "__init__.py"
+        init_file = (project / module_path / "__init__.py").resolve()
+        if not init_file.is_relative_to(project):
+            raise PathTraversalError(
+                f"Module path '{module_path}' escapes project root '{project}'"
+            )
         if init_file.exists():
             module_file = init_file
         else:
-            raise ValueError(f"Module not found: {module_path} (tried {module_file} and {init_file})")
+            tried = ", ".join(str(path) for path in candidate_files)
+            raise ValueError(
+                f"Module not found: {module_path} (tried {tried} and {init_file})"
+            )
+
+    if module_file is None:
+        tried = ", ".join(str(path) for path in candidate_files)
+        raise ValueError(f"Module not found: {module_path} (tried {tried})")
 
     # Extract all functions and classes from the module
     extractor = HybridExtractor()

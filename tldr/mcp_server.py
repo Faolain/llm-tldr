@@ -290,7 +290,7 @@ def context(
 
     Args:
         project: Project root directory
-        entry: Entry point (function_name or Class.method)
+        entry: Entry (function_name, Class.method, or module/path)
         depth: How deep to follow calls (default 2)
         language: Programming language
 

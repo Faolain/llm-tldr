@@ -657,6 +657,7 @@ tldr semantic <query> [path]           # Behavioral semantic search
 
 # LLM context
 tldr context <entry> --project . --depth 2  # Get LLM-ready context
+# Dispatch: "/" with no "." => module path mode, else symbol mode
 ```
 
 ### Analysis Commands
