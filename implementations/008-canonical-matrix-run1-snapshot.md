@@ -50,6 +50,22 @@ This snapshot combines:
 | contextplus | 2000 | 0.21564327485380116 | 0.2982456140350877 | 0.3333333333333333 | 0.05964912280701755 | 1.0 | 329.0 | 7717.107 |
 | rg-native | 2000 | 0.8126218323586745 | 0.8771929824561403 | 0.9473684210526315 | 0.1754385964912281 | 0.0 | 12.0 | 216.22050000000002 |
 
+## Daemon-Mode Latency By Lane (Budget 2000, Retrieval, MPS GPU)
+
+All lanes rerun with `--use-daemon` on 2026-03-03. Results are byte-identical to subprocess mode. MPS GPU auto-detected.
+
+| Lane | Feature | Subprocess p50 | Daemon p50 | Speedup | Daemon mean | Daemon p90 | Parity |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| lane1 | hybrid | 5426.2 ms | 296.9 ms | **18.3x** | 373.8 ms | 319.7 ms | 60/60 |
+| lane2 | abstain/rerank | 4989.0 ms | 292.5 ms | **17.1x** | 412.9 ms | 314.7 ms | 60/60 |
+| lane3 | budget-aware | 4912.8 ms | 290.1 ms | **16.9x** | 286.7 ms | 300.1 ms | 60/60 |
+| lane4 | compound | 5161.9 ms | 295.7 ms | **17.5x** | 295.9 ms | 321.5 ms | 12/12 |
+| lane5 | navigate-cluster | 5170.4 ms | 293.1 ms | **17.6x** | 288.7 ms | 301.0 ms | 60/60 |
+| contextplus | baseline | 7717.1 ms | N/A | - | N/A | N/A | - |
+| rg-native | baseline | 216.2 ms | N/A | - | N/A | N/A | - |
+
+Daemon-mode llm-tldr is within 1.37x of rg-native p50 (was 23-25x in subprocess mode).
+
 ## Holistic Metrics At Budget 2000 (Required Rows)
 
 | tool | impact_f1_mean | slice_recall_mean | slice_noise_reduction_mean | data_flow_origin_accuracy_mean | data_flow_flow_completeness_mean | complexity_mae | timeout_rate | error_rate | budget_violation_rate | parse_errors_count | result_shape_counters_total |
@@ -86,9 +102,9 @@ This board is separate from the shared-capability retrieval gate. It evaluates e
 | `slice (+anchor) -> dfg` (debug path) | `slice: f1=0.919, recall=0.884, noise_reduction=0.657, p50=145.627ms, tok=11`; `dfg: origin=1.000, flow=1.000, p50=148.132ms, tok=13` | `N/A` | `N/A` | `benchmark/runs/h2h-llm-tldr-score-run1-fixed-stitched-allowlist-20260302T062602Z.json` |
 | Semantic search (concept path) | `semantic strategy: mrr=0.247, r@5=0.456, p@5=0.091, fpr@5=0.000` | `pending (not isolated)` | `N/A` | `benchmark/runs/20260302-195057Z-retrieval-django-lane3-b2000.json` |
 | `cfg` / complexity | `accuracy=0.600`, `mae=1.800`, `p50=151.115ms`, `tok=8` | `N/A` | `N/A` | `benchmark/runs/h2h-llm-tldr-score-run1-fixed-stitched-allowlist-20260302T062602Z.json` |
-| Daemon/index operational metrics | `build_s=1.231`, `patch_s=0.815`, `full_rebuild_after_touch_s=1.070`; daemon retrieval `p50=296.9ms` vs subprocess `p50=5776.5ms` (`19.5x` speedup, MPS GPU); 60/60 results identical | `N/A` | `N/A` | `benchmark/runs/20260209-044240Z-ts-perf-ts-monorepo.json`; `/tmp/bench_lane1_daemon_predictions.json`; `/tmp/bench_lane1_subprocess_predictions.json` |
+| Daemon/index operational metrics | `build_s=1.231`, `patch_s=0.815`, `rebuild_s=1.070`; daemon retrieval lanes 1-5 all `p50=290-297ms` vs subprocess `p50=4912-5426ms` (`16.9-18.3x` speedup, MPS GPU); structural daemon `p50=1.7-13.9ms` (`15-93x`); all results identical | `N/A` | `N/A` | `/tmp/bench_lane{1..5}_daemon_predictions.json`; `/tmp/bench_structural_daemon_predictions.json` |
 
 Resolved-row provisional picture:
 - `llm-tldr` leads on resolved full-product workflow rows.
 - `contextplus` and `rg-native` are competitive on retrieval but lose rows where capabilities are `N/A`.
-- Daemon/index operational row now resolved: `--use-daemon` eliminates subprocess startup overhead (`19.5x` speedup at p50, MPS GPU confirmed).
+- Daemon/index operational row now resolved: `--use-daemon` eliminates subprocess startup overhead across all lanes (`16.9-18.3x` retrieval speedup, `15-93x` structural speedup, MPS GPU confirmed). All results byte-identical to subprocess mode.

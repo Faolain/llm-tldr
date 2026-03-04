@@ -110,23 +110,28 @@ Add `--daemon-keep-alive` to leave the daemon running between invocations
 
 ## Measured Latency Comparison
 
-Benchmark on lane1 hybrid retrieval (60 queries, budget 2000, trial 1, Django corpus).
+All lanes benchmarked on Django corpus (budget 2000, trial 1).
 MPS GPU confirmed via `torch.backends.mps.is_available()=True`, inference device `mps`.
-Result correctness: 60/60 predictions byte-identical between subprocess and daemon modes.
+Result correctness: all predictions byte-identical between subprocess and daemon modes.
 
-### Daemon vs Subprocess Latency (Lane1 Retrieval)
+### Daemon vs Subprocess Latency — All Retrieval Lanes
 
-| Metric | Subprocess | Daemon | Speedup |
-| --- | ---: | ---: | ---: |
-| p50 latency | 5776.5 ms | 296.9 ms | **19.5x** |
-| p90 latency | 6023.9 ms | 319.7 ms | **18.8x** |
-| p99 latency | 6182.3 ms | 5072.3 ms | **1.2x** |
-| mean latency | 5509.5 ms | 373.8 ms | **14.7x** |
-| min latency | 385.2 ms | 141.3 ms | **2.7x** |
-| max latency | 6182.3 ms | 5072.3 ms | **1.2x** |
-| total wall time | 330.6s | 22.4s | **14.8x** |
-| ok / timeout / error | 60/0/0 | 60/0/0 | identical |
-| result correctness | - | 60/60 match | **100%** |
+| Lane | Feature | Subprocess p50 | Daemon p50 | Speedup | Daemon mean | Daemon p90 | Parity |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| lane1 | hybrid | 5426.2 ms | 296.9 ms | **18.3x** | 373.8 ms | 319.7 ms | 60/60 |
+| lane2 | abstain/rerank | 4989.0 ms | 292.5 ms | **17.1x** | 412.9 ms | 314.7 ms | 60/60 |
+| lane3 | budget-aware | 4912.8 ms | 290.1 ms | **16.9x** | 286.7 ms | 300.1 ms | 60/60 |
+| lane4 | compound | 5161.9 ms | 295.7 ms | **17.5x** | 295.9 ms | 321.5 ms | 12/12 |
+| lane5 | navigate-cluster | 5170.4 ms | 293.1 ms | **17.6x** | 288.7 ms | 301.0 ms | 60/60 |
+
+### Daemon vs Subprocess Latency — Structural Categories (Gate B)
+
+| Category | Subprocess p50 | Daemon p50 | Speedup | Parity |
+| --- | ---: | ---: | ---: | --- |
+| impact | 212.2 ms | 13.9 ms | **15.2x** | 15/15 semantic match |
+| slice | 168.9 ms | 5.2 ms | **32.3x** | 10/10 exact |
+| complexity | 156.9 ms | 1.7 ms | **93.1x** | 10/10 exact |
+| data_flow | 158.2 ms | 2.9 ms | **54.5x** | 10/10 exact |
 
 ### Daemon vs rg-native Latency Comparison
 
@@ -134,14 +139,15 @@ Result correctness: 60/60 predictions byte-identical between subprocess and daem
 | --- | ---: | ---: | ---: |
 | p50 latency | 216.2 ms | 296.9 ms | 1.37x |
 
-- Daemon-mode lane1 is now within `1.37x` of rg-native p50 (was `25.1x` in subprocess mode).
+- Daemon-mode lanes are within `1.34-1.37x` of rg-native p50 (was `23-25x` in subprocess mode).
 - The remaining gap is embedding inference cost (semantic+hybrid) vs pure regex.
 
 ### Verified
 
-- **Daemon used**: `execution_mode: "daemon"` in run metadata
+- **Daemon used**: `execution_mode: "daemon"` in run metadata for all lanes
 - **GPU (MPS) used**: `_get_device()` returns `"mps"` -- the daemon auto-detects and uses Apple Silicon GPU
-- **Result parity**: All 60 retrieval predictions are byte-identical between subprocess and daemon modes
+- **Result parity**: All retrieval predictions across lanes 1-5 are byte-identical between subprocess and daemon modes
+- **Structural parity**: impact 15/15 semantic match (caller ordering differs), slice/complexity/data_flow exact match
 
 ## Summary: Which Path Am I On?
 
