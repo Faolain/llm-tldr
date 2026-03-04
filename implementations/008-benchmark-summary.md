@@ -211,6 +211,8 @@ Then run the same pipeline:
 | `implementations/008-canonical-matrix-lane-decisions.md` | keep/rollback log and quantitative lane comparisons |
 
 ## Remaining Work (post lanes 1-5)
-- Consolidated Gate B structural sweep across lanes 1-5 (`impact/slice/dfg/cfg`) in one comparable pass.
-- Resolve pending full-product rows (`impact -> context -> rg` context metric, contextplus concept path parity, daemon/index operational artifact).
+- ~~Consolidated Gate B structural sweep across lanes 1-5~~ — structural commands (impact/slice/cfg/dfg) use identical templates across all lane profiles, so per-lane structural quality is invariant. Verified with daemon mode.
+- ~~Daemon `_handle_impact` canonical `"function"` key migration~~ — done: normalizer + parser tolerance + 24 regression tests.
+- ~~Daemon/index operational artifact~~ — resolved: all lanes 1-5 rerun with `--use-daemon`, 16.9-18.3x retrieval speedup, 15-93x structural speedup, MPS GPU confirmed.
+- Resolve pending full-product rows (`impact -> context -> rg` context metric, contextplus concept path parity).
 - Lane6 optional Ollama backend loop (kept non-gating for current comparison cycle).

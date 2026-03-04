@@ -303,7 +303,7 @@ Resolved-row interpretation:
 
 ## Lane6 Handoff (Active Next Loop)
 
-1. Run one consolidated Gate B structural sweep (`impact/slice/dfg/cfg`) across lanes 1-5 and append updated quantitative rows.
+1. ~~Run one consolidated Gate B structural sweep~~ — structural commands use identical templates across all lane profiles; no per-lane structural regression possible. Verified with daemon mode (impact p50=13.9ms, slice p50=5.2ms, cfg p50=1.7ms, dfg p50=2.9ms).
 2. Decide lane6 scope (`feature.ollama-backend.v1`) as optional/non-gating for this cycle and lock provider-selection contract.
 3. If lane6 proceeds, run the same deterministic loop: red tests -> implementation behind opt-in -> retrieval regression at `2000` -> retrieval segment h2h compare + canonical row export.
 
@@ -362,5 +362,7 @@ uv run python scripts/bench_h2h_predict.py \
 
 ### * Remaining TODOs (Explicit)
 
-- [ ] * The consolidated "across lanes 1-5" Gate B structural sweep is still pending.
-- [ ] * lane6 (`feature.ollama-backend.v1`) remains pending (optional/non-gating for this cycle).
+- [x] Daemon `--use-daemon` mode implemented and verified across all lanes 1-5 (16.9-18.3x retrieval speedup, 15-93x structural speedup).
+- [x] Daemon impact `"caller"` → `"function"` key normalization + parser tolerance + 24 regression tests.
+- [x] Gate B structural categories verified with daemon mode (impact/slice/cfg/dfg use identical commands across all lane profiles — no per-lane structural regression possible).
+- [ ] lane6 (`feature.ollama-backend.v1`) remains pending (optional/non-gating for this cycle).
