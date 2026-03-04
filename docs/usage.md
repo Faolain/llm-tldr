@@ -35,9 +35,9 @@ return in milliseconds.
 tldrf daemon start --project .
 
 # Query via raw JSON (fast, model already loaded)
-tldrf daemon query '{"cmd":"semantic","action":"search","query":"authentication","k":10}' --project .
-tldrf daemon query '{"cmd":"impact","func":"login","file":"src/auth.py"}' --project .
-tldrf daemon query '{"cmd":"cfg","file":"src/auth.py","function":"login"}' --project .
+tldrf daemon query --json '{"cmd":"semantic","action":"search","query":"authentication","k":10}' --project .
+tldrf daemon query --json '{"cmd":"impact","func":"login","file":"src/auth.py"}' --project .
+tldrf daemon query --json '{"cmd":"cfg","file":"src/auth.py","function":"login"}' --project .
 
 # Check status
 tldrf daemon status --project .
@@ -154,7 +154,7 @@ Result correctness: all predictions byte-identical between subprocess and daemon
 | Context | Execution Path | Model Load | Latency |
 | --- | --- | --- | ---: |
 | `tldrf semantic search ...` | CLI direct | Every invocation | ~5000ms |
-| `tldrf daemon query '{...}'` | Daemon socket | Once at start | ~300ms |
+| `tldrf daemon query --json '{...}'` | Daemon socket | Once at start | ~300ms |
 | `tldrf mcp` (Claude Code, etc.) | MCP -> daemon | Once at start | ~300ms |
 | `bench_h2h_predict.py` (default) | Subprocess per query | Every query | ~5000ms |
 | `bench_h2h_predict.py --use-daemon` | Daemon socket | Once at start | ~300ms |
@@ -170,7 +170,7 @@ transparently route a regular CLI command through an already-running daemon.
 Each `tldrf` invocation calls the Python function directly in-process.
 
 If you need daemon-speed queries from the shell, the options today are:
-1. Use `tldrf daemon query` with JSON commands
+1. Use `tldrf daemon query --json '{...}'`
 2. Use the MCP server via an editor integration
 3. Start the daemon and query the socket directly from a script
 
