@@ -23,7 +23,7 @@
     {
       "id": "structural_optional",
       "required_for_all_tools": false,
-      "categories": ["impact", "slice", "complexity", "data_flow"],
+      "categories": ["impact", "slice", "complexity", "data_flow", "context"],
       "description": "Optional lane: only scored for tools that actually expose these capabilities."
     }
   ],
@@ -59,7 +59,8 @@
       "impact": ["f1", "precision", "recall", "latency_ms_p50", "payload_tokens_median"],
       "slice": ["f1", "precision", "recall", "noise_reduction_mean", "latency_ms_p50"],
       "complexity": ["accuracy", "mae", "kendall_tau_b"],
-      "data_flow": ["origin_accuracy", "flow_completeness_mean", "latency_ms_p50"]
+      "data_flow": ["origin_accuracy", "flow_completeness_mean", "latency_ms_p50"],
+      "context": ["f1", "precision", "recall", "function_count_mean", "latency_ms_p50"]
     },
     "secondary": [
       "timeout_rate",

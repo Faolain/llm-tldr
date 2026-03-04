@@ -13,7 +13,8 @@
     "impact": false,
     "slice": false,
     "complexity": false,
-    "data_flow": false
+    "data_flow": false,
+    "context": false
   },
   "commands": {
     "retrieval": {

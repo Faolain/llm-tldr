@@ -13,7 +13,8 @@
     "impact": true,
     "slice": true,
     "complexity": true,
-    "data_flow": true
+    "data_flow": true,
+    "context": true
   },
   "commands": {
     "retrieval": {
@@ -35,6 +36,10 @@
     "data_flow": {
       "description": "Variable-level data-flow graph extraction.",
       "template": "uv run tldrf dfg \"{file_abs}\" \"{function}\" --lang python"
+    },
+    "context": {
+      "description": "Relevant context via call graph traversal from an entry point.",
+      "template": "uv run tldrf context \"{entry_point}\" --project {repo_root} --depth {depth} --lang python"
     }
   },
   "budget_policy": {

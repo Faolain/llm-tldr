@@ -15,7 +15,7 @@ from bench_util import bench_runs_root, gather_meta, get_repo_root, now_utc_comp
 
 SCHEMA_VERSION = 1
 ALLOWED_STATUS = {"ok", "unsupported", "timeout", "error", "pending"}
-CATEGORY_KEYS = ("retrieval", "impact", "slice", "complexity", "data_flow")
+CATEGORY_KEYS = ("retrieval", "impact", "slice", "complexity", "data_flow", "context")
 
 
 def _utc_now() -> str:
@@ -461,7 +461,7 @@ def _materialize_tasks(
         if not isinstance(qid, str) or not isinstance(category, str):
             warnings.append(f"skipped malformed structural query: {q}")
             continue
-        if category not in {"impact", "slice", "complexity", "data_flow"}:
+        if category not in {"impact", "slice", "complexity", "data_flow", "context"}:
             continue
 
         base: dict[str, Any] = {
@@ -588,6 +588,35 @@ def _materialize_tasks(
             tasks.append(base)
             continue
 
+        if category == "context":
+            entry_point = q.get("entry_point")
+            file_rel = q.get("file")
+            depth = q.get("depth", 2)
+            expected_functions = q.get("expected_functions")
+            if (
+                not isinstance(entry_point, str)
+                or not isinstance(file_rel, str)
+                or not isinstance(expected_functions, list)
+            ):
+                warnings.append(f"skipped malformed context query {qid}")
+                continue
+            funcs: list[dict[str, str]] = []
+            for f in expected_functions:
+                if not isinstance(f, dict):
+                    continue
+                fn = f.get("name")
+                fp = f.get("file")
+                if isinstance(fn, str) and isinstance(fp, str):
+                    funcs.append({"name": fn, "file": _normalize_rel_path(fp)})
+            base["input"] = {
+                "entry_point": entry_point,
+                "file": _normalize_rel_path(file_rel),
+                "depth": int(depth),
+            }
+            base["ground_truth"] = {"expected_functions": funcs}
+            tasks.append(base)
+            continue
+
     tasks.sort(key=lambda t: t["task_id"])
     return tasks, warnings, source_hashes
 
@@ -658,6 +687,15 @@ def _empty_acc(ks: list[int]) -> dict[str, dict[str, list[float]]]:
             "payload_tokens": [],
             "payload_bytes": [],
         },
+        "context": {
+            "precision": [],
+            "recall": [],
+            "f1": [],
+            "function_count": [],
+            "latency_ms": [],
+            "payload_tokens": [],
+            "payload_bytes": [],
+        },
     }
 
 
@@ -709,6 +747,16 @@ def _summarize_acc(acc: dict[str, dict[str, list[float]]], ks: list[int]) -> dic
         "flow_completeness_mean": _safe_mean(d["flow_completeness"]),
         "latency_ms_p50": _safe_median(d["latency_ms"]),
         "payload_tokens_median": _safe_median(d["payload_tokens"]),
+    }
+
+    ctx = acc["context"]
+    out["context"] = {
+        "precision_mean": _safe_mean(ctx["precision"]),
+        "recall_mean": _safe_mean(ctx["recall"]),
+        "f1_mean": _safe_mean(ctx["f1"]),
+        "function_count_mean": _safe_mean(ctx["function_count"]),
+        "latency_ms_p50": _safe_median(ctx["latency_ms"]),
+        "payload_tokens_median": _safe_median(ctx["payload_tokens"]),
     }
 
     return out
@@ -825,6 +873,70 @@ def _score_data_flow_entry(gt: dict[str, Any], result: dict[str, Any]) -> dict[s
     return out
 
 
+def _context_match_key(name: str, file_path: str) -> tuple[str, str]:
+    """Normalize a (name, file) pair for matching.
+
+    Strips module/class prefix from name (``module.func`` -> ``func``)
+    and normalizes the file path so absolute and relative paths match.
+    """
+    bare = name.rsplit(".", 1)[-1] if "." in name else name
+    fp = _normalize_rel_path(file_path)
+    return (bare, fp)
+
+
+def _context_keys_match(expected: set[tuple[str, str]], predicted: set[tuple[str, str]]) -> tuple[int, int, int]:
+    """Match context keys using suffix matching on file paths.
+
+    Returns (tp, fp, fn).
+    """
+    matched_expected: set[tuple[str, str]] = set()
+    matched_predicted: set[tuple[str, str]] = set()
+
+    for ename, efile in expected:
+        for pname, pfile in predicted:
+            if ename == pname and (pfile.endswith(efile) or efile.endswith(pfile)):
+                matched_expected.add((ename, efile))
+                matched_predicted.add((pname, pfile))
+
+    tp = len(matched_expected)
+    fp_count = len(predicted) - len(matched_predicted)
+    fn_count = len(expected) - len(matched_expected)
+    return tp, fp_count, fn_count
+
+
+def _score_context_entry(gt: dict[str, Any], result: dict[str, Any]) -> dict[str, float]:
+    expected_funcs: set[tuple[str, str]] = set()
+    for f in gt.get("expected_functions", []):
+        if not isinstance(f, dict):
+            continue
+        name = f.get("name")
+        fp = f.get("file")
+        if isinstance(name, str) and isinstance(fp, str):
+            expected_funcs.add(_context_match_key(name, fp))
+
+    predicted_funcs: set[tuple[str, str]] = set()
+    for f in result.get("functions", []) if isinstance(result.get("functions"), list) else []:
+        if not isinstance(f, dict):
+            continue
+        name = f.get("name")
+        fp = f.get("file")
+        if isinstance(name, str) and isinstance(fp, str):
+            predicted_funcs.add(_context_match_key(name, fp))
+
+    tp, fp_count, fn_count = _context_keys_match(expected_funcs, predicted_funcs)
+    prec, rec, f1 = _prf(tp, fp_count, fn_count)
+
+    out: dict[str, float] = {}
+    if prec is not None:
+        out["precision"] = prec
+    if rec is not None:
+        out["recall"] = rec
+    if f1 is not None:
+        out["f1"] = f1
+    out["function_count"] = float(len(predicted_funcs))
+    return out
+
+
 def _result_shape_matches_category(category: str, result: dict[str, Any]) -> bool:
     if category == "retrieval":
         return isinstance(result.get("ranked_files"), list)
@@ -838,6 +950,8 @@ def _result_shape_matches_category(category: str, result: dict[str, Any]) -> boo
         has_flow_lines = isinstance(result.get("flow_lines"), list)
         has_origin_line = _coerce_int(result.get("origin_line")) is not None
         return has_flow_lines or has_origin_line
+    if category == "context":
+        return isinstance(result.get("functions"), list)
     return True
 
 
@@ -1224,6 +1338,8 @@ def cmd_score(args: argparse.Namespace) -> int:
                 metrics = _score_complexity_entry(gt, result)
             elif category == "data_flow":
                 metrics = _score_data_flow_entry(gt, result)
+            elif category == "context":
+                metrics = _score_context_entry(gt, result)
             else:
                 metrics = {}
 

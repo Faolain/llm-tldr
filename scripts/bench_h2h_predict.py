@@ -27,7 +27,7 @@ except Exception:  # pragma: no cover - fallback if optional deps are unavailabl
 
 
 SCHEMA_VERSION = 1
-CATEGORY_KEYS = ("retrieval", "impact", "slice", "complexity", "data_flow")
+CATEGORY_KEYS = ("retrieval", "impact", "slice", "complexity", "data_flow", "context")
 PREFLIGHT_SEMANTIC_INDEX_MISSING_CLASS = "preflight_semantic_index_missing"
 PREFLIGHT_SEMANTIC_INDEX_MISSING_REASON_MARKERS = ("semantic index not found",)
 
@@ -221,6 +221,8 @@ def _default_result_for_category(category: str) -> dict[str, Any]:
         return {"cyclomatic_complexity": 0}
     if category == "data_flow":
         return {"origin_line": None, "flow_lines": []}
+    if category == "context":
+        return {"functions": [], "entry_point": None, "depth": 0}
     return {}
 
 
@@ -474,6 +476,44 @@ def _parse_data_flow_result(parsed: Any, *, variable: str | None = None) -> dict
     return {"origin_line": legacy_origin_line, "flow_lines": sorted(legacy_flow_lines)}
 
 
+def _normalize_context_name(name: str) -> str:
+    """Strip module/class prefix from a qualified name to get the bare function name."""
+    # "checks.check_dependencies" -> "check_dependencies"
+    # "ModelAdmin.get_search_results" -> "get_search_results"
+    return name.rsplit(".", 1)[-1] if "." in name else name
+
+
+def _parse_context_result(text: str, parsed: Any) -> dict[str, Any]:
+    funcs: list[dict[str, str]] = []
+
+    # JSON mode (daemon or direct JSON output)
+    if isinstance(parsed, dict):
+        fn_list = parsed.get("functions")
+        if isinstance(fn_list, list):
+            for item in fn_list:
+                if not isinstance(item, dict):
+                    continue
+                name = item.get("name")
+                fp = item.get("file")
+                if isinstance(name, str) and isinstance(fp, str):
+                    funcs.append({
+                        "name": _normalize_context_name(name),
+                        "file": _normalize_rel_path(fp),
+                    })
+            if funcs:
+                return {"functions": funcs}
+
+    # Text mode: parse to_llm_string() output lines like "📍 func_name (file.py:42)"
+    for line in str(text or "").splitlines():
+        m = re.search(r"📍\s+(?:\S+\.)?(\w+)\s+\(([^:)]+)", line)
+        if m:
+            name = m.group(1)
+            fp = m.group(2).strip()
+            funcs.append({"name": name, "file": _normalize_rel_path(fp)})
+
+    return {"functions": funcs}
+
+
 def _result_from_output(
     category: str,
     text: str,
@@ -498,6 +538,8 @@ def _result_from_output(
                 if isinstance(raw_variable, str) and raw_variable.strip():
                     variable = raw_variable.strip()
         return _parse_data_flow_result(parsed, variable=variable)
+    if category == "context":
+        return _parse_context_result(text, parsed)
     return _default_result_for_category(category)
 
 
@@ -530,6 +572,13 @@ def _trim_result_once(category: str, result: dict[str, Any]) -> bool:
             return True
         if result.get("origin_line") is not None:
             result["origin_line"] = None
+            return True
+        return False
+
+    if category == "context":
+        funcs = result.get("functions")
+        if isinstance(funcs, list) and funcs:
+            result["functions"] = funcs[:-1]
             return True
         return False
 
@@ -690,7 +739,7 @@ def _run_command_once(*, argv: list[str], cwd: Path, timeout_s: float) -> Comman
 # Daemon execution path
 # ---------------------------------------------------------------------------
 
-_DAEMON_SUPPORTED_CATEGORIES = frozenset({"retrieval", "impact", "complexity", "data_flow", "slice"})
+_DAEMON_SUPPORTED_CATEGORIES = frozenset({"retrieval", "impact", "complexity", "data_flow", "slice", "context"})
 
 # Templates that invoke non-daemon executables (fall back to subprocess).
 _NON_DAEMON_TEMPLATE_PREFIXES = ("contextplus", "rg ")
@@ -792,6 +841,14 @@ def _cli_template_to_daemon_command(
             "line": int(values.get("target_line", 0)),
         }
 
+    if category == "context":
+        return {
+            "cmd": "context",
+            "entry": values.get("entry_point", values.get("function", "")),
+            "language": "python",
+            "depth": int(values.get("depth", 2)),
+        }
+
     return None
 
 
@@ -833,6 +890,14 @@ def _daemon_response_to_stdout(category: str, response: dict[str, Any]) -> str:
         # Daemon wraps the analysis in a "result" key — unwrap it so the
         # category-specific parsers see the shape they expect.
         inner = response.get("result")
+        if isinstance(inner, dict):
+            return json.dumps(inner)
+        return json.dumps(response)
+
+    if category == "context":
+        # Daemon returns {"status":"ok","result":{"entry_point":...,"functions":[...]}}.
+        # Unwrap inner "result" so the context parser sees the shape it expects.
+        inner = response.get("result", {})
         if isinstance(inner, dict):
             return json.dumps(inner)
         return json.dumps(response)
@@ -983,6 +1048,12 @@ def _template_values(
     rg_pattern = input_obj.get("rg_pattern")
     if isinstance(rg_pattern, str):
         out["rg_pattern"] = rg_pattern
+    entry_point = input_obj.get("entry_point")
+    if isinstance(entry_point, str):
+        out["entry_point"] = entry_point
+    depth = input_obj.get("depth")
+    if isinstance(depth, int):
+        out["depth"] = int(depth)
     return out
 
 
