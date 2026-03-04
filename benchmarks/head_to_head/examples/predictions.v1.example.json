@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "suite_id": "h2h_llm_tldr_vs_contextplus_v1",
+  "tool_id": "llm-tldr",
+  "task_manifest_sha256": "REPLACE_WITH_TASK_MANIFEST_SHA256",
+  "tokenizer": "cl100k_base",
+  "predictions": [
+    {
+      "task_id": "retrieval:R01",
+      "trial": 1,
+      "budget_tokens": 2000,
+      "status": "ok",
+      "latency_ms": 12.4,
+      "payload_tokens": 124,
+      "payload_bytes": 892,
+      "result": {
+        "ranked_files": ["django/middleware/csrf.py", "django/views/decorators/csrf.py"]
+      }
+    },
+    {
+      "task_id": "impact:A01",
+      "trial": 1,
+      "budget_tokens": 2000,
+      "status": "ok",
+      "latency_ms": 8.7,
+      "payload_tokens": 68,
+      "payload_bytes": 412,
+      "result": {
+        "callers": [
+          {
+            "file": "django/contrib/admin/checks.py",
+            "function": "check_dependencies"
+          }
+        ]
+      }
+    },
+    {
+      "task_id": "slice:B01",
+      "trial": 1,
+      "budget_tokens": 2000,
+      "status": "ok",
+      "latency_ms": 7.9,
+      "payload_tokens": 44,
+      "payload_bytes": 144,
+      "result": {
+        "lines": [182, 183, 184, 185]
+      }
+    },
+    {
+      "task_id": "complexity:C01",
+      "trial": 1,
+      "budget_tokens": 2000,
+      "status": "ok",
+      "latency_ms": 15.2,
+      "payload_tokens": 38,
+      "payload_bytes": 223,
+      "result": {
+        "cyclomatic_complexity": 8
+      }
+    },
+    {
+      "task_id": "data_flow:D01",
+      "trial": 1,
+      "budget_tokens": 2000,
+      "status": "ok",
+      "latency_ms": 11.1,
+      "payload_tokens": 52,
+      "payload_bytes": 310,
+      "result": {
+        "origin_line": 51,
+        "flow_lines": [51, 53, 54, 57]
+      }
+    }
+  ]
+}

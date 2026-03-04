@@ -181,6 +181,13 @@ class TLDRDaemon:
             "enabled": True,
             "auto_reindex_threshold": 20,  # Files changed before auto re-index
             "model": "bge-large-en-v1.5",
+            "abstain_threshold": None,
+            "abstain_empty": False,
+            "rerank": False,
+            "rerank_top_n": 5,
+            "max_latency_ms_p50_ratio": None,
+            "max_payload_tokens_median_ratio": None,
+            "budget_tokens": None,
         }
 
         # Try Claude settings first
@@ -824,7 +831,12 @@ class TLDRDaemon:
         action = command.get("action", "search")
 
         try:
-            from tldr.semantic import build_semantic_index, semantic_search
+            from tldr.semantic import (
+                build_semantic_index,
+                compound_semantic_impact_search,
+                semantic_navigation_cluster_search,
+                semantic_search,
+            )
 
             if action == "index":
                 language = command.get("language", "python")
@@ -837,15 +849,189 @@ class TLDRDaemon:
                 )
                 return {"status": "ok", "indexed": count}
 
-            elif action == "search":
+            elif action in {"search", "compound"}:
+                def _coerce_bool(value: Any, default: bool = False) -> bool:
+                    if value is None:
+                        return bool(default)
+                    if isinstance(value, bool):
+                        return value
+                    if isinstance(value, str):
+                        normalized = value.strip().lower()
+                        if normalized in {"1", "true", "yes", "on"}:
+                            return True
+                        if normalized in {"0", "false", "no", "off"}:
+                            return False
+                    return bool(value)
+
+                def _coerce_int(value: Any, default: int) -> int:
+                    try:
+                        return int(value)
+                    except (TypeError, ValueError):
+                        return int(default)
+
+                def _coerce_optional_float(value: Any) -> float | None:
+                    if value is None:
+                        return None
+                    try:
+                        return float(value)
+                    except (TypeError, ValueError):
+                        return None
+
+                def _coerce_optional_int(value: Any) -> int | None:
+                    if value is None:
+                        return None
+                    try:
+                        return int(value)
+                    except (TypeError, ValueError):
+                        return None
+
                 query = command.get("query")
                 if not query:
                     return {"status": "error", "message": "Missing required parameter: query"}
-                k = command.get("k", 10)
+                k = _coerce_int(command.get("k", 10), 10)
+                retrieval_mode = command.get("retrieval_mode", "semantic")
+                compound_impact = _coerce_bool(
+                    command.get("compound_impact"),
+                    default=(action == "compound"),
+                )
+                no_result_guard = command.get("no_result_guard", "none")
+                rg_pattern = command.get("rg_pattern")
+                rg_glob = command.get("rg_glob")
+                rrf_k = _coerce_int(command.get("rrf_k", 60), 60)
+                abstain_threshold = command.get(
+                    "abstain_threshold",
+                    self._semantic_config.get("abstain_threshold"),
+                )
+                abstain_empty = command.get(
+                    "abstain_empty",
+                    self._semantic_config.get("abstain_empty", False),
+                )
+                rerank = command.get(
+                    "rerank",
+                    self._semantic_config.get("rerank", False),
+                )
+                rerank_top_n = command.get(
+                    "rerank_top_n",
+                    self._semantic_config.get("rerank_top_n", 5),
+                )
+                max_latency_ms_p50_ratio = command.get(
+                    "max_latency_ms_p50_ratio",
+                    self._semantic_config.get("max_latency_ms_p50_ratio"),
+                )
+                max_payload_tokens_median_ratio = command.get(
+                    "max_payload_tokens_median_ratio",
+                    self._semantic_config.get("max_payload_tokens_median_ratio"),
+                )
+                budget_tokens = command.get(
+                    "budget_tokens",
+                    self._semantic_config.get("budget_tokens"),
+                )
+                navigate_cluster = _coerce_bool(
+                    command.get("navigate_cluster"),
+                    default=False,
+                )
+                cluster_count = command.get(
+                    "cluster_count",
+                    self._semantic_config.get("cluster_count"),
+                )
+                cluster_min_size = command.get(
+                    "cluster_min_size",
+                    self._semantic_config.get("cluster_min_size", 1),
+                )
+                cluster_max_members = command.get(
+                    "cluster_max_members",
+                    self._semantic_config.get("cluster_max_members", 5),
+                )
+                cluster_label_mode = command.get(
+                    "cluster_label_mode",
+                    self._semantic_config.get("cluster_label_mode", "auto"),
+                )
+                if navigate_cluster:
+                    result = semantic_navigation_cluster_search(
+                        str(self.project),
+                        query,
+                        k=k,
+                        retrieval_mode=str(retrieval_mode),
+                        no_result_guard=str(no_result_guard),
+                        rg_pattern=rg_pattern if isinstance(rg_pattern, str) else None,
+                        rg_glob=rg_glob if isinstance(rg_glob, str) and rg_glob.strip() else None,
+                        rrf_k=rrf_k,
+                        abstain_threshold=_coerce_optional_float(abstain_threshold),
+                        abstain_empty=_coerce_bool(abstain_empty, default=False),
+                        rerank=_coerce_bool(rerank, default=False),
+                        rerank_top_n=_coerce_int(rerank_top_n, 5),
+                        max_latency_ms_p50_ratio=_coerce_optional_float(
+                            max_latency_ms_p50_ratio
+                        ),
+                        max_payload_tokens_median_ratio=_coerce_optional_float(
+                            max_payload_tokens_median_ratio
+                        ),
+                        budget_tokens=_coerce_optional_int(budget_tokens),
+                        cluster_count=_coerce_optional_int(cluster_count),
+                        cluster_min_size=_coerce_int(cluster_min_size, 1),
+                        cluster_max_members=_coerce_optional_int(cluster_max_members),
+                        cluster_label_mode=(
+                            str(cluster_label_mode)
+                            if isinstance(cluster_label_mode, str)
+                            else "auto"
+                        ),
+                        index_paths=self.index_paths,
+                        index_config=self.index_config,
+                    )
+                    return {"status": "ok", "result": result, "results": result}
+                if compound_impact:
+                    result = compound_semantic_impact_search(
+                        str(self.project),
+                        query,
+                        k=k,
+                        retrieval_mode=str(retrieval_mode),
+                        no_result_guard=str(no_result_guard),
+                        rg_pattern=rg_pattern if isinstance(rg_pattern, str) else None,
+                        rg_glob=rg_glob if isinstance(rg_glob, str) and rg_glob.strip() else None,
+                        rrf_k=rrf_k,
+                        abstain_threshold=_coerce_optional_float(abstain_threshold),
+                        abstain_empty=_coerce_bool(abstain_empty, default=False),
+                        rerank=_coerce_bool(rerank, default=False),
+                        rerank_top_n=_coerce_int(rerank_top_n, 5),
+                        max_latency_ms_p50_ratio=_coerce_optional_float(
+                            max_latency_ms_p50_ratio
+                        ),
+                        max_payload_tokens_median_ratio=_coerce_optional_float(
+                            max_payload_tokens_median_ratio
+                        ),
+                        budget_tokens=_coerce_optional_int(budget_tokens),
+                        impact_depth=_coerce_int(command.get("impact_depth", 3), 3),
+                        impact_limit=_coerce_optional_int(command.get("impact_limit", 3)),
+                        impact_language=(
+                            command.get("impact_language")
+                            if isinstance(command.get("impact_language"), str)
+                            else "auto"
+                        ),
+                        index_paths=self.index_paths,
+                        index_config=self.index_config,
+                        ignore_spec=self._ignore_spec,
+                        workspace_root=self._workspace_root,
+                    )
+                    return {"status": "ok", "result": result, "results": result}
+
                 results = semantic_search(
                     str(self.project),
                     query,
                     k=k,
+                    retrieval_mode=str(retrieval_mode),
+                    no_result_guard=str(no_result_guard),
+                    rg_pattern=rg_pattern if isinstance(rg_pattern, str) else None,
+                    rg_glob=rg_glob if isinstance(rg_glob, str) and rg_glob.strip() else None,
+                    rrf_k=rrf_k,
+                    abstain_threshold=_coerce_optional_float(abstain_threshold),
+                    abstain_empty=_coerce_bool(abstain_empty, default=False),
+                    rerank=_coerce_bool(rerank, default=False),
+                    rerank_top_n=_coerce_int(rerank_top_n, 5),
+                    max_latency_ms_p50_ratio=_coerce_optional_float(max_latency_ms_p50_ratio),
+                    max_payload_tokens_median_ratio=_coerce_optional_float(
+                        max_payload_tokens_median_ratio
+                    ),
+                    budget_tokens=_coerce_optional_int(budget_tokens),
                     index_paths=self.index_paths,
                     index_config=self.index_config,
                 )

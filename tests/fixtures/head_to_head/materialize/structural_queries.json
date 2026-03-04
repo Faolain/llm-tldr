@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "repo": "fixture",
+  "queries": [
+    {
+      "id": "D01",
+      "category": "data_flow",
+      "file": "pkg/sample.py",
+      "function": "track_flow",
+      "variable": "origin",
+      "expected_flow": [
+        { "event": "used", "line": 10 },
+        { "event": "defined", "line": 9 }
+      ]
+    },
+    {
+      "id": "A01",
+      "category": "impact",
+      "function": "helper",
+      "file": "pkg/sample.py",
+      "expected_callers": [
+        { "function": "use_helper", "file": "pkg/sample.py" }
+      ]
+    },
+    {
+      "id": "B01",
+      "category": "slice",
+      "file": "pkg/sample.py",
+      "function": "use_helper",
+      "target_line": 6,
+      "expected_slice_lines": [6, 5, 6]
+    }
+  ]
+}

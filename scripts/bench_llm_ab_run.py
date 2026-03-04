@@ -211,6 +211,18 @@ def _got_set(category: str, parsed: Any) -> set[Any] | None:
     return None
 
 
+def _classify_structured_output(category: str, text: str) -> tuple[str, set[Any] | None]:
+    """Classify structured model output as ok/empty/malformed and parse payload."""
+    if not str(text or "").strip():
+        return "empty", None
+
+    parsed = _extract_json_from_text(text)
+    got = _got_set(category, parsed)
+    if got is None:
+        return "malformed", None
+    return "ok", got
+
+
 def _json_schema_for_category(category: str) -> dict[str, Any] | None:
     if category == "impact":
         return {
@@ -357,6 +369,18 @@ def _extract_judge_winner(parsed: Any) -> str | None:
     if w in ("tie", "draw"):
         return "tie"
     return None
+
+
+def _classify_judge_verdict(text: str) -> tuple[str, str | None, Any | None]:
+    """Classify judge verdict text as ok/empty/malformed and extract winner."""
+    if not str(text or "").strip():
+        return "empty", None, None
+
+    parsed = _extract_json_from_text(text)
+    winner = _extract_judge_winner(parsed)
+    if winner is None:
+        return "malformed", None, parsed
+    return "ok", winner, parsed
 
 
 def _anthropic_call(*, model: str, prompt: str, max_tokens: int, temperature: float) -> tuple[str, dict[str, Any]]:
@@ -857,7 +881,8 @@ def main() -> int:
         answer_errors_total = 0
         answer_errors_by_source: dict[str, int] = {"rg": 0, "tldr": 0}
         judge_errors_total = 0
-        judge_bad_json = 0
+        judge_empty_verdict_total = 0
+        judge_malformed_verdict_total = 0
 
         score_by_source: dict[str, dict[str, list[float]]] = {"rg": {}, "tldr": {}}
 
@@ -990,6 +1015,7 @@ def main() -> int:
                     judge_dt_total = 0.0
                     verdict_parsed: Any | None = None
                     winner: str | None = None
+                    verdict_status = "empty"
                     judge_attempts = 0
                     last_attempt_error: str | None = None
 
@@ -1052,8 +1078,7 @@ def main() -> int:
                         judge_usage_attempts.append(dict(judge_usage or {}))
                         last_attempt_error = attempt_error
 
-                        verdict_parsed = _extract_json_from_text(judge_text)
-                        winner = _extract_judge_winner(verdict_parsed)
+                        verdict_status, winner, verdict_parsed = _classify_judge_verdict(judge_text)
                         if winner is not None:
                             judge_error = attempt_error
                             break
@@ -1063,11 +1088,14 @@ def main() -> int:
 
                     if winner is None:
                         # Treat invalid/empty verdicts as errors (do not silently count as ties).
-                        judge_bad_json += 1
+                        if verdict_status == "empty":
+                            judge_empty_verdict_total += 1
+                        else:
+                            judge_malformed_verdict_total += 1
                         judge_errors_total += 1
                         if last_attempt_error is not None:
                             judge_error = last_attempt_error
-                        elif not str(judge_text).strip():
+                        elif verdict_status == "empty":
                             judge_error = "empty_verdict"
                         else:
                             judge_error = "bad_json"
@@ -1181,7 +1209,9 @@ def main() -> int:
                 "answer_errors_total": int(answer_errors_total),
                 "answer_errors_by_source": {k: int(v) for k, v in answer_errors_by_source.items()},
                 "judge_errors_total": int(judge_errors_total),
-                "judge_bad_json": int(judge_bad_json),
+                "judge_bad_json": int(judge_empty_verdict_total + judge_malformed_verdict_total),
+                "judge_empty_verdict_total": int(judge_empty_verdict_total),
+                "judge_malformed_verdict_total": int(judge_malformed_verdict_total),
                 "win_rate_tldr_over_rg": (sum(wins) / len(wins)) if wins else None,
                 "answer_time_s_percentiles": {k: percentiles(v) for k, v in time_s_by_source.items() if v},
                 "judge_time_s_percentiles": percentiles(judge_time_s) if judge_time_s else None,
@@ -1208,7 +1238,10 @@ def main() -> int:
     win_by_pair_by_category: dict[str, dict[str, list[float]]] = {}
     f1_by_source: dict[str, list[float]] = {"rg": [], "tldr": []}
     time_s_by_source: dict[str, list[float]] = {"rg": [], "tldr": []}
-    bad_json = 0
+    empty_output_total = 0
+    empty_output_by_source: dict[str, int] = {"rg": 0, "tldr": 0}
+    malformed_output_total = 0
+    malformed_output_by_source: dict[str, int] = {"rg": 0, "tldr": 0}
     errors_total = 0
     errors_by_source: dict[str, int] = {"rg": 0, "tldr": 0}
 
@@ -1289,13 +1322,17 @@ def main() -> int:
                     dt = time.monotonic() - t0
                     time_s_by_source.setdefault(source, []).append(float(dt))
 
-                    parsed = _extract_json_from_text(text)
-                    got = _got_set(category, parsed)
-                    if got is None:
-                        bad_json += 1
+                    output_status, got = _classify_structured_output(category, text)
+                    if output_status == "empty":
+                        empty_output_total += 1
+                        empty_output_by_source[source] = int(empty_output_by_source.get(source, 0)) + 1
+                        sc = Score(tp=0, fp=0, fn=len(expected))
+                    elif output_status == "malformed":
+                        malformed_output_total += 1
+                        malformed_output_by_source[source] = int(malformed_output_by_source.get(source, 0)) + 1
                         sc = Score(tp=0, fp=0, fn=len(expected))
                     else:
-                        sc = _score_sets(expected, got)
+                        sc = _score_sets(expected, got if got is not None else set())
                     trial_scores.append(sc.f1)
 
                     row = {
@@ -1378,7 +1415,11 @@ def main() -> int:
         },
         results={
             "tasks_scored": len(per_task),
-            "bad_json": int(bad_json),
+            "bad_json": int(empty_output_total + malformed_output_total),
+            "empty_output_total": int(empty_output_total),
+            "empty_output_by_source": {k: int(v) for k, v in empty_output_by_source.items()},
+            "malformed_output_total": int(malformed_output_total),
+            "malformed_output_by_source": {k: int(v) for k, v in malformed_output_by_source.items()},
             "errors_total": int(errors_total),
             "errors_by_source": {k: int(v) for k, v in errors_by_source.items()},
             "win_rate_tldr_over_rg": (sum(wins) / len(wins)) if wins else None,

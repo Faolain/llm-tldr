@@ -108,10 +108,18 @@ def _payload_stats(payload: str) -> dict[str, int]:
 
 
 def _apply_budget(pieces: list[str], budget_tokens: int) -> tuple[str, int, int, int]:
-    """Greedy deterministic prefix selection by tokens. Returns payload + counts + pieces_used."""
+    """Greedy deterministic prefix selection by tokens.
+
+    Duplicate chunks are skipped so repeated windows do not consume budget twice.
+    Returns payload + counts + pieces_used.
+    """
     payload_parts: list[str] = []
+    seen: set[str] = set()
     used = 0
     for piece in pieces:
+        if piece in seen:
+            continue
+        seen.add(piece)
         candidate = "\n\n".join([*payload_parts, piece]) if payload_parts else piece
         toks = int(count_tokens(candidate))
         if toks > budget_tokens:

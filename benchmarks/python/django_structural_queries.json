@@ -493,6 +493,72 @@
       ],
       "difficulty": "easy",
       "why_grep_struggles": "Grep can't distinguish that the key used in hmac.new is derived from hasher(key_salt + secret)."
+    },
+    {
+      "id": "CTX01",
+      "category": "context",
+      "entry_point": "check_dependencies",
+      "file": "django/contrib/admin/checks.py",
+      "depth": 1,
+      "expected_functions": [
+        { "name": "check_dependencies", "file": "django/contrib/admin/checks.py" },
+        { "name": "_contains_subclass", "file": "django/contrib/admin/checks.py" }
+      ],
+      "difficulty": "easy"
+    },
+    {
+      "id": "CTX02",
+      "category": "context",
+      "entry_point": "get_search_results",
+      "file": "django/contrib/admin/options.py",
+      "depth": 1,
+      "expected_functions": [
+        { "name": "get_search_results", "file": "django/contrib/admin/options.py" },
+        { "name": "unescape_string_literal", "file": "django/utils/text.py" },
+        { "name": "smart_split", "file": "django/utils/text.py" },
+        { "name": "lookup_spawns_duplicates", "file": "django/contrib/admin/utils.py" }
+      ],
+      "difficulty": "easy"
+    },
+    {
+      "id": "CTX03",
+      "category": "context",
+      "entry_point": "results",
+      "file": "django/contrib/admin/templatetags/admin_list.py",
+      "depth": 1,
+      "expected_functions": [
+        { "name": "results", "file": "django/contrib/admin/templatetags/admin_list.py" },
+        { "name": "items_for_result", "file": "django/contrib/admin/templatetags/admin_list.py" }
+      ],
+      "difficulty": "easy"
+    },
+    {
+      "id": "CTX04",
+      "category": "context",
+      "entry_point": "construct_change_message",
+      "file": "django/contrib/admin/utils.py",
+      "depth": 2,
+      "expected_functions": [
+        { "name": "construct_change_message", "file": "django/contrib/admin/utils.py" },
+        { "name": "_get_changed_field_labels_from_form", "file": "django/contrib/admin/utils.py" }
+      ],
+      "difficulty": "medium"
+    },
+    {
+      "id": "CTX05",
+      "category": "context",
+      "entry_point": "result_headers",
+      "file": "django/contrib/admin/templatetags/admin_list.py",
+      "depth": 1,
+      "expected_functions": [
+        { "name": "result_headers", "file": "django/contrib/admin/templatetags/admin_list.py" },
+        { "name": "_coerce_field_name", "file": "django/contrib/admin/templatetags/admin_list.py" },
+        { "name": "make_qs_param", "file": "django/contrib/admin/templatetags/admin_list.py" },
+        { "name": "mark_safe", "file": "django/utils/safestring.py" },
+        { "name": "format_html", "file": "django/utils/html.py" },
+        { "name": "label_for_field", "file": "django/contrib/admin/utils.py" }
+      ],
+      "difficulty": "easy"
     }
   ]
 }

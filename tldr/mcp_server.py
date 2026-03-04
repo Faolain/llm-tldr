@@ -481,7 +481,32 @@ def importers(project: str, module: str, language: str = "python") -> dict:
 
 
 @mcp.tool()
-def semantic(project: str, query: str, k: int = 10) -> dict:
+def semantic(
+    project: str,
+    query: str,
+    k: int = 10,
+    budget_tokens: int | None = None,
+    hybrid: bool = False,
+    navigate_cluster: bool = False,
+    cluster_count: int | None = None,
+    cluster_min_size: int = 1,
+    cluster_max_members: int = 5,
+    cluster_label_mode: str = "auto",
+    compound_impact: bool = False,
+    impact_depth: int = 3,
+    impact_limit: int = 3,
+    impact_language: str = "auto",
+    no_result_guard: str = "none",
+    rg_pattern: str | None = None,
+    rg_glob: str | None = None,
+    rrf_k: int = 60,
+    abstain_threshold: float | None = None,
+    abstain_empty: bool = False,
+    rerank: bool = False,
+    rerank_top_n: int = 5,
+    max_latency_ms_p50_ratio: float | None = None,
+    max_payload_tokens_median_ratio: float | None = None,
+) -> dict:
     """Semantic code search using embeddings.
 
     Searches over function/class summaries using vector similarity.
@@ -491,9 +516,59 @@ def semantic(project: str, query: str, k: int = 10) -> dict:
         project: Project root directory
         query: Natural language query
         k: Number of results to return
+        budget_tokens: Optional lane3 budget-aware retrieval control.
+        hybrid: Enable deterministic lexical+semantic hybrid retrieval.
+        navigate_cluster: Opt-in lane5 semantic navigation/clustering output.
+        cluster_count: Target cluster count for lane5 output.
+        cluster_min_size: Minimum lane5 cluster size.
+        cluster_max_members: Max members emitted per lane5 cluster.
+        cluster_label_mode: Lane5 cluster label strategy.
+        compound_impact: Opt-in lane4 compound retrieval + impact output.
+        impact_depth: Max reverse-call depth for lane4 impact stage.
+        impact_limit: Max semantic rows enriched by lane4 impact stage.
+        impact_language: Call-graph language for lane4 impact stage.
+        no_result_guard: Optional guard mode ('none' or 'rg_empty').
+        rg_pattern: Optional regex for lexical stage.
+        rg_glob: Optional ripgrep --glob filter for lexical stage.
+        rrf_k: RRF constant used in hybrid mode.
+        abstain_threshold: Optional confidence threshold for abstention.
+        abstain_empty: If abstaining, return an empty result list.
+        rerank: Enable deterministic reranking stage.
+        rerank_top_n: Candidate count used by reranking.
+        max_latency_ms_p50_ratio: Optional latency ratio bound metadata.
+        max_payload_tokens_median_ratio: Optional payload ratio bound metadata.
     """
     return _send_command(
-        project, {"cmd": "semantic", "action": "search", "query": query, "k": k}
+        project,
+        {
+            "cmd": "semantic",
+            "action": "search",
+            "query": query,
+            "k": k,
+            "budget_tokens": budget_tokens,
+            "retrieval_mode": "hybrid" if bool(hybrid) else "semantic",
+            "navigate_cluster": bool(navigate_cluster),
+            "cluster_count": int(cluster_count) if cluster_count is not None else None,
+            "cluster_min_size": int(cluster_min_size),
+            "cluster_max_members": (
+                int(cluster_max_members) if cluster_max_members is not None else None
+            ),
+            "cluster_label_mode": str(cluster_label_mode),
+            "compound_impact": bool(compound_impact),
+            "impact_depth": int(impact_depth),
+            "impact_limit": int(impact_limit),
+            "impact_language": impact_language,
+            "no_result_guard": no_result_guard,
+            "rg_pattern": rg_pattern,
+            "rg_glob": rg_glob,
+            "rrf_k": int(rrf_k),
+            "abstain_threshold": abstain_threshold,
+            "abstain_empty": bool(abstain_empty),
+            "rerank": bool(rerank),
+            "rerank_top_n": int(rerank_top_n) if rerank_top_n is not None else 5,
+            "max_latency_ms_p50_ratio": max_latency_ms_p50_ratio,
+            "max_payload_tokens_median_ratio": max_payload_tokens_median_ratio,
+        },
     )
 
 

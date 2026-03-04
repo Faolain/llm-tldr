@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "suite_id": "h2h_llm_tldr_vs_contextplus_v1",
+  "tool_id": "rg-native",
+  "feature_set_id": "baseline.native-rg.v1",
+  "display_name": "rg-native (lexical)",
+  "version_capture": {
+    "command": ["rg", "--version"],
+    "fallback_command": ["grep", "--version"]
+  },
+  "capabilities": {
+    "retrieval": true,
+    "impact": false,
+    "slice": false,
+    "complexity": false,
+    "data_flow": false,
+    "context": false
+  },
+  "commands": {
+    "retrieval": {
+      "description": "Native lexical retrieval baseline via rg/grep adapter (no llm-tldr tooling).",
+      "template": "python3 \"{repo_root}/../../../scripts/rg_search_adapter.py\" --repo \"{repo_root}\" --pattern \"{rg_pattern}\" --query \"{query}\" --top-k {top_k} --timeout-s 25 --engine auto"
+    }
+  },
+  "budget_policy": {
+    "max_payload_tokens": "enforced_by_benchmark_harness",
+    "max_payload_bytes": "enforced_by_benchmark_harness"
+  },
+  "notes": [
+    "This profile intentionally uses native lexical tooling only (rg/grep).",
+    "No tldrf or uv command is invoked in retrieval execution."
+  ]
+}

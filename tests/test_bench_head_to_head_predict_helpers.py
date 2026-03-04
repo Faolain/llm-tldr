@@ -1,0 +1,358 @@
+import json
+import runpy
+import shutil
+import sys
+from pathlib import Path
+
+import pytest
+
+
+def _load_mod():
+    scripts_dir = (Path(__file__).resolve().parents[1] / "scripts").as_posix()
+    if scripts_dir not in sys.path:
+        sys.path.insert(0, scripts_dir)
+    return runpy.run_path("scripts/bench_h2h_predict.py")
+
+
+def test_render_command_template_raises_on_missing_placeholder():
+    mod = _load_mod()
+    render = mod["_render_command_template"]
+
+    with pytest.raises(ValueError, match="missing template placeholders"):
+        render("contextplus search --repo {repo_root} --query {query}", {"repo_root": "/tmp/repo"})
+
+
+def test_timeout_maps_to_timeout_status_not_error():
+    mod = _load_mod()
+    run_once = mod["_run_command_once"]
+
+    result = run_once(
+        argv=[sys.executable, "-c", "import time; time.sleep(0.2)"],
+        cwd=Path.cwd(),
+        timeout_s=0.05,
+    )
+
+    assert result.status == "timeout"
+    assert result.status != "error"
+
+
+def test_raw_log_path_is_tool_trial_task_layout(tmp_path: Path):
+    mod = _load_mod()
+    raw_log_path = mod["_raw_log_path"]
+
+    path = raw_log_path(
+        tmp_path,
+        tool_id="llm-tldr",
+        trial=2,
+        task_id="retrieval:R01",
+    )
+
+    expected = tmp_path / "benchmark" / "runs" / "raw_logs" / "llm-tldr" / "2" / "retrieval:R01.log"
+    assert path == expected
+
+
+def test_segment_filters_limit_prediction_identity_matrix():
+    mod = _load_mod()
+    normalize_filters = mod["_normalize_segment_filters"]
+    apply_filters = mod["_apply_segment_filters"]
+
+    tasks_sorted = [
+        {"task_id": "impact:I01", "category": "impact"},
+        {"task_id": "retrieval:R01", "category": "retrieval"},
+        {"task_id": "slice:S01", "category": "slice"},
+    ]
+    filters = normalize_filters(
+        categories_raw=["retrieval"],
+        task_ids_raw=["impact:I01,retrieval:R01"],
+        trials_raw=["2,1"],
+        budget_tokens_raw=["2000"],
+    )
+
+    selected_tasks, selected_budgets, selected_trials = apply_filters(
+        tasks_sorted=tasks_sorted,
+        budgets=[500, 2000],
+        trials=3,
+        segment_filters=filters,
+    )
+
+    identity_keys = {
+        (str(task["task_id"]), int(budget), int(trial))
+        for task in selected_tasks
+        for budget in selected_budgets
+        for trial in selected_trials
+    }
+
+    assert identity_keys == {
+        ("retrieval:R01", 2000, 1),
+        ("retrieval:R01", 2000, 2),
+    }
+
+
+def test_segment_filter_audit_doc_records_requested_filters():
+    mod = _load_mod()
+    normalize_filters = mod["_normalize_segment_filters"]
+    apply_filters = mod["_apply_segment_filters"]
+    build_audit_doc = mod["_segment_filter_audit_doc"]
+
+    tasks_sorted = [
+        {"task_id": "impact:I01", "category": "impact"},
+        {"task_id": "retrieval:R01", "category": "retrieval"},
+    ]
+    filters = normalize_filters(
+        categories_raw=["impact"],
+        task_ids_raw=["impact:I01"],
+        trials_raw=["3"],
+        budget_tokens_raw=["2000"],
+    )
+    selected_tasks, selected_budgets, selected_trials = apply_filters(
+        tasks_sorted=tasks_sorted,
+        budgets=[500, 2000],
+        trials=3,
+        segment_filters=filters,
+    )
+    audit_doc = build_audit_doc(
+        segment_filters=filters,
+        selected_tasks=selected_tasks,
+        selected_budgets=selected_budgets,
+        selected_trials=selected_trials,
+    )
+
+    assert audit_doc["categories"] == ["impact"]
+    assert audit_doc["task_ids"] == ["impact:I01"]
+    assert audit_doc["trials"] == [3]
+    assert audit_doc["budget_tokens"] == [2000]
+    assert audit_doc["selected_identity_count"] == 1
+
+
+def test_template_values_exposes_retrieval_rg_pattern_placeholder():
+    mod = _load_mod()
+    template_values = mod["_template_values"]
+
+    out = template_values(
+        task={
+            "task_id": "retrieval:R01",
+            "category": "retrieval",
+            "input": {"query": "where", "rg_pattern": r"^def\\s+items_for_result"},
+        },
+        budget_tokens=2000,
+        trial=1,
+        corpus_root=Path("/tmp/repo"),
+        retrieval_top_k=10,
+    )
+
+    assert out["rg_pattern"] == r"^def\\s+items_for_result"
+
+
+def test_validate_tool_profile_rejects_blank_feature_set_id():
+    mod = _load_mod()
+    validate_profile = mod["_validate_tool_profile"]
+
+    errors = validate_profile(
+        {
+            "schema_version": 1,
+            "suite_id": "h2h_llm_tldr_vs_contextplus_v1",
+            "tool_id": "llm-tldr",
+            "feature_set_id": "   ",
+            "capabilities": {
+                "retrieval": True,
+                "impact": False,
+                "slice": False,
+                "complexity": False,
+                "data_flow": False,
+            },
+            "commands": {
+                "retrieval": {"template": "uv run tldrf semantic search \"{query}\" --path {repo_root}"}
+            },
+        },
+        "h2h_llm_tldr_vs_contextplus_v1",
+    )
+
+    assert any("feature_set_id" in e for e in errors)
+
+
+def test_parse_retrieval_result_accepts_list_of_objects():
+    mod = _load_mod()
+    parse_retrieval = mod["_parse_retrieval_result"]
+
+    parsed = [
+        {"file": "django/core/handlers/base.py", "score": 0.91},
+        {"path": "django/core/handlers/wsgi.py", "score": 0.73},
+    ]
+    out = parse_retrieval("", parsed)
+
+    assert out == {
+        "ranked_files": [
+            "django/core/handlers/base.py",
+            "django/core/handlers/wsgi.py",
+        ]
+    }
+
+
+def test_enforce_result_payload_caps_trims_retrieval_tail_to_fit_budget():
+    mod = _load_mod()
+    enforce_caps = mod["_enforce_result_payload_caps"]
+
+    result = {"ranked_files": [f"pkg/module_{i}.py" for i in range(64)]}
+    capped, tokens, _bytes = enforce_caps(
+        category="retrieval",
+        result=result,
+        budget_tokens=15,
+        max_payload_tokens_hard=5000,
+        max_payload_bytes_hard=65536,
+    )
+
+    assert tokens <= 15
+    assert isinstance(capped.get("ranked_files"), list)
+    assert len(capped["ranked_files"]) < len(result["ranked_files"])
+
+
+def test_failure_class_marks_semantic_index_missing_as_preflight():
+    mod = _load_mod()
+    failure_class = mod["_failure_class"]
+
+    out = failure_class(
+        "error",
+        "Error: Semantic index not found at /tmp/.tldr/cache/semantic/index.faiss",
+    )
+    assert out == "preflight_semantic_index_missing"
+
+
+@pytest.mark.skipif(shutil.which("rg") is None, reason="rg (ripgrep) not installed")
+def test_retrieval_rg_pattern_guard_forces_empty_when_pattern_has_zero_hits(tmp_path: Path):
+    mod = _load_mod()
+    apply_guard = mod["_apply_retrieval_rg_pattern_guard"]
+
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "module.py").write_text("value = 1\n", encoding="utf-8")
+
+    task = {
+        "task_id": "retrieval:RZ00",
+        "category": "retrieval",
+        "input": {"rg_pattern": "needle_that_does_not_exist"},
+    }
+    out = apply_guard(
+        task=task,
+        corpus_root=tmp_path,
+        result={"ranked_files": ["pkg/module.py"]},
+        pattern_hit_cache={},
+    )
+
+    assert out == {"ranked_files": []}
+
+
+@pytest.mark.skipif(shutil.which("rg") is None, reason="rg (ripgrep) not installed")
+def test_retrieval_rg_pattern_guard_keeps_result_when_pattern_has_hits(tmp_path: Path):
+    mod = _load_mod()
+    apply_guard = mod["_apply_retrieval_rg_pattern_guard"]
+
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "module.py").write_text("needle_present = True\n", encoding="utf-8")
+
+    task = {
+        "task_id": "retrieval:RP01",
+        "category": "retrieval",
+        "input": {"rg_pattern": "needle_present"},
+    }
+    result = {"ranked_files": ["pkg/module.py"]}
+    out = apply_guard(
+        task=task,
+        corpus_root=tmp_path,
+        result=result,
+        pattern_hit_cache={},
+    )
+
+    assert out == result
+
+
+def test_parse_data_flow_result_dfg_edges_for_target_variable():
+    mod = _load_mod()
+    parse_data_flow = mod["_parse_data_flow_result"]
+
+    parsed = {
+        "refs": [
+            {"name": "target", "type": "definition", "line": 8},
+            {"name": "target", "type": "use", "line": 14},
+            {"name": "other", "type": "definition", "line": 2},
+        ],
+        "edges": [
+            {"var": "target", "def_line": 12, "use_line": 16},
+            {"var": "target", "def_line": 10, "use_line": 14},
+            {"var": "other", "def_line": 2, "use_line": 3},
+        ],
+        "variables": ["target", "other"],
+    }
+
+    out = parse_data_flow(parsed, variable="target")
+    assert out == {
+        "origin_line": 10,
+        "flow_lines": [8, 10, 12, 14, 16],
+    }
+
+
+def test_parse_data_flow_result_refs_fallback_when_no_matching_edges():
+    mod = _load_mod()
+    parse_data_flow = mod["_parse_data_flow_result"]
+
+    parsed = {
+        "refs": [
+            {"name": "token", "type": "definition", "line": 11},
+            {"name": "token", "type": "definition", "line": 9},
+            {"name": "token", "type": "use", "line": 20},
+            {"name": "other", "type": "definition", "line": 1},
+        ],
+        "edges": [
+            {"var": "other", "def_line": 1, "use_line": 3},
+        ],
+        "variables": ["token", "other"],
+    }
+
+    out = parse_data_flow(parsed, variable="token")
+    assert out == {
+        "origin_line": 9,
+        "flow_lines": [9, 11, 20],
+    }
+
+
+def test_result_from_output_data_flow_uses_task_variable_filter():
+    mod = _load_mod()
+    result_from_output = mod["_result_from_output"]
+
+    payload = {
+        "refs": [
+            {"name": "needle", "type": "definition", "line": 28},
+            {"name": "needle", "type": "use", "line": 35},
+            {"name": "other", "type": "definition", "line": 5},
+        ],
+        "edges": [
+            {"var": "needle", "def_line": 30, "use_line": 33},
+            {"var": "other", "def_line": 5, "use_line": 6},
+        ],
+        "variables": ["needle", "other"],
+    }
+    task = {"category": "data_flow", "input": {"variable": "needle"}}
+
+    out = result_from_output("data_flow", json.dumps(payload), task=task)
+    assert out == {
+        "origin_line": 30,
+        "flow_lines": [28, 30, 33, 35],
+    }
+
+
+def test_parse_data_flow_result_legacy_flow_schema_still_works():
+    mod = _load_mod()
+    parse_data_flow = mod["_parse_data_flow_result"]
+
+    out = parse_data_flow({"origin_line": 41, "flow_lines": [44, 41, 44]}, variable="ignored")
+    assert out == {"origin_line": 41, "flow_lines": [41, 44]}
+
+    out2 = parse_data_flow(
+        {
+            "flow": [
+                {"line": 52, "event": "used"},
+                {"line": 51, "event": "defined"},
+                {"line": 50, "event": "defined"},
+            ]
+        },
+        variable="ignored",
+    )
+    assert out2 == {"origin_line": 50, "flow_lines": [50, 51, 52]}

@@ -587,6 +587,7 @@ def query_daemon(
     index_ctx: IndexContext | None = None,
     cache_root: Path | None = None,
     index_id: str | None = None,
+    timeout: float | None = None,
 ) -> dict:
     """
     Send a command to the daemon and get the response.
@@ -620,6 +621,8 @@ def query_daemon(
         index_id=index_id,
     )
     client = _create_client_socket(identity)
+    if timeout is not None:
+        client.settimeout(timeout)
     try:
         client.sendall(json.dumps(command).encode() + b"\n")
         return _recv_json_line(client)

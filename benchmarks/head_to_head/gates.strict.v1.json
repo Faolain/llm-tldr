@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "suite_id": "h2h_llm_tldr_vs_contextplus_v1",
+  "primary_budget": 2000,
+  "winner": {
+    "must_equal": "label_a"
+  },
+  "run_validity": {
+    "max_timeout_rate": 0.02,
+    "max_error_rate": 0.01,
+    "max_budget_violation_rate": 0.0
+  },
+  "margin": {
+    "mrr_mean_delta_min": 0.05,
+    "recall@5_mean_delta_min": 0.08,
+    "precision@5_mean_delta_min": 0.05
+  },
+  "efficiency": {
+    "max_payload_tokens_median_ratio": 0.9,
+    "max_latency_ms_p50_ratio": 1.1
+  },
+  "stability": {
+    "required_runs": 3,
+    "min_pass_runs": 2
+  }
+}

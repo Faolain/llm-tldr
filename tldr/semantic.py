@@ -13,12 +13,17 @@ and FAISS for fast vector similarity search.
 """
 
 import json
+import hashlib
 import logging
 import os
+import re
+import subprocess
 import sys
+import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
+from statistics import median
 from typing import List, Optional, Dict, Any
 
 logger = logging.getLogger("tldr.semantic")
@@ -52,6 +57,68 @@ SUPPORTED_MODELS = {
 }
 
 DEFAULT_MODEL = "bge-large-en-v1.5"
+
+LANE3_REFERENCE_BUDGET_TOKENS = 2000
+LANE3_MAX_EFFECTIVE_K_MULTIPLIER = 5
+LANE4_SCHEMA_VERSION = 1
+LANE4_FEATURE_SET_ID = "feature.compound-semantic-impact.v1"
+LANE4_IMPACT_DEFAULT_DEPTH = 3
+LANE4_IMPACT_DEFAULT_LIMIT = 3
+LANE5_SCHEMA_VERSION = 1
+LANE5_FEATURE_SET_ID = "feature.navigate-cluster.v1"
+LANE5_DEFAULT_CLUSTER_COUNT = 5
+LANE5_DEFAULT_CLUSTER_MIN_SIZE = 1
+LANE5_DEFAULT_CLUSTER_MAX_MEMBERS = 5
+LANE5_CLUSTER_LABEL_MODES = {"auto", "file", "symbol"}
+LANE5_TOKEN_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "api",
+    "app",
+    "bin",
+    "c",
+    "cc",
+    "cpp",
+    "file",
+    "for",
+    "go",
+    "h",
+    "hpp",
+    "in",
+    "index",
+    "init",
+    "is",
+    "java",
+    "js",
+    "lib",
+    "main",
+    "of",
+    "on",
+    "or",
+    "pkg",
+    "py",
+    "rs",
+    "src",
+    "test",
+    "to",
+    "ts",
+    "tsx",
+}
+LANE4_CALL_GRAPH_LANGUAGES = {"python", "typescript", "go", "rust", "java", "c", "php"}
+LANE4_EXTENSION_TO_CALL_GRAPH_LANGUAGE = {
+    ".py": "python",
+    ".ts": "typescript",
+    ".tsx": "typescript",
+    ".js": "typescript",
+    ".jsx": "typescript",
+    ".go": "go",
+    ".rs": "rust",
+    ".java": "java",
+    ".c": "c",
+    ".h": "c",
+    ".php": "php",
+}
 
 # Project root markers - files that indicate a project root
 PROJECT_ROOT_MARKERS = [".git", "pyproject.toml", "package.json", "Cargo.toml", "go.mod", ".tldr"]
@@ -137,6 +204,14 @@ class EmbeddingUnit:
 MODEL_NAME = "BAAI/bge-large-en-v1.5"  # Legacy, use SUPPORTED_MODELS
 
 
+def _resolve_hf_model_name(model_name: Optional[str]) -> str:
+    if model_name is None:
+        model_name = DEFAULT_MODEL
+    if model_name in SUPPORTED_MODELS:
+        return SUPPORTED_MODELS[model_name]["hf_name"]
+    return model_name
+
+
 def _canonical_model_id(model_name: Optional[str]) -> Optional[str]:
     if model_name is None:
         return None
@@ -195,7 +270,7 @@ def _confirm_download(model_key: str) -> bool:
 
 
 def _get_device() -> str:
-    """Determine inference device, defaulting to CPU on macOS for stability."""
+    """Determine inference device, honoring TLDR_DEVICE override."""
     env_device = os.environ.get("TLDR_DEVICE")
     if env_device:
         return env_device
@@ -204,12 +279,11 @@ def _get_device() -> str:
         import torch
         if torch.cuda.is_available():
             return "cuda"
+        mps_backend = getattr(torch.backends, "mps", None)
+        if mps_backend is not None and mps_backend.is_available():
+            return "mps"
     except Exception:
         pass
-
-    # If MPS fallback enabled, prefer CPU for stability on macOS
-    if sys.platform == "darwin" and os.environ.get("PYTORCH_ENABLE_MPS_FALLBACK") == "1":
-        return "cpu"
 
     return "cpu"
 
@@ -230,15 +304,7 @@ def get_model(model_name: Optional[str] = None, device: Optional[str] = None):
     global _model, _model_name, _model_device
 
     # Resolve model name
-    if model_name is None:
-        model_name = DEFAULT_MODEL
-
-    # Get HuggingFace name
-    if model_name in SUPPORTED_MODELS:
-        hf_name = SUPPORTED_MODELS[model_name]["hf_name"]
-    else:
-        # Allow arbitrary HuggingFace model names
-        hf_name = model_name
+    hf_name = _resolve_hf_model_name(model_name)
 
     if device is None:
         device = _get_device()
@@ -1278,7 +1344,7 @@ def build_semantic_index(
     return len(units)
 
 
-def semantic_search(
+def _semantic_unit_search(
     project_path: str,
     query: str,
     k: int = 5,
@@ -1387,3 +1453,1893 @@ def semantic_search(
         results.append(result)
 
     return results
+
+
+def _dedupe_preserve(values: List[str]) -> List[str]:
+    seen: set[str] = set()
+    out: List[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        out.append(value)
+    return out
+
+
+def _rg_rank_files(
+    repo_root: Path,
+    *,
+    pattern: str,
+    glob: Optional[str],
+    fixed_string: bool,
+) -> List[str]:
+    """Rank files by lexical match density + earliest hit line (deterministic)."""
+    normalized_pattern = str(pattern or "").strip()
+    if not normalized_pattern:
+        return []
+
+    cmd = ["rg", "-n", "--no-messages"]
+    if fixed_string:
+        cmd.append("--fixed-strings")
+    if glob:
+        cmd.extend(["--glob", glob])
+    cmd.append(normalized_pattern)
+    cmd.append(".")
+
+    proc = subprocess.run(
+        cmd,
+        cwd=str(repo_root),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode not in (0, 1):  # 1 = no matches
+        stderr = (proc.stderr or "").strip()
+        raise RuntimeError(f"rg failed (rc={proc.returncode}): {stderr}")
+
+    hits_by_file: dict[str, dict[str, int]] = {}
+    for line in (proc.stdout or "").splitlines():
+        parts = line.split(":", 2)
+        if len(parts) != 3:
+            continue
+        file_path, line_s, _ = parts
+        if file_path.startswith("./"):
+            file_path = file_path[2:]
+        file_path = file_path.replace("\\", "/")
+        try:
+            line_no = int(line_s)
+        except ValueError:
+            continue
+        info = hits_by_file.setdefault(file_path, {"hits": 0, "min_line": line_no})
+        info["hits"] += 1
+        if line_no < info["min_line"]:
+            info["min_line"] = line_no
+
+    ranked = sorted(
+        hits_by_file.items(),
+        key=lambda kv: (-kv[1]["hits"], kv[1]["min_line"], kv[0]),
+    )
+    return [file_path for file_path, _ in ranked]
+
+
+def _semantic_files_from_results(results: List[dict]) -> List[str]:
+    ranked: List[str] = []
+    for item in results or []:
+        if not isinstance(item, dict):
+            continue
+        file_path = item.get("file") or item.get("path")
+        if not isinstance(file_path, str):
+            continue
+        if file_path.startswith("./"):
+            file_path = file_path[2:]
+        ranked.append(file_path.replace("\\", "/"))
+    return _dedupe_preserve(ranked)
+
+
+def _rrf_file_scores(rankings: List[List[str]], *, rrf_k: int = 60) -> dict[str, float]:
+    k = int(rrf_k)
+    if k <= 0:
+        k = 60
+    scores: dict[str, float] = {}
+    for ranking in rankings:
+        for rank, file_path in enumerate(ranking, start=1):
+            scores[file_path] = scores.get(file_path, 0.0) + (1.0 / float(k + rank))
+    return scores
+
+
+def _rrf_fuse_file_rankings(rankings: List[List[str]], *, rrf_k: int = 60) -> List[str]:
+    """Deterministic RRF fuse: score desc, then filepath asc for ties."""
+    scores = _rrf_file_scores(rankings, rrf_k=rrf_k)
+    fused = sorted(scores.items(), key=lambda kv: (-kv[1], kv[0]))
+    return [file_path for file_path, _ in fused]
+
+
+def _safe_float(value: Any) -> Optional[float]:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_int(value: Any) -> Optional[int]:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _effective_k_from_budget_tokens(
+    k: Any,
+    *,
+    budget_tokens: Any,
+    reference_budget_tokens: int = LANE3_REFERENCE_BUDGET_TOKENS,
+) -> int:
+    """Deterministically map budget_tokens to an effective retrieval k.
+
+    - Reference budget (2000) preserves the requested k.
+    - Invalid/non-positive budgets safely fall back to the requested k.
+    - Result is clamped to [1, requested_k * LANE3_MAX_EFFECTIVE_K_MULTIPLIER].
+    """
+    requested_k = _safe_int(k)
+    if requested_k is None or requested_k <= 0:
+        requested_k = 1
+
+    budget = _safe_int(budget_tokens)
+    if budget is None or budget <= 0:
+        return int(requested_k)
+
+    reference = _safe_int(reference_budget_tokens)
+    if reference is None or reference <= 0:
+        reference = LANE3_REFERENCE_BUDGET_TOKENS
+
+    # Integer half-up rounding avoids platform-dependent float edge cases.
+    scaled = int(((requested_k * budget) + (reference // 2)) // reference)
+    max_k = max(int(requested_k), int(requested_k) * LANE3_MAX_EFFECTIVE_K_MULTIPLIER)
+    return max(1, min(max_k, scaled))
+
+
+def _semantic_file_scores(results: List[dict]) -> dict[str, float]:
+    out: dict[str, float] = {}
+    for item in results or []:
+        if not isinstance(item, dict):
+            continue
+        file_path = item.get("file") or item.get("path")
+        score = _safe_float(item.get("score"))
+        if not isinstance(file_path, str) or score is None:
+            continue
+        if file_path.startswith("./"):
+            file_path = file_path[2:]
+        normalized = file_path.replace("\\", "/")
+        prev = out.get(normalized)
+        if prev is None or score > prev:
+            out[normalized] = float(score)
+    return out
+
+
+def _lane2_ratio(value: Any) -> Optional[float]:
+    ratio = _safe_float(value)
+    if ratio is None or ratio <= 0:
+        return None
+    return float(ratio)
+
+
+def _approx_token_count(text: str) -> int:
+    normalized = (
+        str(text or "")
+        .replace("{", " ")
+        .replace("}", " ")
+        .replace("[", " ")
+        .replace("]", " ")
+        .replace(":", " ")
+        .replace(",", " ")
+        .replace('"', " ")
+    )
+    return len(normalized.split())
+
+
+def _row_payload_tokens(row: dict) -> int:
+    try:
+        payload = json.dumps(row, sort_keys=True, separators=(",", ":"))
+    except Exception:
+        payload = str(row)
+    return _approx_token_count(payload)
+
+
+def _lane2_confidence(row: dict, *, rank: int, top_score: Optional[float]) -> float:
+    semantic_score = _safe_float(row.get("semantic_score"))
+    score = _safe_float(row.get("score"))
+
+    if semantic_score is not None and -1.0 <= semantic_score <= 1.0:
+        # Prefer semantic similarity for confidence so abstention can reflect
+        # genuine relevance instead of always-normalized rank-based scores.
+        base = (semantic_score + 1.0) / 2.0
+    elif score is not None and -1.0 <= score <= 1.0:
+        base = (score + 1.0) / 2.0
+    elif score is not None and top_score is not None and top_score > 0:
+        base = score / top_score
+    else:
+        base = 1.0 / float(max(1, rank))
+
+    source_ranks = row.get("source_ranks")
+    if isinstance(source_ranks, dict):
+        if source_ranks.get("lexical") is not None and source_ranks.get("semantic") is not None:
+            base += 0.05
+
+    return max(0.0, min(1.0, float(base)))
+
+
+def _lane2_row_sort_key(row: dict) -> tuple[str, str]:
+    file_path = row.get("file") or row.get("path") or ""
+    symbol = row.get("qualified_name") or row.get("name") or ""
+    return (str(file_path), str(symbol))
+
+
+def _lane2_postprocess(
+    rows: List[dict],
+    *,
+    query: str,
+    rerank: bool = False,
+    rerank_top_n: int = 5,
+    max_latency_ms_p50_ratio: Optional[float] = None,
+    max_payload_tokens_median_ratio: Optional[float] = None,
+) -> List[dict]:
+    if not rows:
+        return []
+
+    out: List[dict] = [dict(row) for row in rows if isinstance(row, dict)]
+    if not out:
+        return []
+
+    scores = [_safe_float(row.get("score")) for row in out]
+    positive_scores = [score for score in scores if score is not None and score > 0]
+    top_score = max(positive_scores) if positive_scores else None
+
+    for rank, row in enumerate(out, start=1):
+        row["confidence"] = _lane2_confidence(row, rank=rank, top_score=top_score)
+
+    rerank_applied = bool(rerank)
+    if rerank_applied:
+        try:
+            top_n = int(rerank_top_n)
+        except (TypeError, ValueError):
+            top_n = len(out)
+        if top_n <= 0:
+            top_n = len(out)
+        top_n = min(len(out), max(1, top_n))
+        head = sorted(
+            out[:top_n],
+            key=lambda row: (-float(row.get("confidence", 0.0)), *_lane2_row_sort_key(row)),
+        )
+        out = head + out[top_n:]
+
+    for rank, row in enumerate(out, start=1):
+        row["rank"] = int(rank)
+
+    query_tokens = max(1, _approx_token_count(query))
+    latency_ms_p50 = float(query_tokens * max(1, len(out)))
+    payload_tokens_median = float(median([_row_payload_tokens(row) for row in out]))
+    latency_bound = _lane2_ratio(max_latency_ms_p50_ratio)
+    payload_bound = _lane2_ratio(max_payload_tokens_median_ratio)
+
+    for row in out:
+        row["rerank_applied"] = rerank_applied
+        row["latency_ms_p50"] = latency_ms_p50
+        row["payload_tokens_median"] = payload_tokens_median
+        if latency_bound is not None:
+            row["max_latency_ms_p50_ratio"] = latency_bound
+        if payload_bound is not None:
+            row["max_payload_tokens_median_ratio"] = payload_bound
+
+    return out
+
+
+def _lane2_apply_abstention(
+    rows: List[dict],
+    *,
+    abstain_threshold: Optional[float],
+    abstain_empty: bool,
+) -> List[dict]:
+    threshold = _safe_float(abstain_threshold)
+    if threshold is None or threshold <= 0.0 or not rows:
+        return rows
+    threshold = min(float(threshold), 1.0)
+
+    top_confidence = _safe_float(rows[0].get("confidence"))
+    should_abstain = top_confidence is not None and top_confidence < threshold
+
+    for row in rows:
+        row["abstain_threshold"] = threshold
+        row["abstained"] = bool(should_abstain)
+
+    if should_abstain and bool(abstain_empty):
+        return []
+    return rows
+
+
+def _lane4_normalize_call_graph_language(language: Any) -> Optional[str]:
+    if not isinstance(language, str):
+        return None
+    normalized = language.strip().lower()
+    if not normalized:
+        return None
+    if normalized == "javascript":
+        normalized = "typescript"
+    if normalized in LANE4_CALL_GRAPH_LANGUAGES:
+        return normalized
+    return None
+
+
+def _lane4_languages_from_semantic_rows(
+    semantic_rows: List[dict],
+    *,
+    impact_language: Optional[str],
+) -> List[str]:
+    normalized_impact = _lane4_normalize_call_graph_language(impact_language)
+    impact_mode = str(impact_language or "auto").strip().lower()
+    if normalized_impact is not None:
+        return [normalized_impact]
+    if impact_mode == "all":
+        return sorted(LANE4_CALL_GRAPH_LANGUAGES)
+
+    languages: set[str] = set()
+    for row in semantic_rows:
+        if not isinstance(row, dict):
+            continue
+        from_row = _lane4_normalize_call_graph_language(row.get("language"))
+        if from_row is not None:
+            languages.add(from_row)
+            continue
+        file_path = row.get("file")
+        if not isinstance(file_path, str):
+            continue
+        suffix = Path(file_path).suffix.lower()
+        from_suffix = LANE4_EXTENSION_TO_CALL_GRAPH_LANGUAGE.get(suffix)
+        normalized_suffix = _lane4_normalize_call_graph_language(from_suffix)
+        if normalized_suffix is not None:
+            languages.add(normalized_suffix)
+
+    return sorted(languages)
+
+
+def _lane4_target_aliases(row: dict) -> List[str]:
+    aliases: List[str] = []
+    for key in ("qualified_name", "name"):
+        value = row.get(key)
+        if not isinstance(value, str):
+            continue
+        normalized = value.strip()
+        if normalized:
+            aliases.append(normalized)
+
+    expanded: List[str] = []
+    for alias in aliases:
+        expanded.append(alias)
+        for separator in ("::", "."):
+            if separator in alias:
+                expanded.append(alias.rsplit(separator, 1)[-1])
+
+    return _dedupe_preserve(expanded)
+
+
+def _lane4_impact_targets(
+    semantic_rows: List[dict],
+    *,
+    impact_limit: Optional[int],
+) -> tuple[List[dict], List[dict]]:
+    limit = _safe_int(impact_limit)
+    if limit is None:
+        limit = LANE4_IMPACT_DEFAULT_LIMIT
+    limit = max(0, int(limit))
+
+    targets: List[dict] = []
+    partial_failures: List[dict] = []
+    seen_keys: set[tuple[Optional[str], str]] = set()
+
+    for row_index, row in enumerate(semantic_rows, start=1):
+        if len(targets) >= limit:
+            break
+        if not isinstance(row, dict):
+            partial_failures.append(
+                {
+                    "stage": "target_selection",
+                    "row_index": row_index,
+                    "reason": "invalid_semantic_row",
+                    "message": "semantic row is not an object",
+                }
+            )
+            continue
+
+        file_path = row.get("file")
+        normalized_file = file_path if isinstance(file_path, str) and file_path else None
+        aliases = _lane4_target_aliases(row)
+        if not aliases:
+            partial_failures.append(
+                {
+                    "stage": "target_selection",
+                    "row_index": row_index,
+                    "file": normalized_file,
+                    "reason": "missing_symbol",
+                    "message": "semantic row does not include a function or method name",
+                }
+            )
+            continue
+
+        dedupe_key = (normalized_file, aliases[0])
+        if dedupe_key in seen_keys:
+            continue
+        seen_keys.add(dedupe_key)
+
+        targets.append(
+            {
+                "row_index": row_index,
+                "file": normalized_file,
+                "aliases": aliases,
+            }
+        )
+
+    return targets, partial_failures
+
+
+def _lane4_symbol_from_row(row: dict) -> dict:
+    name = row.get("name")
+    qualified_name = row.get("qualified_name")
+    if not isinstance(name, str):
+        name = None
+    if not isinstance(qualified_name, str):
+        qualified_name = None
+    line = row.get("line")
+    if not isinstance(line, int):
+        line = None
+    unit_type = row.get("unit_type")
+    if not isinstance(unit_type, str):
+        unit_type = None
+    return {
+        "name": name,
+        "qualified_name": qualified_name,
+        "line": line,
+        "unit_type": unit_type,
+    }
+
+
+def _lane4_build_result_row(row: dict, *, rank: int) -> dict:
+    file_path = row.get("file")
+    if not isinstance(file_path, str):
+        file_path = None
+
+    retrieval: dict[str, Any] = {
+        "score": _safe_float(row.get("score")),
+        "semantic_score": _safe_float(row.get("semantic_score")),
+    }
+    source_ranks = row.get("source_ranks")
+    if isinstance(source_ranks, dict):
+        retrieval["source_ranks"] = source_ranks
+    confidence = _safe_float(row.get("confidence"))
+    if confidence is not None:
+        retrieval["confidence"] = confidence
+
+    return {
+        "rank": int(rank),
+        "file": file_path,
+        "symbol": _lane4_symbol_from_row(row),
+        "retrieval": retrieval,
+        "impact": {
+            "status": "skipped",
+            "latency_ms": None,
+            "caller_count": 0,
+            "truncated": None,
+            "callers": [],
+            "error_code": "not_selected",
+            "message": "not selected for impact analysis",
+        },
+    }
+
+
+def _lane4_collect_callers(node: dict, *, depth: int, out: List[dict]) -> bool:
+    truncated = bool(node.get("truncated"))
+    callers = node.get("callers")
+    if not isinstance(callers, list):
+        return truncated
+    for caller in callers:
+        if not isinstance(caller, dict):
+            continue
+        file_path = caller.get("file")
+        function = caller.get("function")
+        if isinstance(file_path, str) and isinstance(function, str):
+            out.append(
+                {
+                    "file": file_path,
+                    "function": function,
+                    "line": caller.get("line") if isinstance(caller.get("line"), int) else None,
+                    "depth": int(depth),
+                }
+            )
+        if _lane4_collect_callers(caller, depth=depth + 1, out=out):
+            truncated = True
+    return truncated
+
+
+def _lane4_extract_callers(payload: dict) -> tuple[List[dict], bool]:
+    targets = payload.get("targets") if isinstance(payload, dict) else None
+    if not isinstance(targets, dict):
+        return ([], False)
+
+    callers: List[dict] = []
+    truncated = False
+    for _, node in sorted(targets.items(), key=lambda item: str(item[0])):
+        if not isinstance(node, dict):
+            continue
+        if _lane4_collect_callers(node, depth=1, out=callers):
+            truncated = True
+
+    deduped: List[dict] = []
+    seen: set[tuple[int, str, str, Optional[int]]] = set()
+    for caller in sorted(
+        callers,
+        key=lambda c: (int(c.get("depth", 0)), str(c.get("file")), str(c.get("function")), str(c.get("line"))),
+    ):
+        key = (
+            int(caller.get("depth", 0)),
+            str(caller.get("file")),
+            str(caller.get("function")),
+            caller.get("line") if isinstance(caller.get("line"), int) else None,
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(caller)
+    return (deduped, truncated)
+
+
+def _lane4_partial_failure(
+    *,
+    stage: str,
+    code: str,
+    message: str,
+    rank: Optional[int] = None,
+    file_path: Optional[str] = None,
+    symbol: Optional[str] = None,
+    recoverable: bool = True,
+    latency_ms: Optional[float] = None,
+) -> dict:
+    out: dict[str, Any] = {
+        "stage": str(stage),
+        "code": str(code),
+        "message": str(message),
+        "recoverable": bool(recoverable),
+    }
+    if isinstance(rank, int):
+        out["rank"] = int(rank)
+    if isinstance(file_path, str):
+        out["file"] = file_path
+    if isinstance(symbol, str):
+        out["symbol"] = symbol
+    if latency_ms is not None:
+        out["latency_ms"] = float(latency_ms)
+    return out
+
+
+def _lane5_normalize_label_mode(label_mode: Any) -> str:
+    mode = str(label_mode or "auto").strip().lower()
+    if mode not in LANE5_CLUSTER_LABEL_MODES:
+        return "auto"
+    return mode
+
+
+def _lane5_tokens(value: Any) -> List[str]:
+    if not isinstance(value, str):
+        return []
+    pieces = re.split(r"[^A-Za-z0-9]+", value.strip().lower())
+    tokens: List[str] = []
+    for piece in pieces:
+        if len(piece) < 2:
+            continue
+        if piece in LANE5_TOKEN_STOPWORDS:
+            continue
+        tokens.append(piece)
+    return _dedupe_preserve(tokens)
+
+
+def _lane5_file_tokens(file_path: Any) -> List[str]:
+    if not isinstance(file_path, str):
+        return []
+    normalized = file_path.replace("\\", "/")
+    if normalized.startswith("./"):
+        normalized = normalized[2:]
+    tokens: List[str] = []
+    for segment in normalized.split("/"):
+        tokens.extend(_lane5_tokens(segment))
+    return _dedupe_preserve(tokens)
+
+
+def _lane5_symbol_tokens(row: dict) -> List[str]:
+    values: List[str] = []
+    for key in ("qualified_name", "name"):
+        value = row.get(key)
+        if isinstance(value, str) and value.strip():
+            values.append(value)
+    tokens: List[str] = []
+    for value in values:
+        tokens.extend(_lane5_tokens(value))
+    return _dedupe_preserve(tokens)
+
+
+def _lane5_member_sort_key(member: dict) -> tuple[int, str, str, str]:
+    return (
+        int(member.get("rank", 0)),
+        str(member.get("file") or ""),
+        str(member.get("qualified_name") or member.get("name") or ""),
+        str(member.get("line") if isinstance(member.get("line"), int) else ""),
+    )
+
+
+def _lane5_cluster_anchor_key(cluster: dict) -> tuple[int, str, str]:
+    members = cluster.get("members")
+    if not isinstance(members, list) or not members:
+        return (0, "", "")
+    first = min(
+        (member for member in members if isinstance(member, dict)),
+        key=_lane5_member_sort_key,
+        default={},
+    )
+    return (
+        int(first.get("rank", 0)),
+        str(first.get("file") or ""),
+        str(first.get("qualified_name") or first.get("name") or ""),
+    )
+
+
+def _lane5_overlap_signature(
+    *,
+    lhs_file: set[str],
+    lhs_symbol: set[str],
+    lhs_all: set[str],
+    rhs_file: set[str],
+    rhs_symbol: set[str],
+    rhs_all: set[str],
+) -> tuple[int, int, int, int]:
+    file_overlap = len(lhs_file.intersection(rhs_file))
+    symbol_overlap = len(lhs_symbol.intersection(rhs_symbol))
+    any_overlap = len(lhs_all.intersection(rhs_all))
+    total = file_overlap + symbol_overlap + any_overlap
+    return (int(total), int(file_overlap), int(symbol_overlap), int(any_overlap))
+
+
+def _lane5_cluster_pair_overlap(lhs: dict, rhs: dict) -> tuple[int, int, int, int]:
+    return _lane5_overlap_signature(
+        lhs_file=set(lhs.get("tokens_file", set())),
+        lhs_symbol=set(lhs.get("tokens_symbol", set())),
+        lhs_all=set(lhs.get("tokens_all", set())),
+        rhs_file=set(rhs.get("tokens_file", set())),
+        rhs_symbol=set(rhs.get("tokens_symbol", set())),
+        rhs_all=set(rhs.get("tokens_all", set())),
+    )
+
+
+def _lane5_merge_clusters(dst: dict, src: dict) -> None:
+    dst_members = dst.get("members")
+    src_members = src.get("members")
+    if not isinstance(dst_members, list) or not isinstance(src_members, list):
+        return
+    dst_members.extend(member for member in src_members if isinstance(member, dict))
+    dst["tokens_file"] = set(dst.get("tokens_file", set())).union(set(src.get("tokens_file", set())))
+    dst["tokens_symbol"] = set(dst.get("tokens_symbol", set())).union(
+        set(src.get("tokens_symbol", set()))
+    )
+    dst["tokens_all"] = set(dst.get("tokens_all", set())).union(set(src.get("tokens_all", set())))
+
+
+def _lane5_row_identity(member: dict) -> str:
+    symbol = member.get("qualified_name") or member.get("name") or ""
+    line = member.get("line") if isinstance(member.get("line"), int) else ""
+    return (
+        f"{member.get('row_id') or ''}|{member.get('file') or ''}|"
+        f"{symbol}|{line}|{member.get('rank') or ''}"
+    )
+
+
+def _lane5_cluster_id(cluster: dict) -> str:
+    members = cluster.get("members")
+    if not isinstance(members, list):
+        return "cluster-000000000000"
+    identities = [
+        _lane5_row_identity(member)
+        for member in members
+        if isinstance(member, dict)
+    ]
+    payload = "|".join(sorted(identities))
+    digest = hashlib.sha1(payload.encode("utf-8")).hexdigest()[:12]
+    return f"cluster-{digest}"
+
+
+def _lane5_assignment_digest(clusters: List[dict]) -> str:
+    rows: List[str] = []
+    for cluster in clusters:
+        if not isinstance(cluster, dict):
+            continue
+        cluster_id = str(cluster.get("cluster_id") or "")
+        members = cluster.get("members")
+        if not isinstance(members, list):
+            rows.append(cluster_id)
+            continue
+        member_rows: List[str] = []
+        for member in members:
+            if not isinstance(member, dict):
+                continue
+            symbol = member.get("symbol")
+            if isinstance(symbol, dict):
+                symbol_name = symbol.get("qualified_name") or symbol.get("name") or ""
+                line = symbol.get("line")
+            else:
+                symbol_name = member.get("qualified_name") or member.get("name") or ""
+                line = member.get("line")
+            member_rows.append(
+                f"{member.get('file') or ''}|{symbol_name}|{line or ''}|{member.get('rank') or ''}"
+            )
+        rows.append(f"{cluster_id}:{'|'.join(sorted(member_rows))}")
+    payload = "||".join(sorted(rows))
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()
+
+
+def _lane5_top_token(token_sets: List[set[str]]) -> Optional[str]:
+    counts: dict[str, int] = {}
+    for token_set in token_sets:
+        for token in sorted(token_set):
+            counts[token] = counts.get(token, 0) + 1
+    if not counts:
+        return None
+    return sorted(counts.items(), key=lambda item: (-int(item[1]), str(item[0])))[0][0]
+
+
+def _lane5_cluster_label(cluster: dict, *, label_mode: str) -> str:
+    members = cluster.get("members")
+    if not isinstance(members, list) or not members:
+        return "cluster"
+
+    first = min(
+        (member for member in members if isinstance(member, dict)),
+        key=_lane5_member_sort_key,
+        default={},
+    )
+    file_token = _lane5_top_token(
+        [
+            set(member.get("tokens_file", set()))
+            for member in members
+            if isinstance(member, dict)
+        ]
+    )
+    symbol_token = _lane5_top_token(
+        [
+            set(member.get("tokens_symbol", set()))
+            for member in members
+            if isinstance(member, dict)
+        ]
+    )
+    first_file = str(first.get("file") or "")
+    first_symbol = str(first.get("qualified_name") or first.get("name") or "")
+
+    mode = _lane5_normalize_label_mode(label_mode)
+    if mode == "file":
+        if isinstance(file_token, str):
+            return file_token
+        if first_file:
+            return Path(first_file).name or first_file
+        return "cluster"
+    if mode == "symbol":
+        if isinstance(symbol_token, str):
+            return symbol_token
+        if first_symbol:
+            return first_symbol
+        if first_file:
+            return Path(first_file).stem or first_file
+        return "cluster"
+
+    # auto
+    if isinstance(file_token, str) and isinstance(symbol_token, str):
+        return f"{file_token}:{symbol_token}"
+    if isinstance(symbol_token, str):
+        return symbol_token
+    if isinstance(file_token, str):
+        return file_token
+    if first_symbol:
+        return first_symbol
+    if first_file:
+        return Path(first_file).name or first_file
+    return "cluster"
+
+
+def _lane5_common_tokens(members: List[dict], field: str) -> List[str]:
+    if not members:
+        return []
+    common: Optional[set[str]] = None
+    for member in members:
+        token_set = set(member.get(field, set()))
+        if common is None:
+            common = token_set
+            continue
+        common = common.intersection(token_set)
+    if common is None:
+        return []
+    return sorted(common)
+
+
+def _lane5_result_row(member: dict) -> dict:
+    retrieval: dict[str, Any] = {
+        "score": _safe_float(member.get("score")),
+        "semantic_score": _safe_float(member.get("semantic_score")),
+    }
+    confidence = _safe_float(member.get("confidence"))
+    if confidence is not None:
+        retrieval["confidence"] = confidence
+    source_ranks = member.get("source_ranks")
+    if isinstance(source_ranks, dict):
+        retrieval["source_ranks"] = source_ranks
+
+    return {
+        "rank": int(member.get("rank", 0)),
+        "file": member.get("file") if isinstance(member.get("file"), str) else None,
+        "symbol": {
+            "name": member.get("name") if isinstance(member.get("name"), str) else None,
+            "qualified_name": (
+                member.get("qualified_name")
+                if isinstance(member.get("qualified_name"), str)
+                else None
+            ),
+            "line": member.get("line") if isinstance(member.get("line"), int) else None,
+            "unit_type": (
+                member.get("unit_type") if isinstance(member.get("unit_type"), str) else None
+            ),
+        },
+        "retrieval": retrieval,
+    }
+
+
+def _lane5_normalize_semantic_rows(rows: List[dict]) -> List[dict]:
+    prepared: List[tuple[int, int, str, str, str, dict]] = []
+    for idx, row in enumerate(rows, start=1):
+        if not isinstance(row, dict):
+            continue
+
+        input_rank = _safe_int(row.get("rank"))
+        if input_rank is None or input_rank <= 0:
+            input_rank = idx
+
+        file_path = row.get("file")
+        if isinstance(file_path, str):
+            file_path = file_path.replace("\\", "/")
+            if file_path.startswith("./"):
+                file_path = file_path[2:]
+        else:
+            file_path = None
+
+        name = row.get("name") if isinstance(row.get("name"), str) else None
+        qualified_name = row.get("qualified_name") if isinstance(row.get("qualified_name"), str) else None
+        line = row.get("line") if isinstance(row.get("line"), int) else None
+        file_tokens = set(_lane5_file_tokens(file_path))
+        symbol_tokens = set(_lane5_symbol_tokens(row))
+        all_tokens = set(file_tokens).union(symbol_tokens)
+
+        member = {
+            "row_id": f"row-{idx:04d}",
+            "rank": int(input_rank),
+            "file": file_path,
+            "name": name,
+            "qualified_name": qualified_name,
+            "line": line,
+            "unit_type": row.get("unit_type") if isinstance(row.get("unit_type"), str) else None,
+            "score": _safe_float(row.get("score")),
+            "semantic_score": _safe_float(row.get("semantic_score")),
+            "confidence": _safe_float(row.get("confidence")),
+            "source_ranks": row.get("source_ranks") if isinstance(row.get("source_ranks"), dict) else None,
+            "tokens_file": file_tokens,
+            "tokens_symbol": symbol_tokens,
+            "tokens_all": all_tokens,
+        }
+        prepared.append(
+            (
+                int(input_rank),
+                idx,
+                str(file_path or ""),
+                str(qualified_name or name or ""),
+                str(line if line is not None else ""),
+                member,
+            )
+        )
+
+    prepared = sorted(prepared, key=lambda item: (item[0], item[1], item[2], item[3], item[4]))
+    out: List[dict] = []
+    for rank, (_, _, _, _, _, member) in enumerate(prepared, start=1):
+        member["rank"] = int(rank)
+        member["row_id"] = f"row-{rank:04d}"
+        out.append(member)
+    return out
+
+
+def _lane5_cluster_rows(
+    members: List[dict],
+    *,
+    cluster_count: Optional[int],
+    cluster_min_size: int,
+) -> List[dict]:
+    clusters: List[dict] = []
+    target_count = _safe_int(cluster_count)
+    if target_count is not None and target_count <= 0:
+        target_count = None
+    min_size = _safe_int(cluster_min_size)
+    if min_size is None or min_size <= 0:
+        min_size = LANE5_DEFAULT_CLUSTER_MIN_SIZE
+
+    for member in members:
+        best_idx: Optional[int] = None
+        best_overlap = (0, 0, 0, 0)
+        for idx, cluster in enumerate(clusters):
+            overlap = _lane5_overlap_signature(
+                lhs_file=set(member.get("tokens_file", set())),
+                lhs_symbol=set(member.get("tokens_symbol", set())),
+                lhs_all=set(member.get("tokens_all", set())),
+                rhs_file=set(cluster.get("tokens_file", set())),
+                rhs_symbol=set(cluster.get("tokens_symbol", set())),
+                rhs_all=set(cluster.get("tokens_all", set())),
+            )
+            if overlap[0] <= 0:
+                continue
+            if best_idx is None or overlap > best_overlap:
+                best_idx = idx
+                best_overlap = overlap
+                continue
+            if overlap == best_overlap:
+                if _lane5_cluster_anchor_key(cluster) < _lane5_cluster_anchor_key(clusters[best_idx]):
+                    best_idx = idx
+                    best_overlap = overlap
+
+        if best_idx is None:
+            if target_count is None or len(clusters) < target_count:
+                clusters.append(
+                    {
+                        "members": [member],
+                        "tokens_file": set(member.get("tokens_file", set())),
+                        "tokens_symbol": set(member.get("tokens_symbol", set())),
+                        "tokens_all": set(member.get("tokens_all", set())),
+                    }
+                )
+                continue
+
+            # Target count reached: deterministically assign by smallest cluster first.
+            fallback_idx = min(
+                range(len(clusters)),
+                key=lambda i: (len(clusters[i].get("members", [])), _lane5_cluster_anchor_key(clusters[i])),
+            )
+            _lane5_merge_clusters(
+                clusters[fallback_idx],
+                {
+                    "members": [member],
+                    "tokens_file": set(member.get("tokens_file", set())),
+                    "tokens_symbol": set(member.get("tokens_symbol", set())),
+                    "tokens_all": set(member.get("tokens_all", set())),
+                },
+            )
+            continue
+
+        _lane5_merge_clusters(
+            clusters[best_idx],
+            {
+                "members": [member],
+                "tokens_file": set(member.get("tokens_file", set())),
+                "tokens_symbol": set(member.get("tokens_symbol", set())),
+                "tokens_all": set(member.get("tokens_all", set())),
+            },
+        )
+
+    if min_size > 1:
+        while len(clusters) > 1:
+            small_indexes = [
+                idx for idx, cluster in enumerate(clusters) if len(cluster.get("members", [])) < min_size
+            ]
+            if not small_indexes:
+                break
+
+            source_idx = min(small_indexes, key=lambda idx: _lane5_cluster_anchor_key(clusters[idx]))
+            source = clusters[source_idx]
+
+            best_target_idx: Optional[int] = None
+            best_overlap = (-1, -1, -1, -1)
+            for idx, candidate in enumerate(clusters):
+                if idx == source_idx:
+                    continue
+                overlap = _lane5_cluster_pair_overlap(source, candidate)
+                if best_target_idx is None or overlap > best_overlap:
+                    best_target_idx = idx
+                    best_overlap = overlap
+                    continue
+                if overlap == best_overlap:
+                    if _lane5_cluster_anchor_key(candidate) < _lane5_cluster_anchor_key(
+                        clusters[best_target_idx]
+                    ):
+                        best_target_idx = idx
+                        best_overlap = overlap
+
+            if best_target_idx is None:
+                break
+
+            _lane5_merge_clusters(clusters[best_target_idx], source)
+            del clusters[source_idx]
+
+    for cluster in clusters:
+        members_sorted = sorted(
+            [
+                member
+                for member in cluster.get("members", [])
+                if isinstance(member, dict)
+            ],
+            key=_lane5_member_sort_key,
+        )
+        cluster["members"] = members_sorted
+
+    return sorted(
+        clusters,
+        key=lambda cluster: (
+            -max(
+                [
+                    float(member.get("score"))
+                    for member in cluster.get("members", [])
+                    if _safe_float(member.get("score")) is not None
+                ]
+                or [0.0]
+            ),
+            _lane5_cluster_anchor_key(cluster),
+        ),
+    )
+
+
+def semantic_navigation_cluster_search(
+    project_path: str,
+    query: str,
+    k: int = 5,
+    *,
+    expand_graph: bool = False,
+    model: Optional[str] = None,
+    device: Optional[str] = None,
+    index_paths=None,
+    index_config=None,
+    retrieval_mode: str = "semantic",
+    no_result_guard: str = "none",
+    rg_pattern: Optional[str] = None,
+    rg_glob: Optional[str] = None,
+    rrf_k: int = 60,
+    abstain_threshold: Optional[float] = None,
+    abstain_empty: bool = False,
+    rerank: bool = False,
+    rerank_top_n: int = 5,
+    max_latency_ms_p50_ratio: Optional[float] = None,
+    max_payload_tokens_median_ratio: Optional[float] = None,
+    budget_tokens: Optional[int] = None,
+    cluster_count: Optional[int] = None,
+    cluster_min_size: int = LANE5_DEFAULT_CLUSTER_MIN_SIZE,
+    cluster_max_members: Optional[int] = LANE5_DEFAULT_CLUSTER_MAX_MEMBERS,
+    cluster_label_mode: str = "auto",
+) -> dict:
+    """Lane5 deterministic semantic navigation/clustering contract."""
+    total_started = time.perf_counter()
+
+    k_requested = _safe_int(k)
+    if k_requested is None or k_requested <= 0:
+        k_requested = 5
+    k_effective = int(k_requested)
+    if budget_tokens is not None:
+        k_effective = _effective_k_from_budget_tokens(k_requested, budget_tokens=budget_tokens)
+
+    requested_cluster_count = _safe_int(cluster_count)
+    if requested_cluster_count is not None and requested_cluster_count <= 0:
+        requested_cluster_count = None
+    requested_min_size = _safe_int(cluster_min_size)
+    if requested_min_size is None or requested_min_size <= 0:
+        requested_min_size = LANE5_DEFAULT_CLUSTER_MIN_SIZE
+    requested_max_members = _safe_int(cluster_max_members)
+    if requested_max_members is None or requested_max_members <= 0:
+        requested_max_members = LANE5_DEFAULT_CLUSTER_MAX_MEMBERS
+    requested_label_mode = _lane5_normalize_label_mode(cluster_label_mode)
+
+    default_cluster_count = min(LANE5_DEFAULT_CLUSTER_COUNT, max(1, int(k_effective)))
+    cluster_count_target = (
+        int(requested_cluster_count)
+        if requested_cluster_count is not None
+        else int(default_cluster_count)
+    )
+
+    semantic_started = time.perf_counter()
+    try:
+        semantic_rows = semantic_search(
+            project_path,
+            query,
+            k=k_requested,
+            expand_graph=expand_graph,
+            model=model,
+            device=device,
+            index_paths=index_paths,
+            index_config=index_config,
+            retrieval_mode=retrieval_mode,
+            no_result_guard=no_result_guard,
+            rg_pattern=rg_pattern,
+            rg_glob=rg_glob,
+            rrf_k=rrf_k,
+            abstain_threshold=abstain_threshold,
+            abstain_empty=abstain_empty,
+            rerank=rerank,
+            rerank_top_n=rerank_top_n,
+            max_latency_ms_p50_ratio=max_latency_ms_p50_ratio,
+            max_payload_tokens_median_ratio=max_payload_tokens_median_ratio,
+            budget_tokens=budget_tokens,
+        )
+    except Exception as exc:
+        total_ms = max(0.0, (time.perf_counter() - total_started) * 1000.0)
+        latency_bound = _lane2_ratio(max_latency_ms_p50_ratio)
+        payload_bound = _lane2_ratio(max_payload_tokens_median_ratio)
+        return {
+            "schema_version": LANE5_SCHEMA_VERSION,
+            "feature_set_id": LANE5_FEATURE_SET_ID,
+            "status": "error",
+            "query": query,
+            "budget_tokens": budget_tokens,
+            "retrieval_mode": str(retrieval_mode or "semantic"),
+            "k_requested": int(k_requested),
+            "k_effective": int(k_effective),
+            "timing_ms": {
+                "total": float(total_ms),
+                "semantic": float(total_ms),
+                "clustering": 0.0,
+                "labeling": 0.0,
+            },
+            "clustering": {
+                "cluster_count_requested": requested_cluster_count,
+                "cluster_count_target": int(cluster_count_target),
+                "cluster_min_size": int(requested_min_size),
+                "cluster_max_members": int(requested_max_members),
+                "cluster_label_mode": requested_label_mode,
+            },
+            "counts": {
+                "retrieval_results": 0,
+                "clusters": 0,
+                "cluster_count": 0,
+                "clustered_results": 0,
+                "unclustered_results": 0,
+                "truncated_clusters": 0,
+            },
+            "results": [],
+            "clusters": [],
+            "partial_failures": [
+                {
+                    "stage": "semantic",
+                    "code": "semantic_runtime_error",
+                    "message": str(exc),
+                    "recoverable": False,
+                }
+            ],
+            "regression_metadata": {
+                "budget_tokens": budget_tokens,
+                "max_latency_ms_p50_ratio": latency_bound,
+                "max_payload_tokens_median_ratio": payload_bound,
+                "latency_ms_p50": float(total_ms),
+                "payload_tokens_median": 0.0,
+                "assignment_digest": "",
+            },
+        }
+    semantic_ms = max(0.0, (time.perf_counter() - semantic_started) * 1000.0)
+
+    members = _lane5_normalize_semantic_rows(
+        [row for row in semantic_rows if isinstance(row, dict)]
+    )
+    if members:
+        cluster_count_target = max(1, min(int(cluster_count_target), len(members)))
+    else:
+        cluster_count_target = 0
+
+    clustering_started = time.perf_counter()
+    internal_clusters = _lane5_cluster_rows(
+        members,
+        cluster_count=cluster_count_target if cluster_count_target > 0 else None,
+        cluster_min_size=int(requested_min_size),
+    )
+    clustering_ms = max(0.0, (time.perf_counter() - clustering_started) * 1000.0)
+
+    labeling_started = time.perf_counter()
+    internal_rows: List[dict] = []
+    truncated_clusters = 0
+
+    for cluster in internal_clusters:
+        cluster_id = _lane5_cluster_id(cluster)
+        label = _lane5_cluster_label(cluster, label_mode=requested_label_mode)
+        cluster_members = [
+            member for member in cluster.get("members", []) if isinstance(member, dict)
+        ]
+        overflow = max(0, len(cluster_members) - int(requested_max_members))
+        if overflow > 0:
+            truncated_clusters += 1
+        visible_members = (
+            cluster_members[: int(requested_max_members)]
+            if requested_max_members > 0
+            else cluster_members
+        )
+
+        member_rows: List[dict] = []
+        for member in visible_members:
+            member_row = _lane5_result_row(member)
+            member_row["cluster_id"] = cluster_id
+            member_rows.append(member_row)
+
+        internal_rows.append(
+            {
+                "cluster_id": cluster_id,
+                "label": label,
+                "size": len(cluster_members),
+                "truncated": bool(overflow > 0),
+                "member_overflow": int(overflow),
+                "tokens": {
+                    "file": _lane5_common_tokens(cluster_members, "tokens_file"),
+                    "symbol": _lane5_common_tokens(cluster_members, "tokens_symbol"),
+                },
+                "members": member_rows,
+                "_all_members": cluster_members,
+            }
+        )
+
+    internal_rows = sorted(
+        internal_rows,
+        key=lambda cluster: (
+            str(cluster.get("cluster_id") or ""),
+            str(cluster.get("label") or ""),
+        ),
+    )
+    row_to_cluster: dict[str, tuple[str, int]] = {}
+    clusters: List[dict] = []
+    for cluster_rank, cluster in enumerate(internal_rows, start=1):
+        all_members = cluster.get("_all_members")
+        if isinstance(all_members, list):
+            for member in all_members:
+                if not isinstance(member, dict):
+                    continue
+                row_to_cluster[str(member.get("row_id"))] = (
+                    str(cluster.get("cluster_id") or ""),
+                    int(cluster_rank),
+                )
+        cluster["rank"] = int(cluster_rank)
+        for row in cluster.get("members", []):
+            if isinstance(row, dict):
+                row["cluster_rank"] = int(cluster_rank)
+        cluster.pop("_all_members", None)
+        clusters.append(cluster)
+    labeling_ms = max(0.0, (time.perf_counter() - labeling_started) * 1000.0)
+
+    results: List[dict] = []
+    for member in members:
+        row = _lane5_result_row(member)
+        cluster_info = row_to_cluster.get(str(member.get("row_id")))
+        if cluster_info is not None:
+            row["cluster_id"] = cluster_info[0]
+            row["cluster_rank"] = int(cluster_info[1])
+        results.append(row)
+
+    latency_bound = _lane2_ratio(max_latency_ms_p50_ratio)
+    payload_bound = _lane2_ratio(max_payload_tokens_median_ratio)
+    payload_tokens_median = (
+        float(median([_row_payload_tokens(row) for row in results])) if results else 0.0
+    )
+    unclustered_results = max(0, len(results) - len(row_to_cluster))
+    total_ms = max(0.0, (time.perf_counter() - total_started) * 1000.0)
+    return {
+        "schema_version": LANE5_SCHEMA_VERSION,
+        "feature_set_id": LANE5_FEATURE_SET_ID,
+        "status": "ok",
+        "query": query,
+        "budget_tokens": budget_tokens,
+        "retrieval_mode": str(retrieval_mode or "semantic"),
+        "k_requested": int(k_requested),
+        "k_effective": int(k_effective),
+        "timing_ms": {
+            "total": float(total_ms),
+            "semantic": float(semantic_ms),
+            "clustering": float(clustering_ms),
+            "labeling": float(labeling_ms),
+        },
+        "clustering": {
+            "cluster_count_requested": requested_cluster_count,
+            "cluster_count_target": int(cluster_count_target),
+            "cluster_min_size": int(requested_min_size),
+            "cluster_max_members": int(requested_max_members),
+            "cluster_label_mode": requested_label_mode,
+        },
+        "counts": {
+            "retrieval_results": len(members),
+            "clusters": len(clusters),
+            "cluster_count": len(clusters),
+            "clustered_results": len(results),
+            "unclustered_results": int(unclustered_results),
+            "truncated_clusters": int(truncated_clusters),
+        },
+        "results": results,
+        "clusters": clusters,
+        "partial_failures": [],
+        "regression_metadata": {
+            "budget_tokens": budget_tokens,
+            "max_latency_ms_p50_ratio": latency_bound,
+            "max_payload_tokens_median_ratio": payload_bound,
+            "latency_ms_p50": float(total_ms),
+            "payload_tokens_median": float(payload_tokens_median),
+            "assignment_digest": _lane5_assignment_digest(clusters),
+        },
+    }
+
+
+semantic_navigate_cluster_search = semantic_navigation_cluster_search
+navigate_cluster_search = semantic_navigation_cluster_search
+semantic_navigate_search = semantic_navigation_cluster_search
+
+
+def hybrid_file_search(
+    project_path: str,
+    query: str,
+    k: int = 5,
+    *,
+    model: Optional[str] = None,
+    device: Optional[str] = None,
+    index_paths=None,
+    index_config=None,
+    no_result_guard: str = "none",
+    rg_pattern: Optional[str] = None,
+    rg_glob: Optional[str] = None,
+    rrf_k: int = 60,
+    abstain_threshold: Optional[float] = None,
+    abstain_empty: bool = False,
+    rerank: bool = False,
+    rerank_top_n: int = 5,
+    max_latency_ms_p50_ratio: Optional[float] = None,
+    max_payload_tokens_median_ratio: Optional[float] = None,
+    budget_tokens: Optional[int] = None,
+) -> List[dict]:
+    """Hybrid file retrieval using lexical + semantic rank fusion."""
+    if not query or not query.strip():
+        return []
+
+    effective_k = k
+    if budget_tokens is not None:
+        effective_k = _effective_k_from_budget_tokens(k, budget_tokens=budget_tokens)
+
+    if effective_k <= 0:
+        return []
+
+    if no_result_guard not in {"none", "rg_empty"}:
+        raise ValueError("no_result_guard must be 'none' or 'rg_empty'")
+
+    scan_path = Path(project_path).resolve()
+    has_explicit_pattern = isinstance(rg_pattern, str) and bool(rg_pattern.strip())
+    lexical_pattern = rg_pattern.strip() if has_explicit_pattern else query.strip()
+
+    lexical_rank = _rg_rank_files(
+        scan_path,
+        pattern=lexical_pattern,
+        glob=rg_glob,
+        fixed_string=not has_explicit_pattern,
+    )
+    if no_result_guard == "rg_empty" and not lexical_rank:
+        return []
+
+    semantic_k = max(int(effective_k), int(effective_k) * 5)
+    semantic_results = _semantic_unit_search(
+        project_path,
+        query,
+        k=semantic_k,
+        expand_graph=False,
+        model=model,
+        device=device,
+        index_paths=index_paths,
+        index_config=index_config,
+    )
+    semantic_rank = _semantic_files_from_results(semantic_results)
+    semantic_scores = _semantic_file_scores(semantic_results)
+
+    fused_rank = _rrf_fuse_file_rankings([lexical_rank, semantic_rank], rrf_k=rrf_k)
+    fused_scores = _rrf_file_scores([lexical_rank, semantic_rank], rrf_k=rrf_k)
+
+    lexical_pos = {fp: i for i, fp in enumerate(lexical_rank, start=1)}
+    semantic_pos = {fp: i for i, fp in enumerate(semantic_rank, start=1)}
+
+    out: List[dict] = []
+    for rank, file_path in enumerate(fused_rank[: int(effective_k)], start=1):
+        out.append(
+            {
+                "file": file_path,
+                "score": float(fused_scores.get(file_path, 0.0)),
+                "semantic_score": _safe_float(semantic_scores.get(file_path)),
+                "rank": int(rank),
+                "source_ranks": {
+                    "lexical": lexical_pos.get(file_path),
+                    "semantic": semantic_pos.get(file_path),
+                },
+            }
+        )
+    out = _lane2_postprocess(
+        out,
+        query=query,
+        rerank=rerank,
+        rerank_top_n=rerank_top_n,
+        max_latency_ms_p50_ratio=max_latency_ms_p50_ratio,
+        max_payload_tokens_median_ratio=max_payload_tokens_median_ratio,
+    )
+    out = _lane2_apply_abstention(
+        out,
+        abstain_threshold=abstain_threshold,
+        abstain_empty=abstain_empty,
+    )
+    return out
+
+
+def semantic_search(
+    project_path: str,
+    query: str,
+    k: int = 5,
+    expand_graph: bool = False,
+    model: Optional[str] = None,
+    device: Optional[str] = None,
+    index_paths=None,
+    index_config=None,
+    retrieval_mode: str = "semantic",
+    no_result_guard: str = "none",
+    rg_pattern: Optional[str] = None,
+    rg_glob: Optional[str] = None,
+    rrf_k: int = 60,
+    abstain_threshold: Optional[float] = None,
+    abstain_empty: bool = False,
+    rerank: bool = False,
+    rerank_top_n: int = 5,
+    max_latency_ms_p50_ratio: Optional[float] = None,
+    max_payload_tokens_median_ratio: Optional[float] = None,
+    budget_tokens: Optional[int] = None,
+) -> List[dict]:
+    """Search for code semantically or with hybrid lexical+semantic retrieval.
+
+    Default behavior remains semantic unit search.
+    """
+    mode = str(retrieval_mode or "semantic")
+    if mode not in {"semantic", "hybrid"}:
+        raise ValueError("retrieval_mode must be 'semantic' or 'hybrid'")
+
+    if no_result_guard not in {"none", "rg_empty"}:
+        raise ValueError("no_result_guard must be 'none' or 'rg_empty'")
+
+    if mode == "hybrid":
+        return hybrid_file_search(
+            project_path,
+            query,
+            k=k,
+            model=model,
+            device=device,
+            index_paths=index_paths,
+            index_config=index_config,
+            no_result_guard=no_result_guard,
+            rg_pattern=rg_pattern,
+            rg_glob=rg_glob,
+            rrf_k=rrf_k,
+            abstain_threshold=abstain_threshold,
+            abstain_empty=abstain_empty,
+            rerank=rerank,
+            rerank_top_n=rerank_top_n,
+            max_latency_ms_p50_ratio=max_latency_ms_p50_ratio,
+            max_payload_tokens_median_ratio=max_payload_tokens_median_ratio,
+            budget_tokens=budget_tokens,
+        )
+
+    # Guard mode is opt-in for semantic mode too (helps reduce negative-query FPR).
+    if no_result_guard == "rg_empty" and query and query.strip():
+        scan_path = Path(project_path).resolve()
+        has_explicit_pattern = isinstance(rg_pattern, str) and bool(rg_pattern.strip())
+        lexical_pattern = rg_pattern.strip() if has_explicit_pattern else query.strip()
+        lexical_rank = _rg_rank_files(
+            scan_path,
+            pattern=lexical_pattern,
+            glob=rg_glob,
+            fixed_string=not has_explicit_pattern,
+        )
+        if not lexical_rank:
+            return []
+
+    effective_k = k
+    if budget_tokens is not None:
+        effective_k = _effective_k_from_budget_tokens(k, budget_tokens=budget_tokens)
+
+    results = _semantic_unit_search(
+        project_path,
+        query,
+        k=effective_k,
+        expand_graph=expand_graph,
+        model=model,
+        device=device,
+        index_paths=index_paths,
+        index_config=index_config,
+    )
+    lane2_enabled = (
+        abstain_threshold is not None
+        or bool(abstain_empty)
+        or bool(rerank)
+        or max_latency_ms_p50_ratio is not None
+        or max_payload_tokens_median_ratio is not None
+    )
+    if not lane2_enabled:
+        return results
+
+    results = _lane2_postprocess(
+        results,
+        query=query,
+        rerank=rerank,
+        rerank_top_n=rerank_top_n,
+        max_latency_ms_p50_ratio=max_latency_ms_p50_ratio,
+        max_payload_tokens_median_ratio=max_payload_tokens_median_ratio,
+    )
+    return _lane2_apply_abstention(
+        results,
+        abstain_threshold=abstain_threshold,
+        abstain_empty=abstain_empty,
+    )
+
+
+def compound_semantic_impact_search(
+    project_path: str,
+    query: str,
+    k: int = 5,
+    *,
+    expand_graph: bool = False,
+    model: Optional[str] = None,
+    device: Optional[str] = None,
+    index_paths=None,
+    index_config=None,
+    retrieval_mode: str = "semantic",
+    no_result_guard: str = "none",
+    rg_pattern: Optional[str] = None,
+    rg_glob: Optional[str] = None,
+    rrf_k: int = 60,
+    abstain_threshold: Optional[float] = None,
+    abstain_empty: bool = False,
+    rerank: bool = False,
+    rerank_top_n: int = 5,
+    max_latency_ms_p50_ratio: Optional[float] = None,
+    max_payload_tokens_median_ratio: Optional[float] = None,
+    budget_tokens: Optional[int] = None,
+    impact_depth: int = LANE4_IMPACT_DEFAULT_DEPTH,
+    impact_limit: Optional[int] = LANE4_IMPACT_DEFAULT_LIMIT,
+    impact_language: Optional[str] = "auto",
+    ignore_spec=None,
+    workspace_root: Optional[Path] = None,
+) -> dict:
+    """Run lane4 compound retrieval: semantic retrieval with impact enrichment."""
+
+    k_requested = _safe_int(k)
+    if k_requested is None or k_requested <= 0:
+        k_requested = 5
+    k_effective = int(k_requested)
+    if budget_tokens is not None:
+        k_effective = _effective_k_from_budget_tokens(k_requested, budget_tokens=budget_tokens)
+
+    total_start = time.perf_counter()
+    semantic_start = time.perf_counter()
+    try:
+        semantic_rows = semantic_search(
+            project_path,
+            query,
+            k=k_requested,
+            expand_graph=expand_graph,
+            model=model,
+            device=device,
+            index_paths=index_paths,
+            index_config=index_config,
+            retrieval_mode=retrieval_mode,
+            no_result_guard=no_result_guard,
+            rg_pattern=rg_pattern,
+            rg_glob=rg_glob,
+            rrf_k=rrf_k,
+            abstain_threshold=abstain_threshold,
+            abstain_empty=abstain_empty,
+            rerank=rerank,
+            rerank_top_n=rerank_top_n,
+            max_latency_ms_p50_ratio=max_latency_ms_p50_ratio,
+            max_payload_tokens_median_ratio=max_payload_tokens_median_ratio,
+            budget_tokens=budget_tokens,
+        )
+    except Exception as exc:
+        semantic_ms = (time.perf_counter() - semantic_start) * 1000.0
+        total_ms = (time.perf_counter() - total_start) * 1000.0
+        return {
+            "schema_version": LANE4_SCHEMA_VERSION,
+            "feature_set_id": LANE4_FEATURE_SET_ID,
+            "status": "error",
+            "query": query,
+            "budget_tokens": _safe_int(budget_tokens),
+            "retrieval_mode": str(retrieval_mode or "semantic"),
+            "k_requested": int(k_requested),
+            "k_effective": int(k_effective),
+            "timing_ms": {
+                "total": float(total_ms),
+                "semantic": float(semantic_ms),
+                "impact_total": 0.0,
+                "impact_p50": 0.0,
+            },
+            "counts": {
+                "retrieval_results": 0,
+                "impact_attempted": 0,
+                "impact_ok": 0,
+                "impact_partial": 0,
+                "impact_error": 0,
+            },
+            "results": [],
+            "partial_failures": [
+                _lane4_partial_failure(
+                    stage="semantic",
+                    code="semantic_runtime_error",
+                    message=str(exc),
+                    recoverable=False,
+                    latency_ms=semantic_ms,
+                )
+            ],
+            "regression_metadata": {
+                "budget_tokens": _safe_int(budget_tokens),
+                "latency_ms_p50": float(total_ms),
+                "payload_tokens_median": 0.0,
+                "max_latency_ms_p50_ratio": _lane2_ratio(max_latency_ms_p50_ratio),
+                "max_payload_tokens_median_ratio": _lane2_ratio(max_payload_tokens_median_ratio),
+            },
+        }
+
+    semantic_ms = (time.perf_counter() - semantic_start) * 1000.0
+    normalized_rows = [dict(row) for row in semantic_rows if isinstance(row, dict)]
+    results: List[dict] = [
+        _lane4_build_result_row(row, rank=rank)
+        for rank, row in enumerate(normalized_rows, start=1)
+    ]
+    by_rank = {int(row["rank"]): row for row in results if isinstance(row, dict)}
+
+    targets, selection_failures = _lane4_impact_targets(
+        normalized_rows,
+        impact_limit=impact_limit,
+    )
+
+    partial_failures: List[dict] = []
+    for failure in selection_failures:
+        rank = failure.get("row_index")
+        rank_int = rank if isinstance(rank, int) else None
+        row_out = by_rank.get(rank_int) if rank_int is not None else None
+        file_path = row_out.get("file") if isinstance(row_out, dict) else None
+        symbol_name = None
+        if isinstance(row_out, dict):
+            symbol_obj = row_out.get("symbol")
+            if isinstance(symbol_obj, dict):
+                symbol_name = (
+                    symbol_obj.get("qualified_name")
+                    if isinstance(symbol_obj.get("qualified_name"), str)
+                    else symbol_obj.get("name")
+                )
+            impact_obj = row_out.get("impact")
+            if isinstance(impact_obj, dict):
+                impact_obj["error_code"] = "skipped_no_symbol"
+                impact_obj["message"] = str(failure.get("message") or "semantic row has no symbol")
+        partial_failures.append(
+            _lane4_partial_failure(
+                stage="target_selection",
+                code="skipped_no_symbol",
+                message=str(failure.get("message") or "semantic row has no symbol"),
+                rank=rank_int,
+                file_path=file_path if isinstance(file_path, str) else None,
+                symbol=symbol_name if isinstance(symbol_name, str) else None,
+                recoverable=True,
+            )
+        )
+
+    try:
+        depth = int(impact_depth)
+    except (TypeError, ValueError):
+        depth = LANE4_IMPACT_DEFAULT_DEPTH
+    if depth <= 0:
+        depth = LANE4_IMPACT_DEFAULT_DEPTH
+
+    impact_latencies: List[float] = []
+    impact_attempted = 0
+    impact_ok = 0
+
+    if targets:
+        languages = _lane4_languages_from_semantic_rows(
+            normalized_rows,
+            impact_language=impact_language,
+        )
+
+        from tldr.analysis import impact_analysis
+        from tldr.cross_file_calls import ProjectCallGraph, build_project_call_graph
+
+        combined_graph = ProjectCallGraph()
+        if not languages:
+            for target in targets:
+                rank = int(target["row_index"])
+                row_out = by_rank.get(rank)
+                if not isinstance(row_out, dict):
+                    continue
+                symbol_obj = row_out.get("symbol")
+                symbol_name = None
+                if isinstance(symbol_obj, dict):
+                    symbol_name = symbol_obj.get("qualified_name") or symbol_obj.get("name")
+                impact_obj = row_out.get("impact")
+                if isinstance(impact_obj, dict):
+                    impact_obj.update(
+                        {
+                            "status": "error",
+                            "error_code": "impact_runtime_error",
+                            "message": "No supported call-graph language could be inferred",
+                        }
+                    )
+                partial_failures.append(
+                    _lane4_partial_failure(
+                        stage="impact",
+                        code="impact_runtime_error",
+                        message="No supported call-graph language could be inferred",
+                        rank=rank,
+                        file_path=row_out.get("file") if isinstance(row_out.get("file"), str) else None,
+                        symbol=symbol_name if isinstance(symbol_name, str) else None,
+                        recoverable=True,
+                    )
+                )
+        else:
+            for language in languages:
+                try:
+                    language_graph = build_project_call_graph(
+                        project_path,
+                        language=language,
+                        ignore_spec=ignore_spec,
+                        workspace_root=workspace_root,
+                    )
+                except Exception as exc:
+                    partial_failures.append(
+                        _lane4_partial_failure(
+                            stage="call_graph",
+                            code="impact_runtime_error",
+                            message=f"{language}: {exc}",
+                            recoverable=True,
+                        )
+                    )
+                    continue
+                for edge in language_graph.sorted_edges():
+                    combined_graph.add_edge(*edge)
+
+            for target in targets:
+                rank = int(target["row_index"])
+                row_out = by_rank.get(rank)
+                if not isinstance(row_out, dict):
+                    continue
+                symbol_obj = row_out.get("symbol")
+                symbol_name = None
+                if isinstance(symbol_obj, dict):
+                    symbol_name = symbol_obj.get("qualified_name") or symbol_obj.get("name")
+                target_file = target.get("file")
+                aliases = [alias for alias in target.get("aliases", []) if isinstance(alias, str)]
+                if not aliases:
+                    continue
+
+                impact_attempted += 1
+                target_start = time.perf_counter()
+                chosen_alias: Optional[str] = None
+                payload: Optional[dict] = None
+                last_error = "Function not found in call graph"
+                for alias in aliases:
+                    if not combined_graph.edges:
+                        last_error = "Unable to build call graph for impact analysis"
+                        break
+                    candidate = impact_analysis(
+                        combined_graph,
+                        alias,
+                        max_depth=depth,
+                        target_file=target_file,
+                    )
+                    if isinstance(candidate, dict) and candidate.get("error"):
+                        last_error = str(candidate.get("error"))
+                        continue
+                    chosen_alias = alias
+                    payload = candidate if isinstance(candidate, dict) else {}
+                    break
+
+                target_latency_ms = (time.perf_counter() - target_start) * 1000.0
+                impact_latencies.append(float(target_latency_ms))
+                impact_obj = row_out.get("impact")
+                if not isinstance(impact_obj, dict):
+                    impact_obj = {}
+                    row_out["impact"] = impact_obj
+
+                if payload is None:
+                    impact_obj.update(
+                        {
+                            "status": "error",
+                            "latency_ms": float(target_latency_ms),
+                            "caller_count": 0,
+                            "truncated": None,
+                            "callers": [],
+                            "error_code": "impact_not_found",
+                            "message": last_error,
+                        }
+                    )
+                    partial_failures.append(
+                        _lane4_partial_failure(
+                            stage="impact",
+                            code="impact_not_found",
+                            message=last_error,
+                            rank=rank,
+                            file_path=row_out.get("file") if isinstance(row_out.get("file"), str) else None,
+                            symbol=symbol_name if isinstance(symbol_name, str) else None,
+                            recoverable=True,
+                            latency_ms=target_latency_ms,
+                        )
+                    )
+                else:
+                    callers, truncated = _lane4_extract_callers(payload)
+                    impact_obj.update(
+                        {
+                            "status": "ok",
+                            "latency_ms": float(target_latency_ms),
+                            "caller_count": int(len(callers)),
+                            "truncated": bool(truncated),
+                            "callers": callers,
+                            "error_code": None,
+                            "message": None,
+                            "function": chosen_alias,
+                        }
+                    )
+                    impact_ok += 1
+
+    impact_total_ms = float(sum(impact_latencies))
+    impact_p50_ms = float(median(impact_latencies)) if impact_latencies else 0.0
+    total_ms = (time.perf_counter() - total_start) * 1000.0
+
+    partial_failures = sorted(
+        partial_failures,
+        key=lambda item: (
+            str(item.get("stage")),
+            int(item.get("rank")) if isinstance(item.get("rank"), int) else 0,
+            str(item.get("file") or ""),
+            str(item.get("symbol") or ""),
+            str(item.get("code") or ""),
+        ),
+    )
+    impact_partial = sum(1 for item in partial_failures if bool(item.get("recoverable")))
+    impact_error = sum(1 for item in partial_failures if not bool(item.get("recoverable")))
+    status = "ok"
+    if impact_error > 0:
+        status = "error"
+    elif impact_partial > 0:
+        status = "partial"
+
+    payload_tokens_median = (
+        float(median([_row_payload_tokens(row) for row in results])) if results else 0.0
+    )
+
+    return {
+        "schema_version": LANE4_SCHEMA_VERSION,
+        "feature_set_id": LANE4_FEATURE_SET_ID,
+        "status": status,
+        "query": query,
+        "budget_tokens": _safe_int(budget_tokens),
+        "retrieval_mode": str(retrieval_mode or "semantic"),
+        "k_requested": int(k_requested),
+        "k_effective": int(k_effective),
+        "timing_ms": {
+            "total": float(total_ms),
+            "semantic": float(semantic_ms),
+            "impact_total": float(impact_total_ms),
+            "impact_p50": float(impact_p50_ms),
+        },
+        "counts": {
+            "retrieval_results": int(len(results)),
+            "impact_attempted": int(impact_attempted),
+            "impact_ok": int(impact_ok),
+            "impact_partial": int(impact_partial),
+            "impact_error": int(impact_error),
+        },
+        "results": results,
+        "partial_failures": partial_failures,
+        "regression_metadata": {
+            "budget_tokens": _safe_int(budget_tokens),
+            "latency_ms_p50": float(total_ms),
+            "payload_tokens_median": float(payload_tokens_median),
+            "max_latency_ms_p50_ratio": _lane2_ratio(max_latency_ms_p50_ratio),
+            "max_payload_tokens_median_ratio": _lane2_ratio(max_payload_tokens_median_ratio),
+        },
+    }

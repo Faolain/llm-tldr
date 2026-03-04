@@ -8,6 +8,30 @@ All **untracked** run artifacts live under the gitignored `benchmark/` directory
 - `benchmark/cache-root/`          Index-mode caches (`--cache-root benchmark/cache-root`)
 - `benchmark/runs/<timestamp>/`    JSON reports produced by scripts
 
+Operator handoff summary for the 008 comparison-first benchmark program:
+- `implementations/008-benchmark-summary.md`
+
+## Why We Run Multiple Benchmark Families
+
+Yes, ultimate goal is one thing: better real outcomes.
+But we split tests so we can tell why results changed.
+
+1. `h2h` isolates tool quality.
+   It answers: "Is retrieval/analysis output itself better than contextplus?"
+   It also has two winner views in 008:
+   - shared-capability winner (apples-to-apples lanes only),
+   - full-product workflow winner (workflow board where `N/A` counts as loss).
+2. `llm_ab` isolates end-to-end answer quality with a judge.
+   It answers: "Does this context actually produce better final answers?"
+3. `token_efficiency` isolates budget tradeoffs.
+   It answers: "How much quality do we gain per extra token/cost?"
+
+If you only run one combined test, you cannot tell whether a change came from:
+
+1. Better retrieval.
+2. Better packing.
+3. LLM/judge variance.
+
 ## Results Snapshot (Pinned Runs)
 
 Numbers below are copied from the JSON reports under `benchmark/runs/` (so they are reproducible and diffable).
@@ -290,6 +314,41 @@ uv run tldrf semantic index --cache-root benchmark/cache-root --index repo:djang
 
 # Higher-quality (default) model (larger download):
 uv run tldrf semantic index --cache-root benchmark/cache-root --index repo:django --lang python --rebuild benchmark/corpora/django
+```
+
+## Phase 5b: Compound Semantic+Impact (Deterministic)
+
+Compares lane4 compound retrieval+impact against a sequential baseline (`semantic_search` + bounded `impact_analysis`) with no LLM calls.
+
+```bash
+uv run python scripts/bench_compound_semantic_impact.py \
+  --corpus django \
+  --queries benchmarks/retrieval/django_queries.json \
+  --cache-root benchmark/cache-root \
+  --index repo:django \
+  --budget-tokens 2000 \
+  --retrieval-mode hybrid \
+  --no-result-guard rg_empty
+```
+
+## Phase 5c: Semantic Navigation/Clustering (Deterministic)
+
+Runs lane5 deterministic navigation metrics (no LLM calls): clustering coverage, assignment determinism, and query-cluster recall.
+
+```bash
+uv run python scripts/bench_navigate_cluster.py \
+  --corpus django \
+  --queries benchmarks/retrieval/django_queries.json \
+  --cache-root benchmark/cache-root \
+  --index repo:django \
+  --budget-tokens 2000 \
+  --trials 3 \
+  --retrieval-mode hybrid \
+  --no-result-guard rg_empty \
+  --abstain-threshold 0.35 \
+  --abstain-empty \
+  --rerank \
+  --rerank-top-n 8
 ```
 
 ## Phase 6: Token Efficiency (Fixed Budgets)
