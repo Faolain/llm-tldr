@@ -3889,8 +3889,10 @@ def _build_typescript_call_graph(
             language=scan_language,
         )
         for key in _module_lookup_keys(rel_path):
-            module_file_by_key.setdefault(key, rel_path)
-            default_exports_by_key.setdefault(key, info)
+            existing = module_file_by_key.get(key)
+            if existing is None or _prefer_module_file_for_key(rel_path, existing):
+                module_file_by_key[key] = rel_path
+                default_exports_by_key[key] = info
 
     for ts_file in ts_files:
         ts_path = Path(ts_file)
@@ -4069,6 +4071,30 @@ def _normalize_module_path(module_path: str) -> str:
             normalized = normalized[:-len(ext)]
             break
     return normalized.rstrip("/")
+
+
+def _module_file_collision_rank(rel_path: str) -> tuple[int, int, str]:
+    """Rank module files for deterministic extensionless-key collision handling."""
+    normalized = rel_path.replace("\\", "/").rstrip("/")
+    ext = Path(normalized).suffix.lower()
+    extension_rank = {
+        ".ts": 0,
+        ".tsx": 1,
+        ".js": 0,
+        ".jsx": 1,
+        ".mjs": 2,
+        ".cjs": 3,
+    }.get(ext, 99)
+    normalized_module = _normalize_module_path(normalized)
+    is_index = 1 if normalized_module == "index" or normalized_module.endswith("/index") else 0
+    return (extension_rank, is_index, normalized)
+
+
+def _prefer_module_file_for_key(candidate_rel_path: str, current_rel_path: str) -> bool:
+    """Return True when candidate should replace current for a shared lookup key."""
+    return _module_file_collision_rank(candidate_rel_path) < _module_file_collision_rank(
+        current_rel_path
+    )
 
 
 def _module_basename(module_path: str) -> str:
