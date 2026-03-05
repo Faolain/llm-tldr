@@ -1423,7 +1423,7 @@ def _find_function_node(tree, function_name: str, language: str):
 
 
 def extract_typescript_cfg(source: str, function_name: str) -> CFGInfo:
-    """Extract CFG for a TypeScript/JavaScript function."""
+    """Extract CFG for a TypeScript function."""
     if not TREE_SITTER_AVAILABLE:
         raise ImportError("tree-sitter not available for TypeScript parsing")
 
@@ -1436,6 +1436,23 @@ def extract_typescript_cfg(source: str, function_name: str) -> CFGInfo:
         raise ValueError(f"Function '{function_name}' not found in source")
 
     builder = TreeSitterCFGBuilder(source_bytes, "typescript")
+    return builder.build(func_node, function_name)
+
+
+def extract_javascript_cfg(source: str, function_name: str) -> CFGInfo:
+    """Extract CFG for a JavaScript function."""
+    if not TREE_SITTER_AVAILABLE:
+        raise ImportError("tree-sitter not available for JavaScript parsing")
+
+    source_bytes = source.encode('utf-8')
+    parser = _get_ts_parser("javascript")
+    tree = parser.parse(source_bytes)
+
+    func_node = _find_function_node(tree, function_name, "javascript")
+    if not func_node:
+        raise ValueError(f"Function '{function_name}' not found in source")
+
+    builder = TreeSitterCFGBuilder(source_bytes, "javascript")
     return builder.build(func_node, function_name)
 
 

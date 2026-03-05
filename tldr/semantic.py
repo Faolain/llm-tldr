@@ -106,13 +106,15 @@ LANE5_TOKEN_STOPWORDS = {
     "ts",
     "tsx",
 }
-LANE4_CALL_GRAPH_LANGUAGES = {"python", "typescript", "go", "rust", "java", "c", "php"}
+LANE4_CALL_GRAPH_LANGUAGES = {"python", "typescript", "javascript", "go", "rust", "java", "c", "php"}
 LANE4_EXTENSION_TO_CALL_GRAPH_LANGUAGE = {
     ".py": "python",
     ".ts": "typescript",
     ".tsx": "typescript",
-    ".js": "typescript",
-    ".jsx": "typescript",
+    ".js": "javascript",
+    ".jsx": "javascript",
+    ".mjs": "javascript",
+    ".cjs": "javascript",
     ".go": "go",
     ".rs": "rust",
     ".java": "java",
@@ -643,7 +645,7 @@ def _get_cfg_summary(file_path: Path, func_name: str, lang: str) -> str:
         extractor_map = {
             "python": cfg_extractor.extract_python_cfg,
             "typescript": cfg_extractor.extract_typescript_cfg,
-            "javascript": cfg_extractor.extract_typescript_cfg,  # JS uses TS extractor
+            "javascript": cfg_extractor.extract_javascript_cfg,
             "go": cfg_extractor.extract_go_cfg,
             "rust": cfg_extractor.extract_rust_cfg,
             "java": cfg_extractor.extract_java_cfg,
@@ -1031,6 +1033,8 @@ def _detect_project_languages(
         '.tsx': 'typescript',
         '.js': 'javascript',
         '.jsx': 'javascript',
+        '.mjs': 'javascript',
+        '.cjs': 'javascript',
         '.go': 'go',
         '.rs': 'rust',
         '.c': 'c',
@@ -1767,8 +1771,6 @@ def _lane4_normalize_call_graph_language(language: Any) -> Optional[str]:
     normalized = language.strip().lower()
     if not normalized:
         return None
-    if normalized == "javascript":
-        normalized = "typescript"
     if normalized in LANE4_CALL_GRAPH_LANGUAGES:
         return normalized
     return None
@@ -1790,16 +1792,21 @@ def _lane4_languages_from_semantic_rows(
     for row in semantic_rows:
         if not isinstance(row, dict):
             continue
+        normalized_suffix: Optional[str] = None
+        file_path = row.get("file")
+        if isinstance(file_path, str):
+            suffix = Path(file_path).suffix.lower()
+            from_suffix = LANE4_EXTENSION_TO_CALL_GRAPH_LANGUAGE.get(suffix)
+            normalized_suffix = _lane4_normalize_call_graph_language(from_suffix)
+            if normalized_suffix == "javascript":
+                # Prefer extension-derived JS routing because semantic rows can
+                # still report JavaScript units with `language="typescript"`.
+                languages.add("javascript")
+                continue
         from_row = _lane4_normalize_call_graph_language(row.get("language"))
         if from_row is not None:
             languages.add(from_row)
             continue
-        file_path = row.get("file")
-        if not isinstance(file_path, str):
-            continue
-        suffix = Path(file_path).suffix.lower()
-        from_suffix = LANE4_EXTENSION_TO_CALL_GRAPH_LANGUAGE.get(suffix)
-        normalized_suffix = _lane4_normalize_call_graph_language(from_suffix)
         if normalized_suffix is not None:
             languages.add(normalized_suffix)
 

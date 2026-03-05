@@ -257,3 +257,51 @@ def test_lane4_compound_budget_latency_envelope_metadata(
     assert envelope["max_payload_tokens_median_ratio"] == 1.10
     assert isinstance(envelope["latency_ms_p50"], float)
     assert isinstance(envelope["payload_tokens_median"], float)
+
+
+@pytest.mark.parametrize("extension", [".js", ".jsx", ".mjs", ".cjs"])
+def test_lane4_compound_js_extensions_override_typescript_semantic_language(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, extension: str
+) -> None:
+    _install_deterministic_clock(monkeypatch)
+    target_file = f"pkg/web{extension}"
+    monkeypatch.setattr(
+        semantic,
+        "semantic_search",
+        lambda *_, **__: [
+            {
+                "file": target_file,
+                "qualified_name": "pkg.web.handler",
+                "name": "handler",
+                "line": 10,
+                "unit_type": "function",
+                "language": "typescript",
+            }
+        ],
+    )
+
+    dispatched_languages: list[str] = []
+
+    def _fake_build_project_call_graph(*_, **kwargs):
+        language = kwargs.get("language")
+        if isinstance(language, str):
+            dispatched_languages.append(language)
+        return _graph_with_edges(
+            [("pkg/caller.js", "invoke", target_file, "handler")]
+        )
+
+    monkeypatch.setattr(
+        "tldr.cross_file_calls.build_project_call_graph",
+        _fake_build_project_call_graph,
+    )
+
+    out = semantic.compound_semantic_impact_search(
+        str(tmp_path),
+        query="find javascript callers",
+        k=5,
+        impact_limit=1,
+        impact_language="auto",
+    )
+
+    assert out["counts"]["impact_attempted"] == 1
+    assert dispatched_languages == ["javascript"]

@@ -64,6 +64,7 @@ from .cfg_extractor import (
     extract_elixir_cfg,
     extract_go_cfg,
     extract_java_cfg,
+    extract_javascript_cfg,
     extract_kotlin_cfg,
     extract_lua_cfg,
     extract_luau_cfg,
@@ -453,7 +454,7 @@ def _get_module_exports(
     ext_map = {
         "python": [".py"],
         "typescript": [".ts", ".tsx"],
-        "javascript": [".js", ".jsx"],
+        "javascript": [".js", ".jsx", ".mjs", ".cjs"],
         "go": [".go"],
         "rust": [".rs"],
     }
@@ -668,6 +669,7 @@ def get_relevant_context(
     cfg_extractors = {
         "python": extract_python_cfg,
         "typescript": extract_typescript_cfg,
+        "javascript": extract_javascript_cfg,
         "go": extract_go_cfg,
         "rust": extract_rust_cfg,
         "java": extract_java_cfg,
@@ -884,7 +886,7 @@ def get_cfg_context(
     cfg_extractors = {
         "python": extract_python_cfg,
         "typescript": extract_typescript_cfg,
-        "javascript": extract_typescript_cfg,
+        "javascript": extract_javascript_cfg,
         "go": extract_go_cfg,
         "rust": extract_rust_cfg,
         "java": extract_java_cfg,
@@ -1599,7 +1601,7 @@ def get_code_structure(
     ext_map = {
         "python": {".py"},
         "typescript": {".ts", ".tsx"},
-        "javascript": {".js", ".jsx"},
+        "javascript": {".js", ".jsx", ".mjs", ".cjs"},
         "go": {".go"},
         "rust": {".rs"},
         "java": {".java"},
