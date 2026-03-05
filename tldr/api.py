@@ -454,7 +454,7 @@ def _get_module_exports(
     ext_map = {
         "python": [".py"],
         "typescript": [".ts", ".tsx"],
-        "javascript": [".js", ".jsx"],
+        "javascript": [".js", ".jsx", ".mjs", ".cjs"],
         "go": [".go"],
         "rust": [".rs"],
     }
@@ -1601,7 +1601,7 @@ def get_code_structure(
     ext_map = {
         "python": {".py"},
         "typescript": {".ts", ".tsx"},
-        "javascript": {".js", ".jsx"},
+        "javascript": {".js", ".jsx", ".mjs", ".cjs"},
         "go": {".go"},
         "rust": {".rs"},
         "java": {".java"},

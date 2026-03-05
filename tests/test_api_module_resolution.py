@@ -46,6 +46,44 @@ def test_javascript_module_resolves_jsx_when_js_missing(
     assert extracted_paths == [module_file]
 
 
+def test_javascript_module_resolves_cjs_when_js_and_jsx_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = tmp_path / "project"
+    module_file = project / "components" / "Widget.cjs"
+    module_file.parent.mkdir(parents=True)
+    module_file.write_text("module.exports = function Widget() { return null; };\n")
+    extracted_paths = _install_fake_extractor(monkeypatch)
+
+    api._get_module_exports(project, "components/Widget", language="javascript")
+
+    assert extracted_paths == [module_file]
+
+
+def test_get_code_structure_includes_mjs_and_cjs_for_javascript(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "entry.mjs").write_text("export function main() { return 1; }\n")
+    (project / "legacy.cjs").write_text("module.exports = function legacy() { return 2; };\n")
+
+    class _FakeInfo:
+        def __init__(self, path: str) -> None:
+            self.path = path
+
+        def to_dict(self) -> dict:
+            return {"functions": [], "classes": [], "imports": []}
+
+    monkeypatch.setattr(api, "_extract_file_impl", lambda path: _FakeInfo(path))
+
+    result = api.get_code_structure(project, language="javascript")
+    discovered = {row["path"] for row in result["files"]}
+
+    assert "entry.mjs" in discovered
+    assert "legacy.cjs" in discovered
+
+
 def test_absolute_module_path_outside_project_is_rejected(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
