@@ -139,3 +139,51 @@ def test_namespace_import_with_dotted_basename_resolves_attr_call(
 
     assert graph.meta.get("graph_source") == "ts-syntax-only"
     assert ("main.ts", "run", "foo.bar.ts", "helper") in graph.edges
+
+
+def test_javascript_syntax_path_requests_javascript_parser(
+    tmp_path: Path,
+    force_syntax_fallback: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_project(
+        tmp_path,
+        {
+            "dep.js": "export function helper() { return 1; }\n",
+            "main.js": (
+                'import { helper } from "./dep.js";\n'
+                "export function run() {\n"
+                "  return helper();\n"
+                "}\n"
+            ),
+        },
+    )
+
+    class _FakeNode:
+        type = "program"
+        children = []
+        start_byte = 0
+        end_byte = 0
+
+        def child_by_field_name(self, _name: str):
+            return None
+
+    class _FakeTree:
+        root_node = _FakeNode()
+
+    class _FakeParser:
+        def parse(self, _source: bytes) -> _FakeTree:
+            return _FakeTree()
+
+    parser_requests: list[str] = []
+
+    def _spy_get_ts_parser(language: str = "typescript") -> _FakeParser:
+        parser_requests.append(language)
+        return _FakeParser()
+
+    monkeypatch.setattr("tldr.cross_file_calls.TREE_SITTER_AVAILABLE", True)
+    monkeypatch.setattr("tldr.cross_file_calls._get_ts_parser", _spy_get_ts_parser)
+
+    build_project_call_graph(str(tmp_path), language="javascript")
+
+    assert "javascript" in parser_requests

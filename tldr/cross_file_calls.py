@@ -167,14 +167,24 @@ class _DefaultExportInfo:
     reexport_module: Optional[str] = None
 
 
-def _get_ts_parser():
-    """Get or create a tree-sitter TypeScript parser."""
+def _get_ts_parser(language: str = "typescript"):
+    """Get or create a tree-sitter parser for TypeScript/JavaScript."""
     if not TREE_SITTER_AVAILABLE:
         raise RuntimeError("tree-sitter-typescript not available")
 
+    normalized = language.strip().lower()
+    if normalized == "javascript":
+        try:
+            import tree_sitter_javascript
+
+            js_lang = tree_sitter.Language(tree_sitter_javascript.language())
+            return tree_sitter.Parser(js_lang)
+        except ImportError:
+            # Fall back to TS grammar if JS grammar is unavailable.
+            pass
+
     ts_lang = tree_sitter.Language(tree_sitter_typescript.language_typescript())
-    parser = tree_sitter.Parser(ts_lang)
-    return parser
+    return tree_sitter.Parser(ts_lang)
 
 
 def _get_rust_parser():
@@ -513,12 +523,15 @@ def parse_imports(file_path: str | Path) -> list[dict]:
     return imports
 
 
-def parse_ts_imports(file_path: str | Path) -> list[dict]:
+def parse_ts_imports(
+    file_path: str | Path,
+    language: str = "typescript",
+) -> list[dict]:
     """
-    Extract import statements from a TypeScript file.
+    Extract import statements from a TypeScript/JavaScript file.
 
     Args:
-        file_path: Path to TypeScript file
+        file_path: Path to TypeScript/JavaScript file
 
     Returns:
         List of import info dicts with keys: module, names, is_default, aliases
@@ -529,7 +542,7 @@ def parse_ts_imports(file_path: str | Path) -> list[dict]:
     file_path = Path(file_path)
     try:
         source = file_path.read_bytes()
-        parser = _get_ts_parser()
+        parser = _get_ts_parser(language)
         tree = parser.parse(source)
     except (FileNotFoundError, Exception):
         return []
@@ -2105,9 +2118,23 @@ def build_function_index(
         if language == "python":
             _index_python_file(src_path, rel_path, module_name, simple_module, index)
         elif language == "typescript":
-            _index_typescript_file(src_path, rel_path, module_name, simple_module, index)
+            _index_typescript_file(
+                src_path,
+                rel_path,
+                module_name,
+                simple_module,
+                index,
+                language=language,
+            )
         elif language == "javascript":
-            _index_typescript_file(src_path, rel_path, module_name, simple_module, index)
+            _index_typescript_file(
+                src_path,
+                rel_path,
+                module_name,
+                simple_module,
+                index,
+                language=language,
+            )
         elif language == "go":
             _index_go_file(src_path, rel_path, module_name, simple_module, index)
         elif language == "rust":
@@ -2146,14 +2173,21 @@ def _index_python_file(src_path: Path, rel_path: Path, module_name: str, simple_
             index[f"{simple_module}.{node.name}"] = str(rel_path)
 
 
-def _index_typescript_file(src_path: Path, rel_path: Path, module_name: str, simple_module: str, index: dict):
-    """Index functions and classes from a TypeScript file."""
+def _index_typescript_file(
+    src_path: Path,
+    rel_path: Path,
+    module_name: str,
+    simple_module: str,
+    index: dict,
+    language: str = "typescript",
+):
+    """Index functions and classes from a TypeScript/JavaScript file."""
     if not TREE_SITTER_AVAILABLE:
         return
 
     try:
         source = src_path.read_bytes()
-        parser = _get_ts_parser()
+        parser = _get_ts_parser(language)
         tree = parser.parse(source)
     except (FileNotFoundError, Exception):
         return
@@ -2762,7 +2796,11 @@ def _extract_file_calls(file_path: Path, root: Path) -> dict[str, list[tuple[str
     return calls_by_func
 
 
-def _extract_ts_file_calls(file_path: Path, root: Path) -> dict[str, list[tuple[str, str]]]:
+def _extract_ts_file_calls(
+    file_path: Path,
+    root: Path,
+    language: str = "typescript",
+) -> dict[str, list[tuple[str, str]]]:
     """
     Extract all function calls from a TypeScript file, grouped by caller function.
 
@@ -2775,7 +2813,7 @@ def _extract_ts_file_calls(file_path: Path, root: Path) -> dict[str, list[tuple[
 
     try:
         source = file_path.read_bytes()
-        parser = _get_ts_parser()
+        parser = _get_ts_parser(language)
         tree = parser.parse(source)
     except (FileNotFoundError, Exception):
         return {}
@@ -3832,7 +3870,11 @@ def _build_typescript_call_graph(
     for ts_file in ts_files:
         ts_path = Path(ts_file)
         rel_path = str(ts_path.relative_to(root))
-        info = _collect_ts_default_export_info(ts_path, rel_path)
+        info = _collect_ts_default_export_info(
+            ts_path,
+            rel_path,
+            language=scan_language,
+        )
         for key in _module_lookup_keys(rel_path):
             module_file_by_key.setdefault(key, rel_path)
             default_exports_by_key.setdefault(key, info)
@@ -3842,7 +3884,7 @@ def _build_typescript_call_graph(
         rel_path = str(ts_path.relative_to(root))
 
         # Get imports for this file
-        imports = parse_ts_imports(ts_path)
+        imports = parse_ts_imports(ts_path, language=scan_language)
 
         # Build import resolution map
         # For TypeScript, imports are relative paths or package names
@@ -3881,7 +3923,11 @@ def _build_typescript_call_graph(
                     default_imports[default_name] = module_path
 
         # Get calls from this file
-        calls_by_func = _extract_ts_file_calls(ts_path, root)
+        calls_by_func = _extract_ts_file_calls(
+            ts_path,
+            root,
+            language=scan_language,
+        )
 
         for caller_func, calls in calls_by_func.items():
             for call_type, call_target in calls:
@@ -4037,7 +4083,11 @@ def _module_lookup_keys(rel_path: str) -> list[str]:
     return keys
 
 
-def _collect_ts_default_export_info(src_path: Path, rel_path: str) -> _DefaultExportInfo:
+def _collect_ts_default_export_info(
+    src_path: Path,
+    rel_path: str,
+    language: str = "typescript",
+) -> _DefaultExportInfo:
     """Collect default-export metadata for a TS/JS module."""
     info = _DefaultExportInfo()
     if not TREE_SITTER_AVAILABLE:
@@ -4045,7 +4095,7 @@ def _collect_ts_default_export_info(src_path: Path, rel_path: str) -> _DefaultEx
 
     try:
         source = src_path.read_bytes()
-        parser = _get_ts_parser()
+        parser = _get_ts_parser(language)
         tree = parser.parse(source)
     except (FileNotFoundError, Exception):
         return info
