@@ -266,6 +266,90 @@ def test_default_import_extensionless_collision_is_scan_order_independent(
     assert ("main.js", "run", "foo.cjs", "default") not in graph_js_first.edges
 
 
+def test_named_import_extensionless_collision_prefers_js_over_mjs_independent_of_scan_order(
+    tmp_path: Path,
+    force_syntax_fallback: None,
+    monkeypatch: pytest.MonkeyPatch,
+    write_project,
+) -> None:
+    write_project(
+        tmp_path,
+        {
+            "foo.js": "export function helper() { return 1; }\n",
+            "foo.mjs": "export function helper() { return 2; }\n",
+            "main.js": (
+                'import { helper } from "./foo";\n'
+                "export function run() {\n"
+                "  return helper();\n"
+                "}\n"
+            ),
+        },
+    )
+
+    graph_mjs_first = _build_graph_with_forced_scan_order(
+        tmp_path,
+        monkeypatch,
+        language="javascript",
+        relative_scan_order=["main.js", "foo.mjs", "foo.js"],
+    )
+    graph_js_first = _build_graph_with_forced_scan_order(
+        tmp_path,
+        monkeypatch,
+        language="javascript",
+        relative_scan_order=["main.js", "foo.js", "foo.mjs"],
+    )
+
+    assert graph_mjs_first.meta.get("graph_source") == "js-syntax-only"
+    assert graph_js_first.meta.get("graph_source") == "js-syntax-only"
+    assert graph_mjs_first.sorted_edges() == graph_js_first.sorted_edges()
+    assert ("main.js", "run", "foo.js", "helper") in graph_mjs_first.edges
+    assert ("main.js", "run", "foo.js", "helper") in graph_js_first.edges
+    assert ("main.js", "run", "foo.mjs", "helper") not in graph_mjs_first.edges
+    assert ("main.js", "run", "foo.mjs", "helper") not in graph_js_first.edges
+
+
+def test_namespace_import_extensionless_collision_prefers_js_over_mjs_independent_of_scan_order(
+    tmp_path: Path,
+    force_syntax_fallback: None,
+    monkeypatch: pytest.MonkeyPatch,
+    write_project,
+) -> None:
+    write_project(
+        tmp_path,
+        {
+            "foo.js": "export function helper() { return 1; }\n",
+            "foo.mjs": "export function helper() { return 2; }\n",
+            "main.js": (
+                'import * as mod from "./foo";\n'
+                "export function run() {\n"
+                "  return mod.helper();\n"
+                "}\n"
+            ),
+        },
+    )
+
+    graph_mjs_first = _build_graph_with_forced_scan_order(
+        tmp_path,
+        monkeypatch,
+        language="javascript",
+        relative_scan_order=["main.js", "foo.mjs", "foo.js"],
+    )
+    graph_js_first = _build_graph_with_forced_scan_order(
+        tmp_path,
+        monkeypatch,
+        language="javascript",
+        relative_scan_order=["main.js", "foo.js", "foo.mjs"],
+    )
+
+    assert graph_mjs_first.meta.get("graph_source") == "js-syntax-only"
+    assert graph_js_first.meta.get("graph_source") == "js-syntax-only"
+    assert graph_mjs_first.sorted_edges() == graph_js_first.sorted_edges()
+    assert ("main.js", "run", "foo.js", "helper") in graph_mjs_first.edges
+    assert ("main.js", "run", "foo.js", "helper") in graph_js_first.edges
+    assert ("main.js", "run", "foo.mjs", "helper") not in graph_mjs_first.edges
+    assert ("main.js", "run", "foo.mjs", "helper") not in graph_js_first.edges
+
+
 def test_default_reexport_extensionless_collision_is_scan_order_independent(
     tmp_path: Path,
     force_syntax_fallback: None,

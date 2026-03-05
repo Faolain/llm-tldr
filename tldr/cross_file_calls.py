@@ -3960,6 +3960,13 @@ def _build_typescript_call_graph(
                             continue
 
                         normalized_module = _normalize_module_path(module_path)
+                        dst_file = module_file_by_key.get(normalized_module)
+                        if dst_file:
+                            key = (dst_file, orig_name)
+                            if key in func_index:
+                                graph.add_edge(rel_path, caller_func, func_index[key], orig_name)
+                                continue
+
                         key = (normalized_module, orig_name)
                         if key in func_index:
                             dst_file = func_index[key]
@@ -4022,6 +4029,13 @@ def _build_typescript_call_graph(
                                 continue
 
                             normalized_module = _normalize_module_path(module_path)
+                            dst_file = module_file_by_key.get(normalized_module)
+                            if dst_file:
+                                key = (dst_file, method)
+                                if key in func_index:
+                                    graph.add_edge(rel_path, caller_func, func_index[key], method)
+                                    continue
+
                             key = (normalized_module, method)
                             if key in func_index:
                                 dst_file = func_index[key]
