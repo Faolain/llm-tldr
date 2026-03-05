@@ -2237,18 +2237,18 @@ def _index_typescript_file(
             if name:
                 add_to_index(name)
 
-        # Arrow functions assigned to variables: const foo = () => {}
+        # Variable-owned functions: const foo = () => {} / function () {}
         elif node.type == "lexical_declaration":
             for child in node.children:
                 if child.type == "variable_declarator":
                     name = None
-                    has_arrow = False
+                    has_function_value = False
                     for vc in child.children:
                         if vc.type == "identifier":
                             name = source[vc.start_byte:vc.end_byte].decode("utf-8")
-                        elif vc.type == "arrow_function":
-                            has_arrow = True
-                    if name and has_arrow:
+                        elif vc.type in ("arrow_function", "function_expression"):
+                            has_function_value = True
+                    if name and has_function_value:
                         add_to_index(name)
 
         # Class declarations

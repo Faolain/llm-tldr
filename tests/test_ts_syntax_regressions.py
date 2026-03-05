@@ -433,3 +433,55 @@ def test_ts_default_import_extensionless_collision_prefers_ts_over_tsx_independe
     assert ("main.ts", "boot", "foo.ts", "default") in graph_ts_first.edges
     assert ("main.ts", "boot", "foo.tsx", "default") not in graph_tsx_first.edges
     assert ("main.ts", "boot", "foo.tsx", "default") not in graph_ts_first.edges
+
+
+def test_named_import_resolves_exported_function_expression(
+    tmp_path: Path,
+    force_syntax_fallback: None,
+    write_project,
+) -> None:
+    write_project(
+        tmp_path,
+        {
+            "dep.ts": (
+                "export const foo = function () {\n"
+                "  return 1;\n"
+                "};\n"
+            ),
+            "main.ts": (
+                'import { foo } from "./dep";\n'
+                "export function run() {\n"
+                "  return foo();\n"
+                "}\n"
+            ),
+        },
+    )
+
+    graph = build_project_call_graph(str(tmp_path), language="typescript")
+
+    assert graph.meta.get("graph_source") == "ts-syntax-only"
+    assert ("main.ts", "run", "dep.ts", "foo") in graph.edges
+
+
+def test_index_typescript_file_indexes_variable_owned_function_expression(
+    tmp_path: Path,
+) -> None:
+    src_path = tmp_path / "dep.ts"
+    src_path.write_text(
+        "export const foo = function () {\n"
+        "  return 1;\n"
+        "};\n"
+    )
+
+    index: dict[object, str] = {}
+
+    cfc._index_typescript_file(
+        src_path=src_path,
+        rel_path=Path("dep.ts"),
+        module_name="dep",
+        simple_module="dep",
+        index=index,
+        language="typescript",
+    )
+
+    assert index[("dep.ts", "foo")] == "dep.ts"
