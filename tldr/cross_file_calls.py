@@ -544,7 +544,7 @@ def parse_ts_imports(
         source = file_path.read_bytes()
         parser = _get_ts_parser(language)
         tree = parser.parse(source)
-    except (FileNotFoundError, Exception):
+    except Exception:
         return []
 
     imports = []
@@ -2189,7 +2189,7 @@ def _index_typescript_file(
         source = src_path.read_bytes()
         parser = _get_ts_parser(language)
         tree = parser.parse(source)
-    except (FileNotFoundError, Exception):
+    except Exception:
         return
 
     explicit_module = str(rel_path).replace("\\", "/")
@@ -2815,7 +2815,7 @@ def _extract_ts_file_calls(
         source = file_path.read_bytes()
         parser = _get_ts_parser(language)
         tree = parser.parse(source)
-    except (FileNotFoundError, Exception):
+    except Exception:
         return {}
 
     calls_by_func = {}
@@ -4083,6 +4083,10 @@ def _module_lookup_keys(rel_path: str) -> list[str]:
     return keys
 
 
+# Guard against pathological re-export cycles while allowing common proxy chains.
+_MAX_REEXPORT_CHAIN_DEPTH = 6
+
+
 def _collect_ts_default_export_info(
     src_path: Path,
     rel_path: str,
@@ -4097,7 +4101,7 @@ def _collect_ts_default_export_info(
         source = src_path.read_bytes()
         parser = _get_ts_parser(language)
         tree = parser.parse(source)
-    except (FileNotFoundError, Exception):
+    except Exception:
         return info
 
     def walk(node):
@@ -4160,7 +4164,7 @@ def _extract_require_path_from_call_expression(node, source: bytes) -> Optional[
 def _resolve_default_import_target(
     module_path: str,
     default_exports_by_key: dict[str, _DefaultExportInfo],
-    max_hops: int = 6,
+    max_hops: int = _MAX_REEXPORT_CHAIN_DEPTH,
 ) -> Optional[tuple[str, str]]:
     """Resolve a default import target as (`module_key`, `default`)."""
     current = module_path.replace("\\", "/").rstrip("/")

@@ -7,13 +7,6 @@ import pytest
 from tldr.cross_file_calls import build_project_call_graph
 
 
-def _write_project(root: Path, files: dict[str, str]) -> None:
-    for rel_path, content in files.items():
-        file_path = root / rel_path
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-        file_path.write_text(content)
-
-
 @pytest.fixture
 def force_syntax_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TLDR_TS_RESOLVER", "syntax")
@@ -22,8 +15,9 @@ def force_syntax_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_named_import_with_dotted_basename_and_explicit_extension_resolves(
     tmp_path: Path,
     force_syntax_fallback: None,
+    write_project,
 ) -> None:
-    _write_project(
+    write_project(
         tmp_path,
         {
             "foo.bar.ts": "export function helper() { return 1; }\n",
@@ -45,8 +39,9 @@ def test_named_import_with_dotted_basename_and_explicit_extension_resolves(
 def test_default_import_prefers_exact_relative_file_over_duplicate_basename(
     tmp_path: Path,
     force_syntax_fallback: None,
+    write_project,
 ) -> None:
-    _write_project(
+    write_project(
         tmp_path,
         {
             "foo.js": "export default function rootFoo() { return 1; }\n",
@@ -70,8 +65,9 @@ def test_default_import_prefers_exact_relative_file_over_duplicate_basename(
 def test_default_import_with_explicit_extension_ignores_same_basename_variants(
     tmp_path: Path,
     force_syntax_fallback: None,
+    write_project,
 ) -> None:
-    _write_project(
+    write_project(
         tmp_path,
         {
             "foo.cjs": "module.exports = function cjsFoo() { return 1; };\n",
@@ -97,8 +93,9 @@ def test_default_import_with_explicit_extension_ignores_same_basename_variants(
 def test_require_alias_call_resolves_to_cjs_default_export(
     tmp_path: Path,
     force_syntax_fallback: None,
+    write_project,
 ) -> None:
-    _write_project(
+    write_project(
         tmp_path,
         {
             "dep.cjs": "module.exports = function dep() { return 1; };\n",
@@ -121,8 +118,9 @@ def test_require_alias_call_resolves_to_cjs_default_export(
 def test_namespace_import_with_dotted_basename_resolves_attr_call(
     tmp_path: Path,
     force_syntax_fallback: None,
+    write_project,
 ) -> None:
-    _write_project(
+    write_project(
         tmp_path,
         {
             "foo.bar.ts": "export function helper() { return 1; }\n",
@@ -145,8 +143,9 @@ def test_javascript_syntax_path_requests_javascript_parser(
     tmp_path: Path,
     force_syntax_fallback: None,
     monkeypatch: pytest.MonkeyPatch,
+    write_project,
 ) -> None:
-    _write_project(
+    write_project(
         tmp_path,
         {
             "dep.js": "export function helper() { return 1; }\n",

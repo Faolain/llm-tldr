@@ -7,20 +7,16 @@ import pytest
 from tldr.cross_file_calls import build_project_call_graph, scan_project
 
 
-def _write_project(root: Path, files: dict[str, str]) -> None:
-    for rel_path, content in files.items():
-        file_path = root / rel_path
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-        file_path.write_text(content)
-
-
 @pytest.fixture
 def force_syntax_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TLDR_TS_RESOLVER", "syntax")
 
 
-def test_javascript_scan_project_discovers_cjs_and_mjs(tmp_path: Path) -> None:
-    _write_project(
+def test_javascript_scan_project_discovers_cjs_and_mjs(
+    tmp_path: Path,
+    write_project,
+) -> None:
+    write_project(
         tmp_path,
         {
             "a.cjs": "module.exports = function a() {};",
@@ -36,8 +32,9 @@ def test_javascript_scan_project_discovers_cjs_and_mjs(tmp_path: Path) -> None:
 def test_default_import_from_module_exports_identifier_resolves_to_default(
     tmp_path: Path,
     force_syntax_fallback: None,
+    write_project,
 ) -> None:
-    _write_project(
+    write_project(
         tmp_path,
         {
             "dep.cjs": """
@@ -62,8 +59,9 @@ export function boot() {
 def test_default_import_does_not_promote_singleton_named_export(
     tmp_path: Path,
     force_syntax_fallback: None,
+    write_project,
 ) -> None:
-    _write_project(
+    write_project(
         tmp_path,
         {
             "dep.js": "export function only() { return 1; }",
@@ -85,8 +83,9 @@ export function boot() {
 def test_module_exports_require_reexport_resolves_default_chain(
     tmp_path: Path,
     force_syntax_fallback: None,
+    write_project,
 ) -> None:
-    _write_project(
+    write_project(
         tmp_path,
         {
             "dep.js": """
@@ -112,8 +111,9 @@ export function boot() {
 def test_multi_declarator_require_aliases_resolve_both_defaults(
     tmp_path: Path,
     force_syntax_fallback: None,
+    write_project,
 ) -> None:
-    _write_project(
+    write_project(
         tmp_path,
         {
             "dep1.cjs": "module.exports = function dep1() { return 1; };",
@@ -137,8 +137,9 @@ export function boot() {
 def test_function_local_require_alias_scope_leak_does_not_cross_siblings(
     tmp_path: Path,
     force_syntax_fallback: None,
+    write_project,
 ) -> None:
-    _write_project(
+    write_project(
         tmp_path,
         {
             "dep.cjs": "module.exports = function dep() { return 1; };",

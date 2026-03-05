@@ -1799,6 +1799,8 @@ def _lane4_languages_from_semantic_rows(
             from_suffix = LANE4_EXTENSION_TO_CALL_GRAPH_LANGUAGE.get(suffix)
             normalized_suffix = _lane4_normalize_call_graph_language(from_suffix)
             if normalized_suffix == "javascript":
+                # Prefer extension-derived JS routing because semantic rows can
+                # still report JavaScript units with `language="typescript"`.
                 languages.add("javascript")
                 continue
         from_row = _lane4_normalize_call_graph_language(row.get("language"))
