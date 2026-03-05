@@ -572,17 +572,9 @@ def parse_ts_imports(
                     f"{next_class}.{method_name}" if next_class else method_name
                 )
         elif node.type == "variable_declarator":
-            declarator_name = None
-            has_arrow_function = False
-            for part in node.children:
-                if part.type == "identifier":
-                    declarator_name = source[
-                        part.start_byte : part.end_byte
-                    ].decode("utf-8")
-                elif part.type == "arrow_function":
-                    has_arrow_function = True
-            if declarator_name and has_arrow_function:
-                next_scope = declarator_name
+            owner_name = _ts_variable_function_owner_name(node, source)
+            if owner_name:
+                next_scope = owner_name
 
         if node.type == "import_statement":
             import_info = _parse_ts_import_node(node, source)
@@ -601,6 +593,27 @@ def parse_ts_imports(
 
     walk_tree(tree.root_node)
     return imports
+
+
+def _ts_variable_function_owner_name(node, source: bytes) -> str | None:
+    """Return variable name when declarator RHS is a function-like expression."""
+    if node.type != "variable_declarator":
+        return None
+
+    declarator_name = None
+    has_function_rhs = False
+
+    for part in node.children:
+        if part.type == "identifier":
+            declarator_name = source[
+                part.start_byte : part.end_byte
+            ].decode("utf-8")
+        elif part.type in ("arrow_function", "function_expression"):
+            has_function_rhs = True
+
+    if declarator_name and has_function_rhs:
+        return declarator_name
+    return None
 
 
 def _parse_ts_import_node(node, source: bytes) -> dict | None:
@@ -2902,18 +2915,18 @@ def _extract_ts_file_calls(
                 calls_by_func[name] = extract_calls_from_func(node, name)
 
         elif node.type == "lexical_declaration":
-            # Handle arrow functions: const foo = () => {}
+            # Handle variable-owned functions: const foo = () => {} / function () {}
             for child in node.children:
                 if child.type == "variable_declarator":
                     name = None
-                    arrow_node = None
+                    function_node = None
                     for vc in child.children:
                         if vc.type == "identifier":
                             name = source[vc.start_byte:vc.end_byte].decode("utf-8")
-                        elif vc.type == "arrow_function":
-                            arrow_node = vc
-                    if name and arrow_node:
-                        calls_by_func[name] = extract_calls_from_func(arrow_node, name)
+                        elif vc.type in ("arrow_function", "function_expression"):
+                            function_node = vc
+                    if name and function_node:
+                        calls_by_func[name] = extract_calls_from_func(function_node, name)
 
         elif node.type == "class_declaration":
             class_name = _get_ts_node_name(node, source)

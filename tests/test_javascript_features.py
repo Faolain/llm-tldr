@@ -4,7 +4,11 @@ from pathlib import Path
 
 import pytest
 
-from tldr.cross_file_calls import build_project_call_graph, scan_project
+from tldr.cross_file_calls import (
+    build_project_call_graph,
+    parse_ts_imports,
+    scan_project,
+)
 
 
 @pytest.fixture
@@ -148,6 +152,56 @@ export function owner() {
     const run = require("./dep.cjs");
     return run();
 }
+
+export function sibling() {
+    return run();
+}
+""",
+        },
+    )
+
+    graph = build_project_call_graph(str(tmp_path), language="javascript")
+
+    assert ("main.js", "owner", "dep.cjs", "default") in graph.edges
+    assert ("main.js", "sibling", "dep.cjs", "default") not in graph.edges
+
+
+def test_parse_ts_imports_scopes_require_alias_inside_function_expression(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "main.js"
+    source.write_text("""
+const owner = function () {
+    const run = require("./dep.cjs");
+    return run();
+};
+""")
+
+    imports = parse_ts_imports(source, language="javascript")
+    run_aliases = [
+        imp
+        for imp in imports
+        if imp.get("module") == "./dep.cjs" and imp.get("default") == "run"
+    ]
+
+    assert len(run_aliases) == 1
+    assert run_aliases[0].get("scope") == "owner"
+
+
+def test_function_expression_local_require_alias_scope_does_not_leak_to_sibling(
+    tmp_path: Path,
+    force_syntax_fallback: None,
+    write_project,
+) -> None:
+    write_project(
+        tmp_path,
+        {
+            "dep.cjs": "module.exports = function dep() { return 1; };",
+            "main.js": """
+const owner = function () {
+    const run = require("./dep.cjs");
+    return run();
+};
 
 export function sibling() {
     return run();
