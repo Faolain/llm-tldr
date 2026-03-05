@@ -3611,7 +3611,6 @@ def build_project_call_graph(
             ignore_spec=ignore_spec,
             workspace_root=workspace_root,
             scan_language="javascript",
-            enable_resolver=False,
         )
     elif language == "go":
         _build_go_call_graph(
