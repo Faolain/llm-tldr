@@ -3831,8 +3831,16 @@ def _build_typescript_call_graph(
                 elif call_type == 'direct':
                     if call_target in import_map:
                         module_path, orig_name = import_map[call_target]
-                        # Try to find in function index
-                        simple_module = Path(_normalize_module_path(module_path)).stem
+                        normalized_module = _normalize_module_path(module_path)
+                        key = (normalized_module, orig_name)
+                        if key in func_index:
+                            dst_file = func_index[key]
+                            if _normalize_module_path(dst_file) == normalized_module:
+                                graph.add_edge(rel_path, caller_func, dst_file, orig_name)
+                                continue
+
+                        # Fallback for legacy simple-module index keys.
+                        simple_module = _module_basename(normalized_module)
                         key = (simple_module, orig_name)
                         if key in func_index:
                             dst_file = func_index[key]
@@ -3847,15 +3855,23 @@ def _build_typescript_call_graph(
                             continue
 
                         resolved_module, dst_symbol = resolved
-                        simple_module = Path(resolved_module).stem
-                        key = (simple_module, dst_symbol)
-                        if key in func_index:
-                            dst_file = func_index[key]
+                        dst_file = module_file_by_key.get(resolved_module)
+                        if dst_file:
                             graph.add_edge(rel_path, caller_func, dst_file, dst_symbol)
                             continue
 
-                        dst_file = module_file_by_key.get(resolved_module)
-                        if dst_file:
+                        key = (resolved_module, dst_symbol)
+                        if key in func_index:
+                            dst_file = func_index[key]
+                            if _normalize_module_path(dst_file) == resolved_module:
+                                graph.add_edge(rel_path, caller_func, dst_file, dst_symbol)
+                                continue
+
+                        # Fallback for ambiguous legacy simple-module index keys.
+                        simple_module = _module_basename(resolved_module)
+                        key = (simple_module, dst_symbol)
+                        if key in func_index:
+                            dst_file = func_index[key]
                             graph.add_edge(rel_path, caller_func, dst_file, dst_symbol)
 
                 elif call_type == 'attr':
@@ -3904,6 +3920,14 @@ def _normalize_module_path(module_path: str) -> str:
             normalized = normalized[:-len(ext)]
             break
     return normalized.rstrip("/")
+
+
+def _module_basename(module_path: str) -> str:
+    """Return basename from normalized module key without truncating dotted names."""
+    normalized = _normalize_module_path(module_path)
+    if not normalized:
+        return ""
+    return normalized.rsplit("/", 1)[-1]
 
 
 def _module_lookup_keys(rel_path: str) -> list[str]:
