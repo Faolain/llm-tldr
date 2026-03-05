@@ -2117,10 +2117,14 @@ def _index_typescript_file(src_path: Path, rel_path: Path, module_name: str, sim
     except (FileNotFoundError, Exception):
         return
 
+    explicit_module = str(rel_path).replace("\\", "/")
+
     def add_to_index(name: str):
         """Helper to add a name to the index."""
+        index[(explicit_module, name)] = str(rel_path)
         index[(module_name, name)] = str(rel_path)
         index[(simple_module, name)] = str(rel_path)
+        index[f"{explicit_module}/{name}"] = str(rel_path)
         index[f"{module_name}/{name}"] = str(rel_path)
         index[f"{simple_module}/{name}"] = str(rel_path)
 
@@ -3840,6 +3844,14 @@ def _build_typescript_call_graph(
                 elif call_type == 'direct':
                     if call_target in import_map:
                         module_path, orig_name = import_map[call_target]
+                        explicit_module = module_path.replace("\\", "/").rstrip("/")
+                        if Path(explicit_module).suffix in (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"):
+                            key = (explicit_module, orig_name)
+                            if key in func_index:
+                                dst_file = func_index[key]
+                                graph.add_edge(rel_path, caller_func, dst_file, orig_name)
+                            continue
+
                         normalized_module = _normalize_module_path(module_path)
                         key = (normalized_module, orig_name)
                         if key in func_index:
@@ -3941,11 +3953,17 @@ def _module_basename(module_path: str) -> str:
 
 def _module_lookup_keys(rel_path: str) -> list[str]:
     """Return lookup keys for a scanned module relative path."""
-    normalized = _normalize_module_path(rel_path)
-    keys = [normalized]
+    explicit = rel_path.replace("\\", "/").rstrip("/")
+    if not explicit:
+        return []
+
+    normalized = _normalize_module_path(explicit)
+    keys = [explicit]
+    if normalized and normalized not in keys:
+        keys.append(normalized)
     if normalized.endswith("/index"):
         parent = normalized[:-len("/index")]
-        if parent:
+        if parent and parent not in keys:
             keys.append(parent)
     return keys
 
@@ -4026,25 +4044,36 @@ def _resolve_default_import_target(
     max_hops: int = 6,
 ) -> Optional[tuple[str, str]]:
     """Resolve a default import target as (`module_key`, `default`)."""
-    current = _normalize_module_path(module_path)
+    current = module_path.replace("\\", "/").rstrip("/")
     if not current:
         return None
 
+    strict_explicit = Path(current).suffix in (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
     visited = set()
     for _ in range(max_hops):
-        if current in visited:
-            return None
-        visited.add(current)
+        match_key = None
+        info = None
+        candidates = [current] if strict_explicit else _module_lookup_keys(current)
+        for candidate in candidates:
+            candidate_info = default_exports_by_key.get(candidate)
+            if candidate_info:
+                match_key = candidate
+                info = candidate_info
+                break
 
-        info = default_exports_by_key.get(current)
-        if not info or not info.has_default:
+        if not match_key or not info or not info.has_default:
             return None
+
+        if match_key in visited:
+            return None
+        visited.add(match_key)
 
         if info.reexport_module:
-            current = _normalize_module_path(info.reexport_module)
+            current = info.reexport_module
+            strict_explicit = False
             continue
 
-        return (current, "default")
+        return (match_key, "default")
 
     return None
 
