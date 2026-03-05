@@ -65,3 +65,27 @@ def test_default_import_prefers_exact_relative_file_over_duplicate_basename(
     assert graph.meta.get("graph_source") == "js-syntax-only"
     assert ("main.js", "run", "foo.js", "default") in graph.edges
     assert ("main.js", "run", "nested/foo.js", "default") not in graph.edges
+
+
+def test_require_alias_call_resolves_to_cjs_default_export(
+    tmp_path: Path,
+    force_syntax_fallback: None,
+) -> None:
+    _write_project(
+        tmp_path,
+        {
+            "dep.cjs": "module.exports = function dep() { return 1; };\n",
+            "main.js": (
+                'const run = require("./dep.cjs");\n'
+                "export function boot() {\n"
+                "  return run();\n"
+                "}\n"
+            ),
+        },
+    )
+
+    graph = build_project_call_graph(str(tmp_path), language="javascript")
+
+    assert graph.meta.get("graph_source") == "js-syntax-only"
+    assert ("main.js", "boot", "dep.cjs", "default") in graph.edges
+    assert ("main.js", "boot", "main.js", "run") not in graph.edges

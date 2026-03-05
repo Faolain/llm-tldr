@@ -2747,10 +2747,19 @@ def _extract_ts_file_calls(file_path: Path, root: Path) -> dict[str, list[tuple[
         elif node.type == "lexical_declaration":
             for child in node.children:
                 if child.type == "variable_declarator":
+                    local_name = None
+                    is_require_alias = False
                     for vc in child.children:
                         if vc.type == "identifier":
-                            defined_names.add(source[vc.start_byte:vc.end_byte].decode("utf-8"))
-                            break
+                            local_name = source[vc.start_byte:vc.end_byte].decode("utf-8")
+                        elif vc.type == "call_expression":
+                            # `const x = require("./mod")` is an import alias and should
+                            # resolve via default-import logic, not as an intra-file symbol.
+                            is_require_alias = (
+                                _extract_require_path_from_call_expression(vc, source) is not None
+                            )
+                    if local_name and not is_require_alias:
+                        defined_names.add(local_name)
         for child in node.children:
             collect_definitions(child)
 
