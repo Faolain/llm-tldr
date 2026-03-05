@@ -384,7 +384,7 @@ def analyze_change_impact(
     source_extensions = {
         "python": {".py"},
         "typescript": {".ts", ".tsx"},
-        "javascript": {".js", ".jsx"},
+        "javascript": {".js", ".jsx", ".mjs", ".cjs"},
         "go": {".go"},
         "rust": {".rs"},
     }
