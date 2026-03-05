@@ -132,3 +132,30 @@ export function boot() {
 
     assert ("main.js", "boot", "dep1.cjs", "default") in graph.edges
     assert ("main.js", "boot", "dep2.cjs", "default") in graph.edges
+
+
+def test_function_local_require_alias_scope_leak_does_not_cross_siblings(
+    tmp_path: Path,
+    force_syntax_fallback: None,
+) -> None:
+    _write_project(
+        tmp_path,
+        {
+            "dep.cjs": "module.exports = function dep() { return 1; };",
+            "main.js": """
+export function owner() {
+    const run = require("./dep.cjs");
+    return run();
+}
+
+export function sibling() {
+    return run();
+}
+""",
+        },
+    )
+
+    graph = build_project_call_graph(str(tmp_path), language="javascript")
+
+    assert ("main.js", "owner", "dep.cjs", "default") in graph.edges
+    assert ("main.js", "sibling", "dep.cjs", "default") not in graph.edges

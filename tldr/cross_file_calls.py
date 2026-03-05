@@ -536,17 +536,55 @@ def parse_ts_imports(file_path: str | Path) -> list[dict]:
 
     imports = []
 
-    def walk_tree(node):
+    def walk_tree(
+        node,
+        current_scope: Optional[str] = None,
+        current_class: Optional[str] = None,
+    ):
+        next_scope = current_scope
+        next_class = current_class
+
+        if node.type == "class_declaration":
+            class_name = _get_ts_node_name(node, source)
+            if class_name:
+                next_class = class_name
+        elif node.type == "function_declaration":
+            func_name = _get_ts_node_name(node, source)
+            if func_name:
+                next_scope = func_name
+        elif node.type == "method_definition":
+            method_name = _get_ts_node_name(node, source)
+            if method_name:
+                next_scope = (
+                    f"{next_class}.{method_name}" if next_class else method_name
+                )
+        elif node.type == "variable_declarator":
+            declarator_name = None
+            has_arrow_function = False
+            for part in node.children:
+                if part.type == "identifier":
+                    declarator_name = source[
+                        part.start_byte : part.end_byte
+                    ].decode("utf-8")
+                elif part.type == "arrow_function":
+                    has_arrow_function = True
+            if declarator_name and has_arrow_function:
+                next_scope = declarator_name
+
         if node.type == "import_statement":
             import_info = _parse_ts_import_node(node, source)
             if import_info:
+                import_info["scope"] = next_scope
                 imports.append(import_info)
         elif node.type in ("lexical_declaration", "variable_declaration"):
             import_infos = _parse_ts_require_declaration_node(node, source)
             if import_infos:
-                imports.extend(import_infos)
+                for import_info in import_infos:
+                    import_info["scope"] = next_scope
+                    imports.append(import_info)
+
         for child in node.children:
-            walk_tree(child)
+            walk_tree(child, next_scope, next_class)
 
     walk_tree(tree.root_node)
     return imports
@@ -3809,11 +3847,13 @@ def _build_typescript_call_graph(
         # Build import resolution map
         # For TypeScript, imports are relative paths or package names
         import_map = {}  # local_name -> (module_path, original_name)
-        default_imports = {}  # local_name -> module_path
+        default_imports = {}  # module-scope local_name -> module_path
+        scoped_default_imports: dict[str, dict[str, str]] = {}
         namespace_imports = {}  # local_name -> module_path
 
         for imp in imports:
             module = imp['module']
+            scope = imp.get("scope")
             # Resolve relative imports
             if module.startswith('.'):
                 # Convert relative path to file path
@@ -3834,7 +3874,11 @@ def _build_typescript_call_graph(
 
             # Default import: import Foo from "./module"
             if imp.get('default'):
-                default_imports[imp['default']] = module_path
+                default_name = imp['default']
+                if isinstance(scope, str) and scope:
+                    scoped_default_imports.setdefault(scope, {})[default_name] = module_path
+                else:
+                    default_imports[default_name] = module_path
 
         # Get calls from this file
         calls_by_func = _extract_ts_file_calls(ts_path, root)
@@ -3869,8 +3913,13 @@ def _build_typescript_call_graph(
                         if key in func_index:
                             dst_file = func_index[key]
                             graph.add_edge(rel_path, caller_func, dst_file, orig_name)
-                    elif call_target in default_imports:
-                        module_path = default_imports[call_target]
+                    else:
+                        scoped_defaults = scoped_default_imports.get(caller_func, {})
+                        module_path = scoped_defaults.get(call_target)
+                        if module_path is None:
+                            module_path = default_imports.get(call_target)
+                        if module_path is None:
+                            continue
                         resolved = _resolve_default_import_target(
                             module_path,
                             default_exports_by_key,
