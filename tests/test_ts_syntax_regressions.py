@@ -116,3 +116,26 @@ def test_require_alias_call_resolves_to_cjs_default_export(
     assert graph.meta.get("graph_source") == "js-syntax-only"
     assert ("main.js", "boot", "dep.cjs", "default") in graph.edges
     assert ("main.js", "boot", "main.js", "run") not in graph.edges
+
+
+def test_namespace_import_with_dotted_basename_resolves_attr_call(
+    tmp_path: Path,
+    force_syntax_fallback: None,
+) -> None:
+    _write_project(
+        tmp_path,
+        {
+            "foo.bar.ts": "export function helper() { return 1; }\n",
+            "main.ts": (
+                'import * as mod from "./foo.bar.ts";\n'
+                "export function run() {\n"
+                "  return mod.helper();\n"
+                "}\n"
+            ),
+        },
+    )
+
+    graph = build_project_call_graph(str(tmp_path), language="typescript")
+
+    assert graph.meta.get("graph_source") == "ts-syntax-only"
+    assert ("main.ts", "run", "foo.bar.ts", "helper") in graph.edges

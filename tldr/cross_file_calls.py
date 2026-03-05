@@ -3953,7 +3953,24 @@ def _build_typescript_call_graph(
                         obj, method = parts
                         if obj in namespace_imports:
                             module_path = namespace_imports[obj]
-                            simple_module = Path(_normalize_module_path(module_path)).stem
+                            explicit_module = module_path.replace("\\", "/").rstrip("/")
+                            if Path(explicit_module).suffix in (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"):
+                                key = (explicit_module, method)
+                                if key in func_index:
+                                    dst_file = func_index[key]
+                                    graph.add_edge(rel_path, caller_func, dst_file, method)
+                                continue
+
+                            normalized_module = _normalize_module_path(module_path)
+                            key = (normalized_module, method)
+                            if key in func_index:
+                                dst_file = func_index[key]
+                                if _normalize_module_path(dst_file) == normalized_module:
+                                    graph.add_edge(rel_path, caller_func, dst_file, method)
+                                    continue
+
+                            # Fallback for legacy simple-module index keys.
+                            simple_module = _module_basename(normalized_module)
                             key = (simple_module, method)
                             if key in func_index:
                                 dst_file = func_index[key]
