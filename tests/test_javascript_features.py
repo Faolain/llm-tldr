@@ -107,3 +107,28 @@ export function boot() {
     graph = build_project_call_graph(str(tmp_path), language="javascript")
 
     assert ("main.js", "boot", "dep.js", "default") in graph.edges
+
+
+def test_multi_declarator_require_aliases_resolve_both_defaults(
+    tmp_path: Path,
+    force_syntax_fallback: None,
+) -> None:
+    _write_project(
+        tmp_path,
+        {
+            "dep1.cjs": "module.exports = function dep1() { return 1; };",
+            "dep2.cjs": "module.exports = function dep2() { return 2; };",
+            "main.js": """
+const one = require("./dep1.cjs"), two = require("./dep2.cjs");
+export function boot() {
+    one();
+    return two();
+}
+""",
+        },
+    )
+
+    graph = build_project_call_graph(str(tmp_path), language="javascript")
+
+    assert ("main.js", "boot", "dep1.cjs", "default") in graph.edges
+    assert ("main.js", "boot", "dep2.cjs", "default") in graph.edges

@@ -542,9 +542,9 @@ def parse_ts_imports(file_path: str | Path) -> list[dict]:
             if import_info:
                 imports.append(import_info)
         elif node.type in ("lexical_declaration", "variable_declaration"):
-            import_info = _parse_ts_require_declaration_node(node, source)
-            if import_info:
-                imports.append(import_info)
+            import_infos = _parse_ts_require_declaration_node(node, source)
+            if import_infos:
+                imports.extend(import_infos)
         for child in node.children:
             walk_tree(child)
 
@@ -601,8 +601,9 @@ def _parse_ts_import_node(node, source: bytes) -> dict | None:
     return None
 
 
-def _parse_ts_require_declaration_node(node, source: bytes) -> dict | None:
-    """Parse `const x = require('...')` as a default-style import."""
+def _parse_ts_require_declaration_node(node, source: bytes) -> list[dict]:
+    """Parse `const x = require('...')` declarations as default-style imports."""
+    imports: list[dict] = []
     for child in node.children:
         if child.type != "variable_declarator":
             continue
@@ -622,14 +623,16 @@ def _parse_ts_require_declaration_node(node, source: bytes) -> dict | None:
         if not module:
             continue
 
-        return {
-            "module": module,
-            "names": [],
-            "default": local_name,
-            "aliases": {},
-        }
+        imports.append(
+            {
+                "module": module,
+                "names": [],
+                "default": local_name,
+                "aliases": {},
+            }
+        )
 
-    return None
+    return imports
 
 
 def parse_go_imports(file_path: str | Path) -> list[dict]:
