@@ -164,6 +164,37 @@ Judge policy:
 - use deterministic tests or scripted oracles wherever possible
 - use Claude Sonnet medium as judge only when deterministic scoring is not feasible
 
+Pinned judge configuration (create `benchmarks/agentic/judge_config.json`):
+
+```json
+{
+  "judge_provider": "claude_sdk",
+  "judge_model": "claude-sonnet-4-20250514",
+  "judge_temperature": 0.0,
+  "judge_max_tokens": 800,
+  "judge_retries": 1,
+  "enforce_json_schema": true
+}
+```
+
+All benchmark scripts must read judge configuration from this file. If the model changes, it changes in one place. Every run report must include a `judge_config_hash` (SHA-256 of the judge config JSON). The phase gate script must compare the judge config hash between runs; if they differ, the gate fails.
+
+Metric collection notes:
+
+- The existing `bench_llm_ab_run.py` harness is single-turn (one prompt, one answer). It cannot collect turn count, tool-call count, transcript data, or workflow compliance. Ten of the fourteen primary/secondary metrics require multi-turn instrumentation.
+- `bench_agent_tasks.py` is a genuinely new multi-turn agent loop program, not a mode flag on the existing harness. It must manage conversation turns, capture structured transcripts, and post-process them.
+- Token usage fallback: if Kimi CLI does not report token counts, estimate via `tldr.stats.count_tokens()` (tiktoken `cl100k_base`) applied to the raw transcript text.
+- Wall-clock time is automatically captured by the existing harness pattern (`time.monotonic()` around each call).
+- Token aggregation: the existing run reports do not aggregate total input/output tokens across a run. The new scripts must add `total_input_tokens` and `total_output_tokens` to the report summary.
+
+Statistical significance:
+
+- Add `scipy` as a dev dependency for significance testing.
+- For solve rate comparisons (binary paired outcomes, n >= 20): use McNemar's test.
+- For continuous paired metrics (F1, tokens, time): use Wilcoxon signed-rank test.
+- At the pilot size of 20-50 tasks, acknowledge that statistical power is limited. Pilot results are directional; confirmatory power requires n >= 50.
+- Phase gates should report p-values alongside point estimates but should not hard-gate on significance until Phase F (n >= 200).
+
 ## Phase Plan
 
 ### Phase A: Reuse Existing `llm_ab` Harness
@@ -182,9 +213,26 @@ Work:
   - augmented context arm built from `tldrf` packets
 - keep the judge fixed as Claude Sonnet medium
 
-Acceptance:
+Acceptance gate (`benchmarks/agentic/phase_a_gates.json`):
 
-- we can quantify whether `tldrf`-over-`rg` uplift exists for Kimi before adding more models
+```json
+{
+  "win_rate_tldr_over_rg_min": 0.55,
+  "f1_mean_tldr_min_delta": 0.05,
+  "max_error_rate": 0.05,
+  "min_tasks_completed": 20
+}
+```
+
+Verification command:
+
+```bash
+uv run python scripts/bench_phase_gate.py \
+  --report benchmark/runs/<ts>-llm-ab-run-structured.json \
+  --gates benchmarks/agentic/phase_a_gates.json
+```
+
+Exit 0 = pass (proceed to Phase B). Exit 2 = fail (investigate before continuing).
 
 ### Phase B: Tool-Usage Preflight and Tool-Choice Evaluation
 
@@ -202,9 +250,18 @@ Required preflight gate before full runs:
 
 - run a small live pilot on representative tasks before Phase C or later phases
 - record full transcripts plus per-step tool calls
-- manually review a small sample before trusting the aggregate score
+- automated transcript validation via `scripts/bench_preflight_validate.py` replaces manual review (see below)
 - if the agent skips `tldrf` on tasks where it should use it, or misuses it repeatedly, stop and tune the instruction surface before continuing
 - do not record or publish full Phase D / Phase E outcome numbers until this gate passes
+
+Automated transcript validation (`scripts/bench_preflight_validate.py`):
+
+- parses per-step tool calls from the transcript JSONL
+- compares first tool call against the task's `expected_first_tool` field
+- flags tasks where agent made > 3 consecutive calls without invoking any expected-workflow tool
+- detects systematic failure: if > 2 tasks in the same workflow class fail identically, sets `systematic_failure_detected: true`
+- emits structured JSON report with `systematic_failure_detected`, `failure_patterns`, and `recommendation` ("pass" or "tune_and_rerun")
+- exit 0 on pass, exit 2 on failure
 
 Initial pilot shape:
 
@@ -221,6 +278,24 @@ Initial labeled workflow classes:
 - refactor blast radius -> `impact -> context -> rg`
 - line-level debugging -> `slice -> dfg`
 - repeated queries -> daemon or MCP
+
+Each task in `benchmarks/agentic/preflight_tasks.json` must include machine-readable policy fields:
+
+```json
+{
+  "id": "PF01",
+  "question": "Where is the Django ORM query compilation entry point?",
+  "workflow_class": "concept_lookup",
+  "target_repo": "django",
+  "expected_first_tool": "tldrf_semantic_search",
+  "expected_tool_set": ["tldrf_semantic_search", "tldrf_context"],
+  "forbidden_first_tool": ["rg"],
+  "max_allowed_dead_end_turns": 1
+}
+```
+
+"Skips tldrf" = the agent never invokes any tool in `expected_tool_set` for that task.
+"Repeatedly" = 20% or more of tldrf-required tasks skip tldrf entirely.
 
 Metrics:
 
@@ -250,14 +325,49 @@ Failed preflight runs are invalidation signals, not product evidence:
 - they mean the instruction surface or tool ergonomics are not ready
 - they should trigger tuning and rerun, not be counted as wins/losses for `tldrf`
 
-Provisional preflight acceptance gate:
+Provisional preflight acceptance gate (`benchmarks/agentic/preflight_gates.json`):
 
-- correct-first-tool rate >= 0.80
-- workflow-compliance rate >= 0.80
-- `tldrf`-usage rate >= 0.90 on `tldrf`-required tasks
-- `rg-first` compliance >= 0.90 on exact-lookup tasks
-- median dead-end turns <= 1
-- manual transcript review confirms no obvious repeated failure mode
+```json
+{
+  "correct_first_tool_min": 0.80,
+  "workflow_compliance_min": 0.80,
+  "tldrf_usage_on_required_min": 0.90,
+  "rg_first_on_exact_min": 0.90,
+  "median_dead_end_turns_max": 1,
+  "systematic_failure_detected_must_be": false
+}
+```
+
+Verification commands:
+
+```bash
+# Run the preflight suite
+uv run python scripts/bench_tool_choice.py \
+  --tasks benchmarks/agentic/preflight_tasks.json \
+  --provider kimi_cli \
+  --model <kimi-model-id> \
+  --instruction-source AGENTS.md \
+  --max-turns 20 \
+  --timeout-s 300 \
+  --trials 1 \
+  --out benchmark/runs/<ts>-preflight.json
+
+# Validate transcripts automatically (replaces manual review)
+uv run python scripts/bench_preflight_validate.py \
+  --report benchmark/runs/<ts>-preflight.json \
+  --gates benchmarks/agentic/preflight_gates.json
+```
+
+Tuning iteration cap:
+
+- maximum 3 tuning iterations before escalating to human review
+- each iteration: run preflight, check gate, produce structured diagnostic identifying which workflow class fails and what tool the agent used instead
+- if all 3 iterations fail, the diagnostic report must be reviewed before continuing (this is the only remaining human gate)
+
+Failed preflight quarantine:
+
+- the preflight runner tags output with `"preflight_status": "passed"` or `"failed"`
+- Phase C/D/E runners must refuse to start if the most recent preflight report has `preflight_status: "failed"`
 
 Acceptance:
 
@@ -286,12 +396,17 @@ Corpora:
 - then add `requests`
 - then add `urllib3`
 
-Acceptance:
+Acceptance gate (`benchmarks/agentic/phase_c_gates.json`):
 
-- task categories clearly separate:
-  - `rg`-wins tasks
-  - `tldrf`-wins tasks
-  - mixed-policy tasks where the combo is strongest
+- within each declared category (`rg-wins`, `tldrf-wins`, `mixed`), the expected winning arm must achieve `win_rate >= 0.70` within that category
+- at least 5 tasks per category minimum
+- overall error rate <= 0.10
+
+```bash
+uv run python scripts/bench_phase_gate.py \
+  --report benchmark/runs/<ts>-phase-c.json \
+  --gates benchmarks/agentic/phase_c_gates.json
+```
 
 ### Phase D: Local End-to-End Patch/Test Tasks
 
@@ -311,9 +426,20 @@ Scoring:
 - hidden tests or scripted oracles first
 - judge only for non-deterministic outputs like explanations or refactor plans
 
-Acceptance:
+Acceptance gate (`benchmarks/agentic/phase_d_gates.json`):
 
-- augmented arm shows better solve rate, or equal solve rate with materially lower time/tokens/turns
+- `solve_rate_delta_min`: 0.0 (augmented must be at least equal)
+- if solve rates are within 0.05 of each other, require at least one of:
+  - `token_reduction_min_pct`: 15
+  - `turn_reduction_min_pct`: 20
+  - `time_reduction_min_pct`: 15
+- `min_tasks_completed`: 10
+
+```bash
+uv run python scripts/bench_phase_gate.py \
+  --report benchmark/runs/<ts>-phase-d.json \
+  --gates benchmarks/agentic/phase_d_gates.json
+```
 
 ### Phase E: SWE-bench Verified Pilot
 
@@ -336,9 +462,18 @@ Record:
 - time
 - patch quality notes
 
-Acceptance:
+Acceptance gate (`benchmarks/agentic/phase_e_gates.json`):
 
-- the pilot is strong enough to justify scale-out
+- `solve_rate_augmented >= solve_rate_baseline + 0.05` OR
+- `(solve_rate_delta >= -0.02 AND token_reduction >= 20%)`
+- if neither holds, the gate fails and Phase F does not proceed
+- report p-values (McNemar's for solve rate, Wilcoxon for tokens/time) but do not hard-gate on significance at pilot size
+
+```bash
+uv run python scripts/bench_phase_gate.py \
+  --report benchmark/runs/<ts>-phase-e.json \
+  --gates benchmarks/agentic/phase_e_gates.json
+```
 
 ### Phase F: External Scale-Out
 
@@ -352,9 +487,17 @@ Run:
 - optional follow-up on full SWE-bench
 - optional later validation on RepoBench / RefactorBench / Debug-gym depending on where the local signal is strongest
 
-Acceptance:
+Acceptance gate (`benchmarks/agentic/phase_f_gates.json`):
 
-- a stable result that answers whether Kimi with `tldrf` is meaningfully better than Kimi without it
+- results must hold across 3 independent runs with `min_pass_runs: 2` (replicating the stability semantics from `bench_h2h_assert.py`)
+- McNemar's test p < 0.05 for solve rate OR Wilcoxon p < 0.05 for token/time reduction
+- minimum 200 tasks completed
+
+```bash
+uv run python scripts/bench_phase_gate.py \
+  --report benchmark/runs/<ts>-phase-f.json \
+  --gates benchmarks/agentic/phase_f_gates.json
+```
 
 ### Phase G: Optional Model-Matrix Expansion
 
@@ -374,24 +517,112 @@ Acceptance:
 
 ## Implementation Work Needed In This Repo
 
-Likely files to change:
+### Existing files to modify
 
 - [scripts/bench_llm_ab_run.py](../scripts/bench_llm_ab_run.py)
-  - add a Kimi CLI provider adapter or wrapper path
-  - extend full-run usage accounting
-- New: `scripts/bench_tool_choice.py`
-  - add a preflight mode that emits transcript-level workflow-compliance reports
-  - evaluate workflow selection quality
-- New: `scripts/bench_agent_tasks.py`
-  - run end-to-end tool-using tasks
-- New: `benchmarks/agentic/preflight_tasks.json`
-- New: `benchmarks/agentic/tool_choice_tasks.json`
-- New: `benchmarks/agentic/patch_tasks.json`
-- New: `benchmarks/agentic/swebench_subset.json`
+  - add `_kimi_cli_call()` following `_claude_cli_call()` pattern (line ~521)
+  - add `'kimi_cli'` to `--provider` choices (line ~668) and `--judge-provider` choices (line ~676)
+  - add answer dispatcher branch (line ~939) and judge dispatcher branch (line ~1034)
+  - add `--answer-retries N` parameter (default 1) for empty/malformed responses, analogous to `--judge-retries`
+  - add `total_input_tokens` and `total_output_tokens` to report summary
 - [benchmarks/README.md](../benchmarks/README.md)
   - publish the new benchmark family and results
 
-Canonical instruction surface to maintain:
+### New scripts to create
+
+- `scripts/bench_tool_choice.py`
+  - multi-turn agent loop that runs tasks from a task JSON, captures structured transcripts
+  - records per-turn tool calls, normalizes tool names to canonical vocabulary
+  - emits JSONL transcripts + summary report JSON
+  - arguments: `--tasks`, `--provider`, `--model`, `--instruction-source`, `--max-turns`, `--timeout-s`, `--trials`, `--out`
+- `scripts/bench_agent_tasks.py`
+  - end-to-end patch/test task runner
+  - manages agent conversation, captures `git diff --name-only` after each run
+  - computes changed-file recall/precision against gold patch
+  - arguments: `--tasks`, `--provider`, `--model`, `--arm baseline|augmented`, `--max-turns`, `--timeout-s`, `--out`
+  - circuit breaker: `--max-consecutive-errors 5`, `--max-error-rate-abort 0.30`
+  - checkpoint/resume: `--resume <answers-jsonl>` to skip completed task IDs on restart
+- `scripts/bench_preflight_validate.py`
+  - reads preflight report + transcripts, performs automated pattern detection
+  - replaces manual transcript review
+  - arguments: `--report`, `--gates`
+  - exit 0 on pass, exit 2 on failure
+- `scripts/bench_phase_gate.py`
+  - generic gate checker following `bench_h2h_assert.py` pattern (`_add_gate` / `_evaluate_run` / exit-code)
+  - accepts `--report <path>` and `--gates <path>`
+  - evaluates thresholds, writes diagnostic JSON with per-gate pass/fail
+  - exit 0 on pass, exit 2 on failure
+- `scripts/bench_agentic_orchestrate.py`
+  - top-level orchestrator that chains: Phase A -> Gate A -> Phase B -> Gate B -> ... -> Phase F
+  - each phase is a subprocess call; if any gate exits nonzero, orchestrator stops
+  - writes summary JSON with `stopped_at_phase`, `reason`, and gate diagnostic path
+  - arguments: `--start-from-phase A`, `--end-at-phase F`, `--kimi-model <id>`
+  - optional `--notify-webhook URL` for completion/failure notifications
+- `scripts/bench_curate_swebench.py`
+  - filters SWE-bench Verified for `repo == "django/django"`, resolved tasks
+  - sorts by instance_id for deterministic ordering, selects first N tasks
+  - validates each task has a runnable test command
+  - writes `benchmarks/agentic/swebench_subset.json`
+  - arguments: `--source <swebench-path>`, `--count 30`, `--out`
+
+### New data files to create
+
+- `benchmarks/agentic/judge_config.json` — pinned judge model, temperature, provider
+- `benchmarks/agentic/preflight_tasks.json` — 10 tasks (2 per workflow class), with machine-readable policy fields
+- `benchmarks/agentic/tool_choice_tasks.json` — 30-50 tasks across all workflow classes (superset of preflight)
+- `benchmarks/agentic/patch_tasks.json` — 10 tasks with `hidden_test_command`, `expected_test_result`, `expected_changed_files`, `max_turns`, `timeout_s`
+- `benchmarks/agentic/swebench_subset.json` — 30 Django SWE-bench Verified tasks with `instance_id`, `repo`, `base_commit`, `patch`, `test_cmd`, `timeout_s`
+- `benchmarks/agentic/phase_a_gates.json`
+- `benchmarks/agentic/preflight_gates.json`
+- `benchmarks/agentic/phase_c_gates.json`
+- `benchmarks/agentic/phase_d_gates.json`
+- `benchmarks/agentic/phase_e_gates.json`
+- `benchmarks/agentic/phase_f_gates.json`
+
+### Extended report schema for agentic runs
+
+The report envelope (`bench_util.make_report()`) must additionally include:
+
+- `arm`: `"baseline"` | `"augmented"`
+- `instruction_surface`: filename + SHA-256 of the canonical instruction document
+- `tools_available`: list of tool names available in this arm
+- `task_suite_sha256`: hash of the task JSON for reproducibility
+- `judge_config_hash`: SHA-256 of the judge config JSON
+
+Each per-task result entry must additionally include:
+
+- `transcript_path`: path to separate JSONL transcript file
+- `solve_rate`: 0 or 1
+- `turn_count`: int
+- `tool_call_count`: int
+- `tool_calls`: list of normalized tool names in order
+- `changed_files`: list of file paths
+- `wall_clock_s`: float
+- `first_pass_time_s`: float (time to first passing test, if applicable)
+
+### Kimi CLI provider adapter specification
+
+```python
+def _kimi_cli_call(
+    *,
+    model: str,
+    prompt: str,
+    timeout_s: float,
+    json_schema: dict[str, Any] | None,
+    env: dict[str, str] | None,
+) -> tuple[str, dict[str, Any]]:
+    """
+    Invoke Kimi CLI via subprocess, following _claude_cli_call() pattern.
+    - Pass prompt via stdin
+    - Parse stdout for response text
+    - Extract token counts if Kimi CLI reports them; otherwise return {}
+    - Raise RuntimeError on non-zero exit, timeout, or auth expiry
+    """
+```
+
+Session health: before each batch of N tasks, run a lightweight Kimi CLI no-op to verify the session is alive. If expired, emit structured error and stop (do not silently produce empty results).
+
+### Canonical instruction surface to maintain
 
 - [AGENTS.md](../AGENTS.md) during the initial benchmark program
 - optional future replacement: a single dedicated `skill.md`
@@ -399,15 +630,100 @@ Canonical instruction surface to maintain:
 
 ## Immediate Next Steps
 
-1. Create the Kimi CLI provider adapter so the logged-in local Kimi session can run inside the existing answer-model harness.
-2. Reuse the current Django `llm_ab` packets and run the smallest possible pilot:
-   - Kimi baseline arm
-   - Kimi plus `tldrf` arm
-3. Define the preflight tool-usage suite from the single canonical instruction source in [AGENTS.md](../AGENTS.md).
-4. Run the preflight gate and tune only that canonical instruction surface until workflow compliance is acceptable.
-5. Define the full tool-choice gold policy suite.
-6. Curate a first batch of local patch/test tasks on Django.
-7. Select the first 20-50 Django-heavy SWE-bench Verified tasks for the external pilot.
+### Step 1: Implement Kimi CLI provider adapter
+
+Add `_kimi_cli_call()` to `scripts/bench_llm_ab_run.py` following the `_claude_cli_call()` pattern at line ~521. Add `'kimi_cli'` to `--provider` choices at line ~668.
+
+Verify:
+```bash
+uv run python scripts/bench_llm_ab_run.py \
+  --provider kimi_cli --model <kimi-model-id> \
+  --prompts benchmark/llm/<test-packet>.jsonl \
+  --limit 1 --dry-run
+```
+
+### Step 2: Run smallest possible Phase A pilot
+
+```bash
+# Generate prompt packets (if not already available)
+uv run python scripts/bench_llm_ab_prompts.py \
+  --corpus django --budget-tokens 2000
+
+# Structured tasks — Kimi with both context arms
+uv run python scripts/bench_llm_ab_run.py \
+  --prompts benchmark/llm/<ts>-llm-ab-django.jsonl \
+  --provider kimi_cli \
+  --model <kimi-model-id> \
+  --mode structured --trials 3 --limit 5
+
+# Check Phase A gate (smoke test)
+uv run python scripts/bench_phase_gate.py \
+  --report benchmark/runs/<ts>-llm-ab-run-structured.json \
+  --gates benchmarks/agentic/phase_a_gates.json
+```
+
+### Step 3: Create preflight task suite
+
+Create `benchmarks/agentic/preflight_tasks.json` with 10 tasks (2 per workflow class). Each task must include: `id`, `workflow_class`, `expected_first_tool`, `expected_tool_set`, `forbidden_first_tool`, `question`, `target_repo`, `max_allowed_dead_end_turns`. Draw from existing Django queries in `benchmarks/python/django_structural_queries.json` and `benchmarks/retrieval/django_queries.json`.
+
+Optionally automate with:
+```bash
+uv run python scripts/bench_curate_preflight.py \
+  --structural benchmarks/python/django_structural_queries.json \
+  --retrieval benchmarks/retrieval/django_queries.json \
+  --out benchmarks/agentic/preflight_tasks.json
+```
+
+### Step 4: Run preflight gate (max 3 tuning iterations)
+
+```bash
+uv run python scripts/bench_tool_choice.py \
+  --tasks benchmarks/agentic/preflight_tasks.json \
+  --provider kimi_cli \
+  --model <kimi-model-id> \
+  --instruction-source AGENTS.md \
+  --max-turns 20 --timeout-s 300 --trials 1 \
+  --out benchmark/runs/<ts>-preflight.json
+
+uv run python scripts/bench_preflight_validate.py \
+  --report benchmark/runs/<ts>-preflight.json \
+  --gates benchmarks/agentic/preflight_gates.json
+```
+
+If gate fails: review diagnostic JSON, tune AGENTS.md, rerun. Maximum 3 iterations.
+
+### Step 5: Create full tool-choice suite
+
+Create `benchmarks/agentic/tool_choice_tasks.json` with 30-50 tasks across all workflow classes (superset of preflight). Same schema as preflight tasks. Rerun with same verification commands as step 4.
+
+### Step 6: Create local patch/test tasks
+
+Create `benchmarks/agentic/patch_tasks.json` with 10 tasks. Each must include: `id`, `category`, `repo`, `issue_description`, `hidden_test_command`, `expected_test_result`, `expected_changed_files`, `max_turns`, `timeout_s`. Selection criteria: every task must have a deterministic test command (not judge-only).
+
+### Step 7: Select SWE-bench Verified tasks
+
+```bash
+uv run python scripts/bench_curate_swebench.py \
+  --source <swebench-verified-path> \
+  --repo django/django \
+  --count 30 \
+  --out benchmarks/agentic/swebench_subset.json
+```
+
+### Step 8: Create gate threshold files
+
+Create all six gate JSON files under `benchmarks/agentic/` with the thresholds specified in each phase's acceptance section above.
+
+### Step 9: Create orchestrator
+
+Implement `scripts/bench_agentic_orchestrate.py` that chains all phases with gate checks. This is the single entry point for hands-off execution:
+
+```bash
+uv run python scripts/bench_agentic_orchestrate.py \
+  --kimi-model <kimi-model-id> \
+  --start-from-phase A \
+  --end-at-phase F
+```
 
 ## Running Log
 
@@ -430,6 +746,23 @@ Canonical instruction surface to maintain:
   - keep harness/system prompts fixed
   - tune one canonical instruction document only
   - treat mirror docs as explanatory, not independent benchmark levers
+- 2026-03-06: Autonomy review — applied 33 fixes across 10 categories to make the plan hands-off:
+  - pinned judge config to exact model ID (`claude-sonnet-4-20250514`) with temperature, provider, and hash enforcement
+  - replaced all vague acceptance criteria with numeric phase gate thresholds in JSON files
+  - replaced "manually review transcripts" with automated `bench_preflight_validate.py`
+  - added machine-readable task schema with `expected_first_tool`, `workflow_class`, `forbidden_first_tool`
+  - added `bench_phase_gate.py` (generic gate checker following `bench_h2h_assert.py` pattern)
+  - added `bench_agentic_orchestrate.py` (top-level orchestrator with stop-on-failure)
+  - added circuit breaker (`--max-consecutive-errors`, `--max-error-rate-abort`) to agent task runner
+  - added checkpoint/resume (`--resume <answers-jsonl>`) for crash recovery
+  - added session health check for Kimi CLI to handle auth expiry during long runs
+  - added tuning iteration cap (max 3) before escalating to human review
+  - added preflight quarantine: downstream phases refuse to start if preflight status is "failed"
+  - added statistical significance testing plan (McNemar's + Wilcoxon, scipy dev dependency)
+  - converted all 7 immediate next steps into 9 concrete steps with verbatim CLI commands
+  - added Kimi CLI provider adapter specification with exact function signature
+  - added extended report schema for agentic runs (arm, instruction hash, transcript paths)
+  - noted CI blocker: Kimi session-based auth prevents GitHub Actions automation; orchestrator is local-only
 
 ## Gotchas / Learnings
 
@@ -441,4 +774,11 @@ Canonical instruction surface to maintain:
   - `rg` for exact lookup
   - `tldrf` for structure and concept search
 - Kimi CLI avoids forcing an OpenRouter dependency into the first benchmark pass, which keeps the initial harness closer to the real local workflow we actually want to evaluate.
-- Judge configuration should be pinned exactly once selected. "Claude Sonnet medium" should not drift between pilot and scale-out runs.
+- Judge configuration should be pinned exactly once selected. "Claude Sonnet medium" should not drift between pilot and scale-out runs. Use `benchmarks/agentic/judge_config.json` with exact dated model ID.
+- The existing `bench_llm_ab_run.py` is fundamentally single-turn (one prompt, one answer). It cannot collect turn count, tool-call count, or transcript data. `bench_agent_tasks.py` is a genuinely new multi-turn program, not a mode flag.
+- Token usage is inconsistent across providers: `codex` returns `{}`, `claude_cli` returns full usage. For Kimi, include a tiktoken fallback estimation path.
+- No existing statistical significance testing exists in the codebase. `scipy` must be added as a dev dependency. At pilot sizes (20-50 tasks), results are directional, not confirmatory.
+- Kimi CLI uses a logged-in local session. Session tokens can expire during multi-hour runs (Phase E/F). The provider adapter must include a session health check before each batch.
+- The orchestrator is the single most important file for making the benchmark autonomous. Without `bench_agentic_orchestrate.py`, "hands-off" execution is impossible.
+- Corpus expansion to `requests` and `urllib3` (Phase C) requires adding entries to `benchmarks/corpora.json` with pinned git refs. The existing `scripts/bench_fetch_corpora.py` handles fetching.
+- CI automation is blocked by Kimi CLI's session-based auth (no injectable API key). Accept that the orchestrator is local-only unless Kimi provides token-based auth injection.
