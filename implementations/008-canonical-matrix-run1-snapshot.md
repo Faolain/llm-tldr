@@ -50,6 +50,29 @@ This snapshot combines:
 | contextplus | 2000 | 0.21564327485380116 | 0.2982456140350877 | 0.3333333333333333 | 0.05964912280701755 | 1.0 | 329.0 | 7717.107 |
 | rg-native | 2000 | 0.8126218323586745 | 0.8771929824561403 | 0.9473684210526315 | 0.1754385964912281 | 0.0 | 12.0 | 216.22050000000002 |
 
+## 009 Model Variant Addendum (BGE vs Jina)
+
+These rows complement the canonical run1 snapshot with the daemon-mode Django migration results from `implementations/009-migrate-bge-to-jina-code-0.5b_IMPLEMENTATION_PLAN.md`. They are same-tool model comparisons, not replacements for the original 008 h2h rows.
+
+| Evaluation surface | BGE | Jina | Comparator context | What to take away |
+| --- | --- | --- | --- | --- |
+| Common lane `hybrid_rrf` quality | `mrr=0.8684`, `r@5=0.9649`, `r@10=1.0000`, `p@5=0.1930` | `mrr=0.8686`, `r@5=0.9825`, `r@10=1.0000`, `p@5=0.1965` | `contextplus` run1 remains far lower; `rg-native` remains much faster | Jina is roughly tied with BGE on lane1 quality, with only a marginal edge. |
+| Common lane `hybrid_lane2` quality | `mrr=0.8741`, `r@5=0.8772`, `r@10=0.9649`, `p@5=0.1754` | `mrr=0.8417`, `r@5=0.9123`, `r@10=1.0000`, `p@5=0.1825` | This is the closest model-variant analogue to the run1 retrieval board | BGE still wins the canonical gate row on MRR, so Jina does not displace the current default lane. |
+| Pure semantic concept-path quality | `mrr=0.6022`, `r@5=0.7719`, `r@10=0.7895`, `p@5=0.1544` | `mrr=0.7023`, `r@5=0.8596`, `r@10=0.8772`, `p@5=0.1719` | Both are stronger than the current `contextplus` concept-path row; `rg-native` is not the right comparator here | This is the main place Jina is genuinely better: pure semantic concept retrieval. |
+| Token-efficiency retrieval @ `1000` | `semantic=0.6124`, `hybrid_rrf=0.8597` | `semantic=0.7048`, `hybrid_rrf=0.8647` | Budgeted retrieval quality, not h2h run1 | Jina improves semantic quality under token pressure; hybrid gain is small. |
+| Compound semantic+impact | `tte_p50_ratio=1.0250`, correctness parity on overlap/Jaccard | `tte_p50_ratio=1.1361`, correctness parity on overlap/Jaccard | No direct `contextplus` / `rg-native` equivalent | Jina gives up efficiency on a product-path lane even though correctness is tied. |
+| Structured exact-definition retrieval | `f1=0.1602`, `p50=142.1ms` | `f1=0.1520`, `p50=140.3ms` | `rg-native=0.9841`, `p50=84.8ms` | Exact definition lookup remains a lexical problem; neither embedding model should replace `rg-native` here. |
+| Structured behavior retrieval (semantic) | `f1=0.1458`, `p50=169.5ms` | `f1=0.1053`, `p50=185.9ms` | `rg-native=0.0217`, `p50=87.3ms` | Semantic retrieval adds real value on concept-style target recovery, but BGE still beats Jina. |
+| Structured behavior retrieval (hybrid) | `f1=0.1584`, `p50=422.9ms` | `f1=0.1188`, `p50=438.5ms` | Same suite; both beat `rg-native` on quality | Hybrid helps concept-style recovery, but BGE still wins and this harness includes file-to-symbol projection overhead. |
+| Structured behavior retrieval (hybrid + `rg_empty`) | `f1=0.0000`, `p50=358.0ms` | `f1=0.0000`, `p50=358.3ms` | Negative query fixed; all positive hybrid queries suppressed | Strict lexical guards are too aggressive for the current behavior-query labels. |
+| Steady-state daemon semantic latency | `p50=150.2ms`, `p95=250.2ms` | `p50=166.5ms`, `p95=286.4ms` | Query latency only, not build cost | BGE is still faster at steady-state query time by about `10-14%`. |
+| Semantic build / memory cost | parity rebuild still pending | `build_s=692.57`, `peak_rss=3360.1MB` | Operational, not retrieval quality | Jina is operationally heavier, which is part of why the current decision remains `KEEP_OPT_IN`. |
+
+Bottom line:
+- Jina is useful over BGE when the task is pure semantic concept retrieval and semantic quality under budget is the priority.
+- BGE remains the better default model for the full product surface because lane2, compound efficiency, structured retrieval, and operational cost still favor it.
+- `rg-native` remains the correct first tool for exact symbol and definition lookup regardless of embedding model.
+
 ## Daemon-Mode Latency By Lane (Budget 2000, Retrieval, MPS GPU)
 
 All lanes rerun with `--use-daemon` on 2026-03-03. Results are byte-identical to subprocess mode. MPS GPU auto-detected.

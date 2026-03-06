@@ -55,6 +55,27 @@ Summary values:
 ### Stability caveat (important)
 Single-run segment asserts can pass strict run-level gates while still failing overall due `stability.two_of_three` if only one run was executed.
 
+## 009 Model-Variant Snapshot (BGE Default vs Jina Opt-In)
+
+This addendum keeps the same-tool model decision in the 008 operator handoff rather than leaving it only in the migration plan. Source of truth for the run log and report inventory: `implementations/009-migrate-bge-to-jina-code-0.5b_IMPLEMENTATION_PLAN.md`.
+
+| Scenario | BGE | Jina | Comparator context | Operational takeaway |
+| --- | --- | --- | --- | --- |
+| Common lane `hybrid_rrf` retrieval | `mrr=0.8684`, `r@5=0.9649`, `r@10=1.0000`, `p@5=0.1930` | `mrr=0.8686`, `r@5=0.9825`, `r@10=1.0000`, `p@5=0.1965` | 008 snapshot: `rg=0.820`, `contextplus=0.216` MRR | Near tie. Jina has only a marginal lane1 edge. |
+| Common lane `hybrid_lane2` retrieval | `mrr=0.8741`, `r@5=0.8772`, `r@10=0.9649`, `p@5=0.1754` | `mrr=0.8417`, `r@5=0.9123`, `r@10=1.0000`, `p@5=0.1825` | Gate-like lane row | Keep BGE default. Jina loses the MRR-heavy gate row. |
+| Pure semantic concept retrieval | `mrr=0.6022`, `r@5=0.7719`, `r@10=0.7895`, `p@5=0.1544` | `mrr=0.7023`, `r@5=0.8596`, `r@10=0.8772`, `p@5=0.1719` | Concept lookup only | Jina is the better semantic-only model on current evidence. |
+| Token-efficiency retrieval at `1000` | `semantic=0.6124`, `hybrid_rrf=0.8597` | `semantic=0.7048`, `hybrid_rrf=0.8647` | Budget-constrained retrieval | Jina helps semantic quality under tighter token budgets; hybrid stays nearly tied. |
+| Structured exact-definition retrieval | `f1=0.1602`, `p50=142.1ms` | `f1=0.1520`, `p50=140.3ms` | `rg-native=0.9841`, `p50=84.8ms` | Keep exact symbol lookup lexical. Neither embedding model should replace `rg-native` here. |
+| Structured behavior retrieval (semantic / hybrid) | `semantic f1=0.1458`, `hybrid f1=0.1584` | `semantic f1=0.1053`, `hybrid f1=0.1188` | `rg-native=0.0217` on the same suite | Semantic and hybrid help on concept-style targets, but BGE beats Jina in both modes. |
+| Compound semantic+impact | `tte_p50_ratio=1.0250`, overlap/Jaccard parity `=1.0` | `tte_p50_ratio=1.1361`, overlap/Jaccard parity `=1.0` | No direct `contextplus` or `rg-native` equivalent | Jina does not regress correctness here, but it is less efficient than BGE on the product path. |
+| Steady-state daemon semantic latency | `p50=150.2ms`, `p95=250.2ms` | `p50=166.5ms`, `p95=286.4ms` | Query latency only | BGE is still about `10-14%` faster. |
+| Semantic build / peak RSS | parity rebuild still pending | `build_s=692.57`, `peak_rss=3360.1MB` | One-time index build | Jina is operationally heavier. |
+
+Decision summary:
+- Keep `bge-large-en-v1.5` as the default model.
+- Keep `jina-code-0.5b` opt-in for pure semantic concept retrieval and budget-constrained semantic retrieval experiments.
+- Keep `rg-native` as the first tool for exact identifier and definition lookup.
+
 ## Reproducible Operator Runbook
 
 ### 1) Fetch pinned corpus

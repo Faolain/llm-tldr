@@ -4,6 +4,7 @@ import json
 import platform
 import subprocess
 import sys
+import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -196,3 +197,97 @@ def load_corpora_manifest(path: Path) -> dict[str, Any]:
     if not isinstance(data.get("corpora"), list):
         raise ValueError(f"Bad corpora manifest 'corpora' field: {path}")
     return data
+
+
+def restart_benchmark_daemon(
+    repo_root: Path,
+    *,
+    index_ctx: Any,
+    timeout_s: float = 10.0,
+) -> dict[str, Any]:
+    from tldr.daemon.startup import query_daemon, stop_daemon
+
+    try:
+        stop_daemon(repo_root, index_ctx=index_ctx)
+    except Exception:
+        pass
+
+    argv = [
+        sys.executable,
+        "-m",
+        "tldr.daemon.startup",
+        str(repo_root),
+        "--cache-root",
+        str(index_ctx.cache_root),
+        "--index",
+        str(index_ctx.index_id),
+        "--foreground",
+    ]
+    cfg = getattr(index_ctx, "config", None)
+    if cfg is not None:
+        ignore_file = getattr(cfg, "ignore_file", None)
+        if ignore_file is not None:
+            argv.extend(["--ignore-file", str(ignore_file)])
+        if getattr(cfg, "no_ignore", False):
+            argv.append("--no-ignore")
+        elif getattr(cfg, "use_gitignore", True) is False:
+            argv.append("--no-gitignore")
+        for pattern in list(getattr(cfg, "cli_patterns", ()) or ()):
+            argv.extend(["--ignore", str(pattern)])
+
+    proc = subprocess.Popen(
+        argv,
+        cwd=str(get_repo_root()),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+    deadline = time.time() + float(timeout_s)
+    attempts = 0
+    last_error: str | None = None
+    while time.time() < deadline:
+        attempts += 1
+        try:
+            res = query_daemon(repo_root, {"cmd": "ping"}, index_ctx=index_ctx)
+            if res.get("status") == "ok":
+                return {"ok": True, "attempts": attempts, "pid": proc.pid}
+            last_error = str(res.get("message") or "status!=ok")
+        except Exception as exc:
+            last_error = f"{type(exc).__name__}: {exc}"
+        time.sleep(0.05)
+    try:
+        proc.terminate()
+    except Exception:
+        pass
+    return {
+        "ok": False,
+        "attempts": attempts,
+        "last_error": last_error,
+        "pid": proc.pid,
+        "returncode": proc.poll(),
+    }
+
+
+def stop_benchmark_daemon(repo_root: Path, *, index_ctx: Any) -> None:
+    from tldr.daemon.startup import stop_daemon
+
+    try:
+        stop_daemon(repo_root, index_ctx=index_ctx)
+    except Exception:
+        pass
+
+
+def query_daemon_ok(
+    repo_root: Path,
+    *,
+    index_ctx: Any,
+    command: dict[str, Any],
+) -> dict[str, Any]:
+    from tldr.daemon.startup import query_daemon
+
+    res = query_daemon(repo_root, command, index_ctx=index_ctx)
+    if res.get("status") != "ok":
+        raise RuntimeError(str(res.get("message") or res.get("error") or res))
+    return res

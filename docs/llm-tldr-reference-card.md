@@ -1,79 +1,114 @@
-# llm-tldr Reference Card
+# llm-tldr One-Page Usage Guide
 
-> Code analysis CLI with semantic retrieval, structural analysis, and daemon mode.
-> Invoke via `tldrf` (CLI), daemon socket (JSON), or MCP server (editor integrations).
+> Use `rg-native` for exact lookup. Use `tldrf` when you need structure, blast radius, slices, or concept search. Use daemon or MCP for repeated queries.
+> If you are running from this repo checkout instead of an installed CLI, prefix commands with `uv run`.
 
-## Capabilities
+## Start Here
 
-| Capability | What it does | When to reach for it | CLI | Daemon JSON | Daemon p50 | Tokens |
-|---|---|---|---|---|---:|---:|
-| **Semantic search** | Hybrid lexical+semantic code retrieval for NL queries | Don't know exact names; exploring | `tldrf semantic search "{q}" --path .` | `{"cmd":"semantic","action":"search","query":"{q}","k":10}` | 290 ms | 78 |
-| **Impact analysis** | All callers of a function (who calls this?) | Blast radius before refactoring | `tldrf impact "{fn}" . --file {f}` | `{"cmd":"impact","func":"{fn}","file":"{f}"}` | 14 ms | 26 |
-| **Context / call graph** | Reachable functions from entry point at depth N | What does a change propagate to? | `tldrf context "{entry}" --project . --depth {n}` | `{"cmd":"context","entry":"{entry}","depth":{n}}` | 0.2 ms* | 128 |
-| **Slice** | Backward trace: lines influencing a variable at a point | Where does a bad value originate? | `tldrf slice "{file}" "{fn}" {line}` | `{"cmd":"slice","file":"{f}","function":"{fn}","line":{n}}` | 5 ms | 11 |
-| **Data flow (DFG)** | Forward trace: how data moves through a function | Data transformations after slicing | `tldrf dfg "{file}" "{fn}"` | `{"cmd":"dfg","file":"{f}","function":"{fn}"}` | 3 ms | 13 |
-| **CFG / complexity** | Cyclomatic complexity of a function | Complex hotspots; test prioritization | `tldrf cfg "{file}" "{fn}"` | `{"cmd":"cfg","file":"{f}","function":"{fn}"}` | 1.7 ms | 8 |
+| If the question is... | Reach for | Why / measured evidence |
+|---|---|---|
+| Exact string, symbol, import, file path, or definition | `rg-native` first | Exact-definition retrieval is `F1 0.9841` for `rg-native` vs `0.1602` for BGE and `0.1520` for Jina. |
+| "What breaks if I change this?" | `tldrf impact` -> `tldrf context` -> `rg-native` | Deterministic caller graphs beat grep-style baselines on impact, then `rg` closes lexical cleanup gaps. |
+| "Why is this value wrong here?" | `tldrf slice` -> `tldrf dfg`; add `tldrf cfg` for branch bugs | Slice is the strongest debugging workflow: `F1 0.919`; DFG origin / flow accuracy is `1.0`. |
+| "I do not know the symbol name, only the behavior" | `tldrf semantic search` with the default hybrid path | llm-tldr retrieval at `budget=2000` beats `rg-native` on ranking quality (`MRR 0.874` vs `0.813`) while adding structural follow-up tools. |
+| Repeated agent or editor queries | Daemon or MCP, not direct CLI subprocesses | Daemon mode cuts warm retrieval from about `5s` to about `293ms` and structural commands by `15x-93x`. |
+| Pure semantic concept lookup or semantic-only tight-budget retrieval | `jina-code-0.5b` opt-in | Jina improves semantic-only retrieval (`MRR 0.7023` vs `0.6022`) and budget-`1000` semantic retrieval (`0.7048` vs `0.6124`). |
 
-*Context: 0.2 ms warm (cached call graph); ~15.5 s cold start on first call per entry point.
-Dispatch rule: `entry` with `/` and no `.` uses module-path mode; all other entries use symbol mode.
+## Default Workflows
 
-## Proven Workflows
+| Workflow | Default path | When it is the right tool |
+|---|---|---|
+| Refactor safely | `impact` -> `context` -> `rg-native` | Use this before renaming, splitting, deleting, or changing a signature. |
+| Debug precisely | `slice` -> `dfg` -> `cfg` | Use this when you know the failing line or function and want the smallest relevant context. |
+| Onboard to unfamiliar code | `semantic search` -> `context` -> `impact` | Use this when you know intent but not names, then tighten to symbol-level reasoning. |
+| Exact cleanup / migration sweep | `rg-native` -> direct reads | Use this for exhaustive imports, docs, configs, generated files, and module-level code. |
+| Multi-query agent session | MCP or daemon-backed calls | Use this whenever an LLM or script will issue more than one query against the same repo. |
 
-| Workflow | Steps | Use when | Expected signal |
-|---|---|---|---|
-| **Refactor path** | `impact` -> `context` -> `rg` | Changing a function; need blast radius + affected code + lexical confirmation | impact f1=0.848, context f1=0.880, then rg for final grep validation |
-| **Debug path** | `slice` -> `dfg` | Tracing a bad value back to its source, then forward through transformations | slice f1=0.919, dfg origin/flow accuracy=1.0 |
-| **Discovery path** | `semantic search` (lane 2 or 3) | Onboarding to codebase; finding implementations by concept | MRR=0.874, recall@5=0.877, zero false positives |
+## Commands To Memorize
 
-## Retrieval Lanes
+| Task | Command |
+|---|---|
+| Exact lookup | `rg -n "pattern" .` |
+| Blast radius | `tldrf impact "function_name" . --file path/to/file.py` |
+| Reachable context | `tldrf context "function_name" --project . --depth 2` |
+| Minimal debug slice | `tldrf slice path/to/file.py function_name 42` |
+| Data provenance | `tldrf dfg path/to/file.py function_name` |
+| Control-flow hotspot | `tldrf cfg path/to/file.py function_name` |
+| Concept search | `tldrf semantic search "natural language intent" --path . --k 8 --hybrid` |
+| Affected tests | `tldrf change-impact` |
+| Start daemon | `tldrf daemon start --project .` |
+| Keep the index fresh | `tldrf daemon notify path/to/file.py --project .` |
 
-Lanes stack incrementally. **Lane 1 (hybrid) is the recommended default** — highest recall. Use lane 3 when token budget is tight.
+## Session Setup That Actually Pays Off
 
-| Lane | Strategy | Adds over previous | MRR | R@5 | Best for |
-|---|---|---|---:|---:|---|
-| 1 | Hybrid | Lexical + semantic fusion | 0.856 | **0.930** | **Default** — finds the most relevant results |
-| 2 | Abstain/rerank | Confidence filtering + reranking | 0.874 | 0.877 | Higher ranking precision; filtering low-confidence noise |
-| 3 | Budget-aware | Dynamic k based on token budget | 0.874 | 0.877 | Token-constrained contexts (best MRR + budget respect) |
-| 4 | Compound | Semantic + impact jointly | 0.745 | 0.818 | Finding code that is both relevant AND called often |
-| 5 | Navigate-cluster | Semantic clustering of results | 0.874 | 0.877 | Exploring multiple facets of a broad query |
+Use the same cache root and index id across the whole session. That is what turns tldrf from a slow CLI command into a reusable code index.
 
-Lane 5 determinism: 1.0 coverage, 1.0 digest match, 0.982 cluster recall@3 (n=180).
+```bash
+ROOT="$(git rev-parse --show-toplevel)"
+INDEX_ID="repo:<project>"
 
-## Performance (Daemon vs Subprocess)
+tldrf warm --cache-root "$ROOT" --index "$INDEX_ID" --lang python .
+tldrf semantic index --cache-root "$ROOT" --index "$INDEX_ID" --lang python .
+tldrf daemon start --cache-root "$ROOT" --index "$INDEX_ID" --scan-root .
+```
 
-Always use daemon for multi-query sessions. MCP server auto-starts it.
+- Build once, then query the warm daemon or MCP repeatedly instead of respawning the CLI.
+- Reuse the same `--cache-root` and `--index` across agent turns, scripts, and editor sessions.
+- Pin `--lang` on structural commands in mixed-language repos.
+- Prefer explicit `--cache-root "$ROOT"` over `--cache-root git` until that shortcut has stable regression coverage.
+- After edits, use `tldrf daemon notify <changed-file> --project .` or rerun `warm` when the project has drifted a lot.
 
-| Category | Subprocess p50 | Daemon p50 | Speedup |
-|---|---:|---:|---:|
-| Retrieval (lanes 1-5) | ~5000 ms | ~293 ms | 17x |
-| Impact | 212 ms | 14 ms | 15x |
-| Context (warm) | 15,516 ms | 0.2 ms | 82,000x |
-| Slice | 169 ms | 5 ms | 32x |
-| Data flow | 158 ms | 3 ms | 55x |
-| Complexity | 157 ms | 1.7 ms | 93x |
+## Current Gotchas To Remember
 
-Daemon retrieval is within **1.37x of rg-native** p50 (216 ms). All results byte-identical to subprocess.
+- Plain CLI commands are still fresh-process invocations. `docs/usage.md` is the accurate source for daemon vs subprocess behavior.
+- `warm` does not replace `semantic index`; structural and semantic setup are separate steps.
+- Exact identifier and definition lookup is still a grep problem. Do not treat semantic retrieval as a replacement for `rg-native` there.
 
-## Comparison (Retrieval @ 2000 token budget)
+## Recommended Defaults
 
-| Tool | MRR | Recall@5 | FPR@5 | p50 | Payload tokens | Structural workflows |
-|---|---:|---:|---:|---:|---:|---|
-| **llm-tldr** (lane 2/3) | **0.874** | **0.877** | **0.0** | 293 ms (daemon) | 78 | impact, context, slice, dfg, cfg |
-| rg-native | 0.813 | 0.877 | 0.0 | 216 ms | 12 | none |
-| contextplus | 0.216 | 0.298 | 1.0 | 7,717 ms | 329 | none |
+| Decision | Current default | Why |
+|---|---|---|
+| Exact lookup tool | `rg-native` | Lexical lookup is still the right first tool for symbol / definition search. |
+| Product retrieval model | `bge-large-en-v1.5` | Jina is roughly tied on common `hybrid_rrf`, but BGE still wins lane2 MRR, compound efficiency, and structured concept retrieval. |
+| Semantic-only experiment model | `jina-code-0.5b` opt-in | Jina is the better pure semantic model on the current Django evidence, but it requires a semantic rebuild and separate license review. |
+| Query execution mode | Daemon or MCP | Warm daemon mode is fast enough to be practical and avoids repeated model loads. |
 
-**Bottom line:** llm-tldr matches rg recall with +7% MRR at 1.37x latency, plus six structural capabilities alternatives lack. contextplus is 4x slower with 100% false positive rate.
+Current product decision: keep `BGE` as the default model, keep `Jina` opt-in, and keep `rg-native` as the first tool for exact lookup.
 
-## Execution Modes
+## What The Benchmarks Actually Support
 
-| Context | Path | Model load | Latency |
-|---|---|---|---:|
-| `tldrf <cmd>` | CLI direct | Every call | ~5000 ms |
-| `tldrf daemon query --json '{...}'` | Daemon socket | Once | ~300 ms |
-| `tldrf mcp` | MCP -> daemon | Once | ~300 ms |
+| Claim | Current signal |
+|---|---|
+| llm-tldr is better than `contextplus` on retrieval | Yes. Shared retrieval lanes are decisive in the 008 comparison program. |
+| llm-tldr gives better final answers than `rg-native` on structured debugging / analysis tasks | Yes. Open-ended judge win rate over `rg` is `0.694` at `budget=2000`. |
+| llm-tldr is worth using for refactors and debugging | Yes. Impact, slice, DFG, CFG, and token-efficiency benchmarks all show lower-noise structural context than grep-style baselines. |
+| llm-tldr should replace `rg-native` for exact identifier lookup | No. Exact lexical lookup is still a grep problem. |
+| Jina should replace BGE as the default model | No. Jina wins semantic-only retrieval, but not the broader product path. |
 
-**Rule of thumb:** More than one query? Use the daemon. MCP does this automatically.
+## Where tldrf Adds Value Over rg-native
 
-Start: `tldrf daemon start --project .` | Stop: `tldrf daemon stop --project .`
+- `impact`: deterministic reverse call graph for blast radius instead of grep guesses.
+- `slice` and `dfg`: line-level provenance and forward flow, which `rg` cannot infer.
+- `context`: call-graph-bounded summaries that reduce context rot and token waste.
+- `semantic search`: concept lookup when the user knows behavior but not names.
+- daemon or MCP reuse: index once, keep it warm, avoid repeated lossy full-repo search.
 
-> Deep dive: `docs/usage.md` (execution modes), `implementations/008-benchmark-summary.md` (full runbook)
+## Gaps To Close Next
+
+- Add end-to-end edit-loop benchmarks with time-to-first-correct-edit, token spend, and changed-file recall against `rg-native`.
+- Add edit-loop benchmarks for `daemon notify` and auto-reindex latency so "index once, keep it fresh" is measured, not assumed.
+- Add task-level refactor benchmarks with gold changed-file / changed-symbol sets to prove fewer misses than `rg-native` during code modification, not just retrieval quality.
+- Rerun downstream judge-mode comparisons on workflows that explicitly use `impact` + `context` and `slice` + `dfg`, not only retrieval packets.
+- Complete dependency-scoped BGE vs Jina benchmarks (`requests`, `urllib3`) so model guidance is not Django-only.
+- Add mixed-language and monorepo structural-quality benchmarks to prove the workflow scales beyond the current Python-heavy evidence.
+- Add stronger hybrid negative-query guard benchmarks; current strict `rg_empty` behavior on the structured behavior suite is too aggressive to treat as production guidance.
+- Add more user-facing daemon parity coverage so repeated CLI workflows can route through the daemon without raw JSON callsites.
+- Clean up longer-form docs that still imply `warm` alone builds semantic embeddings automatically; the one-pager is the correct guidance for now.
+- Add doc-and-help parity coverage for `semantic search` syntax, `warm` vs `semantic index`, `--cache-root` handling, and explicit `--lang` requirements during indexing.
+
+## Docs Map
+
+- This page: task selection and defaults.
+- `benchmarks/README.md`: aggregate benchmark results and model/tool comparison matrix.
+- `docs/usage.md`: execution modes, daemon vs subprocess behavior.
+- `implementations/008-benchmark-summary.md`: operator handoff and canonical benchmark runbook.

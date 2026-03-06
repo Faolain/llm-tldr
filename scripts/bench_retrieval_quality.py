@@ -19,6 +19,9 @@ from bench_util import (
     get_repo_root,
     make_report,
     now_utc_compact,
+    query_daemon_ok,
+    restart_benchmark_daemon,
+    stop_benchmark_daemon,
     write_report,
 )
 
@@ -104,6 +107,7 @@ def _semantic_rank_files(
     index_ctx: IndexContext,
     query: str,
     k: int,
+    use_daemon: bool = False,
 ) -> list[str] | None:
     paths = index_ctx.paths
     cfg = index_ctx.config
@@ -112,15 +116,28 @@ def _semantic_rank_files(
     if not (paths.semantic_faiss.exists() and paths.semantic_metadata.exists()):
         return None
 
-    from tldr.semantic import semantic_search
+    if use_daemon:
+        res = query_daemon_ok(
+            repo_root,
+            index_ctx=index_ctx,
+            command={
+                "cmd": "semantic",
+                "action": "search",
+                "query": query,
+                "k": int(k),
+            },
+        )
+        results = res.get("results") or res.get("result") or []
+    else:
+        from tldr.semantic import semantic_search
 
-    results = semantic_search(
-        str(repo_root),
-        query,
-        k=int(k),
-        index_paths=paths,
-        index_config=cfg,
-    )
+        results = semantic_search(
+            str(repo_root),
+            query,
+            k=int(k),
+            index_paths=paths,
+            index_config=cfg,
+        )
 
     ranked: list[str] = []
     for r in results or []:
@@ -205,6 +222,26 @@ def _effective_k_from_budget_tokens(k: int, *, budget_tokens: Any) -> int:
     return int(_semantic_effective_k(k, budget_tokens=budget_tokens))
 
 
+def _record_ranking(
+    ranking: list[str],
+    *,
+    relevant: set[str],
+    ks: list[int],
+    max_k: int,
+) -> dict[str, Any]:
+    out: dict[str, Any] = {
+        "mrr": _mrr(ranking, relevant) if relevant else None,
+        "top_files": ranking[:max_k],
+    }
+    for k in ks:
+        if relevant:
+            out[f"recall@{k}"] = _recall_at_k(ranking, relevant, k)
+            out[f"precision@{k}"] = _precision_at_k(ranking, relevant, k)
+        else:
+            out[f"fpr@{k}"] = _fpr_at_k(ranking, k=k)
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Phase 5 retrieval-quality benchmarks (rg vs semantic vs hybrid).")
     group = ap.add_mutually_exclusive_group(required=True)
@@ -247,6 +284,11 @@ def main() -> int:
         type=int,
         default=None,
         help="Optional lane3 budget-aware retrieval control (reference budget: 2000).",
+    )
+    ap.add_argument(
+        "--use-daemon",
+        action="store_true",
+        help="Route semantic queries through the daemon instead of in-process API calls.",
     )
     ap.add_argument("--out", default=None, help="Write JSON report to this path (default under benchmark/runs/).")
     args = ap.parse_args()
@@ -328,115 +370,143 @@ def main() -> int:
             semantic_meta = json.loads(index_ctx.paths.semantic_metadata.read_text())
         except (OSError, json.JSONDecodeError):
             semantic_meta = None
+    daemon_ready: dict[str, Any] | None = None
+    if args.use_daemon:
+        daemon_ready = restart_benchmark_daemon(repo_root, index_ctx=index_ctx)
+        if not daemon_ready.get("ok"):
+            raise SystemExit(f"error: daemon did not become ready: {daemon_ready}")
 
-    for q in queries:
-        relevant = set(q.relevant_files)
-        is_negative = not relevant
+    try:
+        for q in queries:
+            relevant = set(q.relevant_files)
+            is_negative = not relevant
 
-        rg_pattern = q.rg_pattern or re.escape(q.query)
-        t0 = time.monotonic()
-        rg_rank = _rg_rank_files(repo_root, pattern=rg_pattern, glob=glob_arg)
-        rg_time_s = time.monotonic() - t0
+            rg_pattern = q.rg_pattern or re.escape(q.query)
+            t0 = time.monotonic()
+            rg_rank = _rg_rank_files(repo_root, pattern=rg_pattern, glob=glob_arg)
+            rg_time_s = time.monotonic() - t0
 
-        sem_rank: list[str] | None = None
-        sem_time_s: float | None = None
-        if semantic_available:
-            if no_result_guard == "rg_empty" and not rg_rank:
-                sem_rank = []
-                sem_time_s = 0.0
-            else:
-                t0 = time.monotonic()
-                sem_rank = _semantic_rank_files(repo_root, index_ctx=index_ctx, query=q.query, k=effective_k)
-                sem_time_s = time.monotonic() - t0
-
-        hybrid_rank: list[str] | None = None
-        if sem_rank is not None:
-            hybrid_rank = _rrf_fuse([rg_rank[:max_k], sem_rank[:max_k]])
-        lane2_rank: list[str] | None = None
-        if lane2_enabled and semantic_available and index_ctx.paths is not None and index_ctx.config is not None:
-            from tldr.semantic import semantic_search
-
-            lane2_rows = semantic_search(
-                str(repo_root),
-                q.query,
-                k=max_k,
-                index_paths=index_ctx.paths,
-                index_config=index_ctx.config,
-                retrieval_mode="hybrid",
-                no_result_guard=no_result_guard,
-                rg_pattern=rg_pattern,
-                rg_glob=glob_arg,
-                abstain_threshold=args.lane2_abstain_threshold,
-                abstain_empty=bool(args.lane2_abstain_empty),
-                rerank=bool(args.lane2_rerank),
-                rerank_top_n=int(args.lane2_rerank_top_n),
-                max_latency_ms_p50_ratio=args.lane2_max_latency_ms_p50_ratio,
-                max_payload_tokens_median_ratio=args.lane2_max_payload_tokens_median_ratio,
-                budget_tokens=args.budget_tokens,
-            )
-            lane2_rank = _rank_files_from_result_rows(lane2_rows)
-
-        def record(method: str, ranking: list[str]) -> dict[str, Any]:
-            out = {
-                "mrr": _mrr(ranking, relevant) if relevant else None,
-                "top_files": ranking[:max_k],
-            }
-            for k in ks:
-                if relevant:
-                    out[f"recall@{k}"] = _recall_at_k(ranking, relevant, k)
-                    out[f"precision@{k}"] = _precision_at_k(ranking, relevant, k)
+            sem_rank: list[str] | None = None
+            sem_time_s: float | None = None
+            if semantic_available:
+                if no_result_guard == "rg_empty" and not rg_rank:
+                    sem_rank = []
+                    sem_time_s = 0.0
                 else:
-                    out[f"fpr@{k}"] = _fpr_at_k(ranking, k=k)
-            return out
+                    t0 = time.monotonic()
+                    sem_rank = _semantic_rank_files(
+                        repo_root,
+                        index_ctx=index_ctx,
+                        query=q.query,
+                        k=effective_k,
+                        use_daemon=bool(args.use_daemon),
+                    )
+                    sem_time_s = time.monotonic() - t0
 
-        q_res: dict[str, Any] = {
-            "id": q.id,
-            "query": q.query,
-            "relevant_files": list(q.relevant_files),
-            "no_result_guard_triggered": bool(no_result_guard == "rg_empty" and not rg_rank),
-            "rg": {
-                "pattern": rg_pattern,
-                "time_s": round(rg_time_s, 6),
-                **record("rg", rg_rank),
-            },
-            "semantic": None,
-            "hybrid_rrf": None,
-        }
-
-        if sem_rank is not None:
-            q_res["semantic"] = {
-                "time_s": round(float(sem_time_s or 0.0), 6),
-                **record("semantic", sem_rank),
-            }
-        else:
-            q_res["semantic"] = {"skipped": True, "reason": "semantic index artifacts missing"}
-
-        if hybrid_rank is not None:
-            q_res["hybrid_rrf"] = record("hybrid_rrf", hybrid_rank)
-        else:
-            q_res["hybrid_rrf"] = {"skipped": True, "reason": "semantic ranking unavailable"}
-        if lane2_enabled:
-            if lane2_rank is not None:
-                q_res["hybrid_lane2"] = record("hybrid_lane2", lane2_rank)
-            else:
-                q_res["hybrid_lane2"] = {"skipped": True, "reason": "semantic ranking unavailable"}
-
-        per_query.append(q_res)
-
-        # Aggregate metrics.
-        if is_negative:
-            for k in ks:
-                neg_fpr["rg"][f"fpr@{k}"].append(_fpr_at_k(rg_rank, k=k))
+            hybrid_rank: list[str] | None = None
             if sem_rank is not None:
-                for k in ks:
-                    neg_fpr["semantic"][f"fpr@{k}"].append(_fpr_at_k(sem_rank, k=k))
+                hybrid_rank = _rrf_fuse([rg_rank[:max_k], sem_rank[:max_k]])
+            lane2_rank: list[str] | None = None
+            if lane2_enabled and semantic_available and index_ctx.paths is not None and index_ctx.config is not None:
+                if args.use_daemon:
+                    lane2_res = query_daemon_ok(
+                        repo_root,
+                        index_ctx=index_ctx,
+                        command={
+                            "cmd": "semantic",
+                            "action": "search",
+                            "query": q.query,
+                            "k": max_k,
+                            "retrieval_mode": "hybrid",
+                            "no_result_guard": no_result_guard,
+                            "rg_pattern": rg_pattern,
+                            "rg_glob": glob_arg,
+                            "abstain_threshold": args.lane2_abstain_threshold,
+                            "abstain_empty": bool(args.lane2_abstain_empty),
+                            "rerank": bool(args.lane2_rerank),
+                            "rerank_top_n": int(args.lane2_rerank_top_n),
+                            "max_latency_ms_p50_ratio": args.lane2_max_latency_ms_p50_ratio,
+                            "max_payload_tokens_median_ratio": args.lane2_max_payload_tokens_median_ratio,
+                            "budget_tokens": args.budget_tokens,
+                        },
+                    )
+                    lane2_rows = lane2_res.get("results") or lane2_res.get("result") or []
+                else:
+                    from tldr.semantic import semantic_search
+
+                    lane2_rows = semantic_search(
+                        str(repo_root),
+                        q.query,
+                        k=max_k,
+                        index_paths=index_ctx.paths,
+                        index_config=index_ctx.config,
+                        retrieval_mode="hybrid",
+                        no_result_guard=no_result_guard,
+                        rg_pattern=rg_pattern,
+                        rg_glob=glob_arg,
+                        abstain_threshold=args.lane2_abstain_threshold,
+                        abstain_empty=bool(args.lane2_abstain_empty),
+                        rerank=bool(args.lane2_rerank),
+                        rerank_top_n=int(args.lane2_rerank_top_n),
+                        max_latency_ms_p50_ratio=args.lane2_max_latency_ms_p50_ratio,
+                        max_payload_tokens_median_ratio=args.lane2_max_payload_tokens_median_ratio,
+                        budget_tokens=args.budget_tokens,
+                    )
+                lane2_rank = _rank_files_from_result_rows(lane2_rows)
+
+            q_res: dict[str, Any] = {
+                "id": q.id,
+                "query": q.query,
+                "relevant_files": list(q.relevant_files),
+                "no_result_guard_triggered": bool(no_result_guard == "rg_empty" and not rg_rank),
+                "rg": {
+                    "pattern": rg_pattern,
+                    "time_s": round(rg_time_s, 6),
+                    **_record_ranking(rg_rank, relevant=relevant, ks=ks, max_k=max_k),
+                },
+                "semantic": None,
+                "hybrid_rrf": None,
+            }
+
+            if sem_rank is not None:
+                q_res["semantic"] = {
+                    "time_s": round(float(sem_time_s or 0.0), 6),
+                    **_record_ranking(sem_rank, relevant=relevant, ks=ks, max_k=max_k),
+                }
+            else:
+                q_res["semantic"] = {"skipped": True, "reason": "semantic index artifacts missing"}
+
             if hybrid_rank is not None:
+                q_res["hybrid_rrf"] = _record_ranking(hybrid_rank, relevant=relevant, ks=ks, max_k=max_k)
+            else:
+                q_res["hybrid_rrf"] = {"skipped": True, "reason": "semantic ranking unavailable"}
+            if lane2_enabled:
+                if lane2_rank is not None:
+                    q_res["hybrid_lane2"] = _record_ranking(
+                        lane2_rank,
+                        relevant=relevant,
+                        ks=ks,
+                        max_k=max_k,
+                    )
+                else:
+                    q_res["hybrid_lane2"] = {"skipped": True, "reason": "semantic ranking unavailable"}
+
+            per_query.append(q_res)
+
+            if is_negative:
                 for k in ks:
-                    neg_fpr["hybrid_rrf"][f"fpr@{k}"].append(_fpr_at_k(hybrid_rank, k=k))
-            if lane2_enabled and lane2_rank is not None:
-                for k in ks:
-                    neg_fpr["hybrid_lane2"][f"fpr@{k}"].append(_fpr_at_k(lane2_rank, k=k))
-        else:
+                    neg_fpr["rg"][f"fpr@{k}"].append(_fpr_at_k(rg_rank, k=k))
+                if sem_rank is not None:
+                    for k in ks:
+                        neg_fpr["semantic"][f"fpr@{k}"].append(_fpr_at_k(sem_rank, k=k))
+                if hybrid_rank is not None:
+                    for k in ks:
+                        neg_fpr["hybrid_rrf"][f"fpr@{k}"].append(_fpr_at_k(hybrid_rank, k=k))
+                if lane2_enabled and lane2_rank is not None:
+                    for k in ks:
+                        neg_fpr["hybrid_lane2"][f"fpr@{k}"].append(_fpr_at_k(lane2_rank, k=k))
+                continue
+
             agg["rg"]["mrr"].append(_mrr(rg_rank, relevant))
             for k in ks:
                 agg["rg"][f"recall@{k}"].append(_recall_at_k(rg_rank, relevant, k))
@@ -458,6 +528,9 @@ def main() -> int:
                 for k in ks:
                     agg["hybrid_lane2"][f"recall@{k}"].append(_recall_at_k(lane2_rank, relevant, k))
                     agg["hybrid_lane2"][f"precision@{k}"].append(_precision_at_k(lane2_rank, relevant, k))
+    finally:
+        if args.use_daemon:
+            stop_benchmark_daemon(repo_root, index_ctx=index_ctx)
 
     def summarize(xs: dict[str, list[float]]) -> dict[str, Any]:
         out: dict[str, Any] = {}
@@ -501,6 +574,8 @@ def main() -> int:
                 if semantic_available and index_ctx.paths is not None
                 else None
             ),
+            "use_daemon": bool(args.use_daemon),
+            "daemon_ready": daemon_ready,
         },
         results={
             "agg_positive": {

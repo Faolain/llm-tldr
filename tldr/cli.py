@@ -205,7 +205,8 @@ Daemon:
 
 Semantic Search:
     First run downloads embedding model (1.3GB default).
-    Use --model all-MiniLM-L6-v2 for smaller 80MB model.
+    Supported models: bge-large-en-v1.5 (default), jina-code-0.5b (opt-in), all-MiniLM-L6-v2.
+    Switching models requires rebuilding the semantic index.
     Set TLDR_AUTO_DOWNLOAD=1 to skip download prompts.
 
 Device Selection:
@@ -501,7 +502,11 @@ Device Selection:
     index_p.add_argument(
         "--model",
         default=None,
-        help="Embedding model: bge-large-en-v1.5 (1.3GB, default) or all-MiniLM-L6-v2 (80MB)",
+        help=(
+            "Embedding model: bge-large-en-v1.5 (default), "
+            "jina-code-0.5b (opt-in, requires rebuild), or "
+            "all-MiniLM-L6-v2 (lightweight)"
+        ),
     )
     index_p.add_argument(
         "--device",
@@ -662,7 +667,10 @@ Device Selection:
     search_p.add_argument(
         "--model",
         default=None,
-        help="Embedding model (uses index model if not specified)",
+        help=(
+            "Embedding model override. Supports bge-large-en-v1.5, "
+            "jina-code-0.5b, or all-MiniLM-L6-v2; must match the built index."
+        ),
     )
     search_p.add_argument(
         "--device",

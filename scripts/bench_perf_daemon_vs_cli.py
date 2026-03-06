@@ -7,9 +7,7 @@ import statistics
 import subprocess
 import sys
 import time
-from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass
-from io import StringIO
 from pathlib import Path
 from typing import Any
 
@@ -22,10 +20,12 @@ from bench_util import (
     make_report,
     now_utc_compact,
     percentiles,
+    restart_benchmark_daemon,
+    stop_benchmark_daemon,
     write_report,
 )
 
-from tldr.daemon.startup import query_daemon, start_daemon, stop_daemon
+from tldr.daemon.startup import query_daemon
 from tldr.indexing.index import IndexContext, get_index_context
 from tldr.indexing.management import get_index_info, list_indexes
 
@@ -381,6 +381,13 @@ def _build_command_set(
     return cmds, protocol_details
 
 
+def _parse_requested_commands(raw: str | None) -> set[str] | None:
+    if raw is None:
+        return None
+    names = {part.strip() for part in str(raw).split(",") if part.strip()}
+    return names or None
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Phase 3 perf microbench: daemon vs CLI latency for key commands.")
     group = ap.add_mutually_exclusive_group(required=True)
@@ -407,8 +414,20 @@ def main() -> int:
         action="store_true",
         help="Also benchmark `semantic search` (only runs if semantic index artifacts exist).",
     )
+    ap.add_argument(
+        "--commands",
+        default=None,
+        help=(
+            "Optional comma-separated command filter (for example: "
+            "semantic_search,search,impact). Default benchmarks every applicable command."
+        ),
+    )
     ap.add_argument("--out", default=None, help="Write JSON report to this path (default under benchmark/runs/).")
     args = ap.parse_args()
+
+    requested_commands = _parse_requested_commands(args.commands)
+    if requested_commands and "semantic_search" in requested_commands and not args.include_semantic:
+        raise SystemExit("error: --commands semantic_search requires --include-semantic")
 
     tldr_repo_root = get_repo_root()
     corpus_id = args.corpus
@@ -445,12 +464,9 @@ def main() -> int:
         allow_create=True,
     )
 
-    # Start daemon and make sure a call graph cache exists so impact/context are "warm".
-    with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
-        stop_daemon(repo_root, index_ctx=index_ctx)
-        start_daemon(repo_root, foreground=False, index_ctx=index_ctx)
-
-    daemon_ready = _wait_for_daemon_ready(repo_root, index_ctx=index_ctx)
+    daemon_ready = restart_benchmark_daemon(repo_root, index_ctx=index_ctx)
+    if not daemon_ready.get("ok"):
+        raise SystemExit(f"error: daemon did not become ready: {daemon_ready}")
     warm_info = _maybe_warm_call_graph(repo_root, index_ctx=index_ctx, language=str(args.lang))
 
     cmds, protocol_details = _build_command_set(
@@ -473,6 +489,11 @@ def main() -> int:
             and index_paths.semantic_metadata.exists()
         )
         if semantic_ok:
+            semantic_meta: dict[str, Any] = {}
+            try:
+                semantic_meta = json.loads(index_paths.semantic_metadata.read_text())
+            except Exception:
+                semantic_meta = {}
             leaf = (target.symbol if target else "entry").split(".")[-1]
             query = f"{leaf} implementation"
             cmds.append(
@@ -485,10 +506,22 @@ def main() -> int:
             )
             semantic_status["ok"] = True
             semantic_status["query"] = query
+            semantic_status["model"] = semantic_meta.get("model") if isinstance(semantic_meta, dict) else None
+            semantic_status["dimension"] = semantic_meta.get("dimension") if isinstance(semantic_meta, dict) else None
         else:
             semantic_status["ok"] = False
             semantic_status["skipped"] = True
             semantic_status["reason"] = "semantic index artifacts missing (run `tldrf semantic index` first)"
+
+    if requested_commands:
+        available = {c.name for c in cmds}
+        missing = sorted(requested_commands - available)
+        if missing:
+            raise SystemExit(
+                "error: requested commands unavailable for this run: " + ", ".join(missing)
+            )
+        cmds = [c for c in cmds if c.name in requested_commands]
+    protocol_details["commands"] = [c.name for c in cmds]
 
     results: list[dict[str, Any]] = []
     for c in cmds:
@@ -517,9 +550,7 @@ def main() -> int:
             }
         )
 
-    # Stop daemon to avoid side effects for other work.
-    with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
-        stop_daemon(repo_root, index_ctx=index_ctx)
+    stop_benchmark_daemon(repo_root, index_ctx=index_ctx)
 
     # Cache sizing / index artifacts (via the same JSON contract as `tldrf index list/info`).
     cache_root_path = index_ctx.cache_root

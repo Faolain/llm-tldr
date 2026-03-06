@@ -1,3 +1,5 @@
+import json
+
 import numpy as np
 import pytest
 
@@ -6,10 +8,13 @@ from tldr.semantic import build_semantic_index, semantic_search
 
 
 class DummyModel:
+    def __init__(self, dim: int = 3):
+        self.dim = dim
+
     def encode(self, texts, batch_size=None, normalize_embeddings=True, show_progress_bar=False):
         if isinstance(texts, str):
             texts = [texts]
-        return np.zeros((len(texts), 3), dtype=np.float32)
+        return np.zeros((len(texts), self.dim), dtype=np.float32)
 
 
 def test_semantic_indexes_isolated(tmp_path, monkeypatch):
@@ -136,3 +141,37 @@ def test_semantic_search_scoped_to_index(tmp_path, monkeypatch):
     )
     assert repo_results
     assert all("repo.py" in r.get("file", "") for r in repo_results)
+
+
+def test_semantic_metadata_tracks_actual_embedding_dimension_for_jina(
+    tmp_path, monkeypatch
+):
+    pytest.importorskip("faiss")
+    scan_root = tmp_path / "jina_repo"
+    scan_root.mkdir()
+    (scan_root / "auth.py").write_text("def verify_access_token(token):\n    return token\n")
+
+    monkeypatch.setattr(
+        "tldr.semantic.get_model",
+        lambda *_args, **_kwargs: DummyModel(dim=896),
+    )
+
+    build_semantic_index(
+        str(scan_root),
+        lang="python",
+        model="jina-code-0.5b",
+        show_progress=False,
+    )
+
+    metadata = json.loads(
+        (scan_root / ".tldr" / "cache" / "semantic" / "metadata.json").read_text()
+    )
+    assert metadata["model"] == "jinaai/jina-code-embeddings-0.5b"
+    assert metadata["dimension"] == 896
+
+    results = semantic_search(
+        str(scan_root),
+        "verify token",
+        model="jina-code-0.5b",
+    )
+    assert results

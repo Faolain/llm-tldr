@@ -8,8 +8,7 @@ Embeds functions/methods using all 5 TLDR analysis layers:
 - L4: Data flow summary
 - L5: Dependencies
 
-Uses BAAI/bge-large-en-v1.5 for embeddings (1024 dimensions)
-and FAISS for fast vector similarity search.
+Supports multiple embedding backends and stores vectors in FAISS.
 """
 
 import json
@@ -40,6 +39,7 @@ if sys.platform == "darwin":
 _model = None
 _model_name = None  # Track which model is loaded
 _model_device = None  # Track device used for cached model
+_model_load_kwargs = None  # Track model-specific loader kwargs
 
 # Supported models with approximate download sizes
 SUPPORTED_MODELS = {
@@ -48,12 +48,27 @@ SUPPORTED_MODELS = {
         "size": "1.3GB",
         "dimension": 1024,
         "description": "High quality, recommended for production",
+        "query_prefix": "Represent this code search query: ",
+        "document_prefix": "",
+        "tokenizer_kwargs": {},
     },
     "all-MiniLM-L6-v2": {
         "hf_name": "sentence-transformers/all-MiniLM-L6-v2",
         "size": "80MB",
         "dimension": 384,
         "description": "Lightweight, good for testing",
+        "query_prefix": "",
+        "document_prefix": "",
+        "tokenizer_kwargs": {},
+    },
+    "jina-code-0.5b": {
+        "hf_name": "jinaai/jina-code-embeddings-0.5b",
+        "size": "approx 1GB",
+        "dimension": 896,
+        "description": "Code-specialized, opt-in, non-commercial license by default",
+        "query_prefix": "Find the most relevant code snippet given the following query:\n",
+        "document_prefix": "Candidate code snippet:\n",
+        "tokenizer_kwargs": {"padding_side": "left"},
     },
 }
 
@@ -211,11 +226,25 @@ class EmbeddingUnit:
 MODEL_NAME = "BAAI/bge-large-en-v1.5"  # Legacy, use SUPPORTED_MODELS
 
 
-def _resolve_hf_model_name(model_name: Optional[str]) -> str:
+def _model_profile(model_name: Optional[str]) -> Optional[dict[str, Any]]:
     if model_name is None:
         model_name = DEFAULT_MODEL
     if model_name in SUPPORTED_MODELS:
-        return SUPPORTED_MODELS[model_name]["hf_name"]
+        return SUPPORTED_MODELS[model_name]
+
+    canonical = _canonical_model_id(model_name)
+    for info in SUPPORTED_MODELS.values():
+        if info["hf_name"] == canonical:
+            return info
+    return None
+
+
+def _resolve_hf_model_name(model_name: Optional[str]) -> str:
+    profile = _model_profile(model_name)
+    if profile is not None:
+        return profile["hf_name"]
+    if model_name is None:
+        return SUPPORTED_MODELS[DEFAULT_MODEL]["hf_name"]
     return model_name
 
 
@@ -231,13 +260,37 @@ def _canonical_model_id(model_name: Optional[str]) -> Optional[str]:
 
 
 def _model_dimension(model_name: Optional[str]) -> Optional[int]:
-    canonical = _canonical_model_id(model_name)
-    if canonical is None:
+    profile = _model_profile(model_name)
+    if profile is None:
         return None
-    for info in SUPPORTED_MODELS.values():
-        if info["hf_name"] == canonical:
-            return info["dimension"]
-    return None
+    return profile["dimension"]
+
+
+def _query_prefix_for_model(model_name: Optional[str]) -> str:
+    profile = _model_profile(model_name)
+    if profile is None:
+        return ""
+    return str(profile.get("query_prefix", ""))
+
+
+def _document_prefix_for_model(model_name: Optional[str]) -> str:
+    profile = _model_profile(model_name)
+    if profile is None:
+        return ""
+    return str(profile.get("document_prefix", ""))
+
+
+def _sentence_transformer_kwargs_for_model(
+    model_name: Optional[str],
+) -> dict[str, Any]:
+    profile = _model_profile(model_name)
+    if profile is None:
+        return {}
+
+    tokenizer_kwargs = dict(profile.get("tokenizer_kwargs") or {})
+    if not tokenizer_kwargs:
+        return {}
+    return {"tokenizer_kwargs": tokenizer_kwargs}
 
 
 def _model_exists_locally(hf_name: str) -> bool:
@@ -253,7 +306,7 @@ def _model_exists_locally(hf_name: str) -> bool:
 
 def _confirm_download(model_key: str) -> bool:
     """Prompt user to confirm model download. Returns True if confirmed."""
-    model_info = SUPPORTED_MODELS.get(model_key, {})
+    model_info = _model_profile(model_key) or {}
     size = model_info.get("size", "unknown size")
     hf_name = model_info.get("hf_name", model_key)
 
@@ -308,33 +361,48 @@ def get_model(model_name: Optional[str] = None, device: Optional[str] = None):
     Raises:
         ValueError: If model not found or user declines download.
     """
-    global _model, _model_name, _model_device
+    global _model, _model_name, _model_device, _model_load_kwargs
 
     # Resolve model name
     hf_name = _resolve_hf_model_name(model_name)
+    load_kwargs = _sentence_transformer_kwargs_for_model(model_name)
 
     if device is None:
         device = _get_device()
 
     # Return cached model if same
-    if _model is not None and _model_name == hf_name and _model_device == device:
+    if (
+        _model is not None
+        and _model_name == hf_name
+        and _model_device == device
+        and _model_load_kwargs == load_kwargs
+    ):
         return _model
 
     # Check if model needs downloading
     if not _model_exists_locally(hf_name):
-        model_key = model_name if model_name in SUPPORTED_MODELS else None
+        model_key = model_name if _model_profile(model_name) is not None else None
         if model_key and not _confirm_download(model_key):
             raise ValueError("Model download declined. Use --model to choose a smaller model.")
 
     logger.info("Loading model %s on device: %s", hf_name, device)
     from sentence_transformers import SentenceTransformer
+    sentence_transformer_kwargs = dict(load_kwargs)
     if device:
-        _model = SentenceTransformer(hf_name, device=device)
-    else:
-        _model = SentenceTransformer(hf_name)
+        sentence_transformer_kwargs["device"] = device
+    _model = SentenceTransformer(hf_name, **sentence_transformer_kwargs)
     _model_name = hf_name
     _model_device = device
+    _model_load_kwargs = load_kwargs
     return _model
+
+
+def _reset_cached_model() -> None:
+    global _model, _model_name, _model_device, _model_load_kwargs
+    _model = None
+    _model_name = None
+    _model_device = None
+    _model_load_kwargs = None
 
 
 def build_embedding_text(unit: EmbeddingUnit) -> str:
@@ -388,6 +456,23 @@ def build_embedding_text(unit: EmbeddingUnit) -> str:
     parts.insert(0, f"{type_str.capitalize()}: {unit.name}")
 
     return "\n".join(parts)
+
+
+def build_document_embedding_text(
+    unit: EmbeddingUnit,
+    model_name: Optional[str] = None,
+) -> str:
+    text = build_embedding_text(unit)
+    prefix = _document_prefix_for_model(model_name)
+    return f"{prefix}{text}" if prefix else text
+
+
+def build_query_embedding_text(
+    query: str,
+    model_name: Optional[str] = None,
+) -> str:
+    prefix = _query_prefix_for_model(model_name)
+    return f"{prefix}{query}" if prefix else query
 
 
 def compute_embedding(text: str, model_name: Optional[str] = None, device: Optional[str] = None):
@@ -1274,7 +1359,7 @@ def build_semantic_index(
 
     BATCH_SIZE = 64
     num_units = len(units)
-    texts = [build_embedding_text(unit) for unit in units]
+    texts = [build_document_embedding_text(unit, model) for unit in units]
 
     if console:
         from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
@@ -1415,8 +1500,12 @@ def _semantic_unit_search(
                 "Semantic search model mismatch with index. Use the index model or rebuild."
             )
 
-    # Embed query (with instruction prefix for BGE)
-    query_text = f"Represent this code search query: {query}"
+    meta_dim = metadata.get("dimension")
+    expected_dim = _model_dimension(model)
+    if expected_dim and meta_dim and expected_dim != meta_dim:
+        raise ValueError("Semantic model dimension mismatch; rebuild required.")
+
+    query_text = build_query_embedding_text(query, model)
     query_embedding = compute_embedding(query_text, model_name=model, device=device)
     query_embedding = query_embedding.reshape(1, -1)
 
@@ -1425,12 +1514,10 @@ def _semantic_unit_search(
     index = faiss.read_index(str(index_file))
 
     # Validate dimension compatibility
-    meta_dim = metadata.get("dimension")
     if meta_dim and index.d != meta_dim:
         raise ValueError("Semantic index dimension mismatch; rebuild required.")
-    expected_dim = _model_dimension(model)
-    if expected_dim and meta_dim and expected_dim != meta_dim:
-        raise ValueError("Semantic model dimension mismatch; rebuild required.")
+    if query_embedding.shape[1] != index.d:
+        raise ValueError("Semantic query embedding dimension mismatch; rebuild required.")
 
     # Search
     k = min(k, len(units))

@@ -180,7 +180,7 @@ class TLDRDaemon:
         default_config = {
             "enabled": True,
             "auto_reindex_threshold": 20,  # Files changed before auto re-index
-            "model": "bge-large-en-v1.5",
+            "model": "bge-large-en-v1.5",  # Opt-in alternatives include jina-code-0.5b
             "abstain_threshold": None,
             "abstain_empty": False,
             "rerank": False,
@@ -840,9 +840,11 @@ class TLDRDaemon:
 
             if action == "index":
                 language = command.get("language", "python")
+                model = command.get("model", self._semantic_config.get("model"))
                 count = build_semantic_index(
                     str(self.project),
                     lang=language,
+                    model=model if isinstance(model, str) and model.strip() else None,
                     ignore_spec=self._ignore_spec,
                     index_paths=self.index_paths,
                     index_config=self.index_config,
@@ -946,11 +948,15 @@ class TLDRDaemon:
                     "cluster_label_mode",
                     self._semantic_config.get("cluster_label_mode", "auto"),
                 )
+                model_override = command.get("model")
+                if not isinstance(model_override, str) or not model_override.strip():
+                    model_override = None
                 if navigate_cluster:
                     result = semantic_navigation_cluster_search(
                         str(self.project),
                         query,
                         k=k,
+                        model=model_override,
                         retrieval_mode=str(retrieval_mode),
                         no_result_guard=str(no_result_guard),
                         rg_pattern=rg_pattern if isinstance(rg_pattern, str) else None,
@@ -984,6 +990,7 @@ class TLDRDaemon:
                         str(self.project),
                         query,
                         k=k,
+                        model=model_override,
                         retrieval_mode=str(retrieval_mode),
                         no_result_guard=str(no_result_guard),
                         rg_pattern=rg_pattern if isinstance(rg_pattern, str) else None,
@@ -1018,6 +1025,7 @@ class TLDRDaemon:
                     str(self.project),
                     query,
                     k=k,
+                    model=model_override,
                     retrieval_mode=str(retrieval_mode),
                     no_result_guard=str(no_result_guard),
                     rg_pattern=rg_pattern if isinstance(rg_pattern, str) else None,

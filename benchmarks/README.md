@@ -159,6 +159,56 @@ Open-ended judge-mode tasks (free-form answers, judged A/B; `--trials 3`):
 | slice_only | 1000 | 7 | **0.548** |  | **0.548** |  | `benchmark/runs/20260210-211226Z-llm-ab-run-judge-slice-1000-t3.json` |
 | slice_only | 500 | 7 | **0.429** |  | **0.429** |  | `benchmark/runs/20260210-212621Z-llm-ab-run-judge-slice-500-t3.json` |
 
+### 2026-03: Model Variant Addendum (BGE Default vs Jina Opt-In)
+
+This is the aggregate decision surface for the 009 migration work. It rolls up the daemon-mode Django runs from `implementations/009-migrate-bge-to-jina-code-0.5b_IMPLEMENTATION_PLAN.md` so readers do not need to reconstruct the decision from implementation logs.
+
+Use it like this:
+- `rg-native` is the lexical baseline for exact lookup.
+- `contextplus` remains the pinned 008 external competitor baseline and was not rerun in the Jina migration.
+- `BGE` is the current llm-tldr default.
+- `Jina` is the opt-in candidate under evaluation.
+
+#### Scenario Decision Guide
+
+| Situation | Best current choice | Why |
+| --- | --- | --- |
+| Exact symbol / definition lookup | `rg-native` | Structured exact-definition retrieval is `F1 0.9841` for `rg-native` vs `0.1602` for BGE and `0.1520` for Jina. |
+| Default product retrieval lane | `llm-tldr` with `BGE` | Jina is roughly tied on common `hybrid_rrf`, but BGE still wins the lane2 gate row, compound efficiency, and structured concept retrieval. |
+| Pure semantic concept lookup | `llm-tldr --model jina-code-0.5b` | Jina is clearly better on pure semantic retrieval quality (`MRR 0.7023` vs `0.6022`). |
+| Budget-limited semantic retrieval | `llm-tldr --model jina-code-0.5b` | At `budget=1000`, Jina improves semantic retrieval (`0.7048` vs `0.6124`) and slightly improves hybrid (`0.8647` vs `0.8597`). |
+| Concept-style retrieval in the current product path | `llm-tldr` with `BGE` | On structured behavior retrieval, BGE beats Jina in both semantic (`F1 0.1458` vs `0.1053`) and hybrid (`F1 0.1584` vs `0.1188`). |
+| Compound "find code and who calls it" | `llm-tldr` with `BGE` | Correctness is tied, but BGE has the better compound efficiency ratio (`1.0250` vs `1.1361`). |
+
+#### Model / Tool Comparison Matrix
+
+Unless noted otherwise, rows below are daemon-mode Django artifacts.
+
+| Surface | `rg-native` / `contextplus` context | `BGE` | `Jina` | Takeaway |
+| --- | --- | --- | --- | --- |
+| Common lane `hybrid_rrf` retrieval quality | `rg-native`: `MRR 0.820`, `R@5 0.877`, `FPR@5 0.000`; `contextplus`: `MRR 0.216`, `R@5 0.298`, `FPR@5 1.000` | `MRR 0.8684`, `R@5 0.9649`, `R@10 1.0000`, `P@5 0.1930` | `MRR 0.8686`, `R@5 0.9825`, `R@10 1.0000`, `P@5 0.1965` | Both llm-tldr models beat the external baselines by a wide margin; Jina only has a marginal edge here. |
+| Common lane `hybrid_lane2` retrieval quality | No direct `rg-native` or `contextplus` lane2 analogue; compare as an intra-tool default gate row | `MRR 0.8741`, `R@5 0.8772`, `R@10 0.9649`, `P@5 0.1754` | `MRR 0.8417`, `R@5 0.9123`, `R@10 1.0000`, `P@5 0.1825` | BGE still wins the canonical default gate on MRR even though Jina gains some recall and precision. |
+| Pure semantic concept retrieval | `contextplus` concept-path parity is still below llm-tldr; `rg-native` is not the right comparator for this row | `MRR 0.6022`, `R@5 0.7719`, `R@10 0.7895`, `P@5 0.1544` | `MRR 0.7023`, `R@5 0.8596`, `R@10 0.8772`, `P@5 0.1719` | This is the main place Jina is genuinely better than BGE. |
+| Token-efficiency retrieval @ `1000` | `rg-native`: `MRR 0.820`, `tok 159.0`; no pinned `contextplus` token curve | `semantic 0.6124`, `hybrid_rrf 0.8597` | `semantic 0.7048`, `hybrid_rrf 0.8647` | Jina wins semantic retrieval under token pressure; the hybrid gain is small. |
+| Compound semantic + impact | No direct `rg-native` / `contextplus` equivalent | `TTE p50 ratio 1.0250`, overlap `1.0`, callers Jaccard `1.0` | `TTE p50 ratio 1.1361`, overlap `1.0`, callers Jaccard `1.0` | Correctness is tied, but Jina makes the compound path less efficient relative to sequential search + impact. |
+| Structured exact-definition retrieval | `rg-native`: `F1 0.9841`, `p50 84.8ms`; `contextplus`: not run on this suite | `F1 0.1602`, `p50 142.1ms` | `F1 0.1520`, `p50 140.3ms` | Exact lookup remains a lexical task; neither embedding model should replace `rg-native` here. |
+| Structured behavior retrieval (semantic) | `rg-native`: `F1 0.0217`, `p50 87.3ms`; `contextplus`: not run on this suite | `F1 0.1458`, `p50 169.5ms` | `F1 0.1053`, `p50 185.9ms` | Semantic retrieval adds real value over `rg-native` for concept-style lookup, but BGE beats Jina. |
+| Structured behavior retrieval (hybrid) | `rg-native`: `F1 0.0217`, `p50 87.3ms`; `contextplus`: not run on this suite | `F1 0.1584`, `p50 422.9ms` | `F1 0.1188`, `p50 438.5ms` | Hybrid helps concept-style lookup, but BGE still wins and the harness includes deterministic file-to-symbol projection overhead. |
+| Structured behavior retrieval (hybrid + `rg_empty`) | Negative query fixed for both; positive hybrid queries were suppressed | `F1 0.0000`, `p50 358.0ms` | `F1 0.0000`, `p50 358.3ms` | Strict lexical guarding is too aggressive for the current behavior-query labels. |
+| Steady-state daemon semantic latency | `rg-native` common-lane p50 is `216.2ms`; `contextplus` remains subprocess-heavy in the pinned 008 comparison (`7717ms`) | `p50 150.2ms`, `p95 250.2ms` | `p50 166.5ms`, `p95 286.4ms` | BGE is still faster at steady-state semantic query time by about `10-14%`. |
+| Semantic build / memory cost | `rg-native` and `contextplus` do not have an equivalent embedding-index build cost | fresh parity rebuild still pending | `build_s 692.57`, `peak_rss 3360.1MB` | Jina is operationally heavier, which is one reason the default did not flip. |
+
+Artifacts referenced above:
+- `benchmark/runs/20260306-103455Z-retrieval-django-jina05b-daemon.json`
+- `benchmark/runs/20260306-103542Z-retrieval-django-jina05b-lane2-daemon.json`
+- `benchmark/runs/20260306-103645Z-token-efficiency-django-jina05b-daemon.json`
+- `benchmark/runs/20260306-103725Z-compound-semantic-impact-django-jina05b-daemon.json`
+- `benchmark/runs/20260306-182147Z-structured-retrieval-django.json`
+- `benchmark/runs/20260306-185707Z-structured-retrieval-django.json`
+- `benchmark/runs/20260306-190233Z-structured-retrieval-django.json`
+- `benchmark/runs/20260306-adhoc-daemon-semantic-latency-bge-vs-jina.json`
+- `benchmark/logs/20260306-101553Z-django-jina05b-semantic.log`
+
 ## Setup
 
 ```bash
@@ -314,7 +364,14 @@ uv run tldrf semantic index --cache-root benchmark/cache-root --index repo:djang
 
 # Higher-quality (default) model (larger download):
 uv run tldrf semantic index --cache-root benchmark/cache-root --index repo:django --lang python --rebuild benchmark/corpora/django
+
+# Opt-in Jina candidate (use a separate index id; rebuild required because dim changes):
+uv run tldrf semantic index --cache-root benchmark/cache-root --index repo:django-jina05b --lang python --model jina-code-0.5b --rebuild benchmark/corpora/django
 ```
+
+Notes:
+- Keep model comparisons on separate `--index` ids (`repo:django-bge15`, `repo:django-jina05b`) so reports stay comparable.
+- `jina-code-0.5b` is opt-in and may require separate license review for commercial use.
 
 ## Phase 5b: Compound Semantic+Impact (Deterministic)
 
