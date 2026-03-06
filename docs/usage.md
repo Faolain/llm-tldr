@@ -152,6 +152,43 @@ Result correctness: all predictions byte-identical between subprocess and daemon
 - **Result parity**: All retrieval predictions across lanes 1-5 are byte-identical between subprocess and daemon modes
 - **Structural parity**: impact 15/15 semantic match (caller ordering differs), slice/complexity/data_flow exact match
 
+## Lane 1 vs Lane 2
+
+The short version: `lane1` is the normal retrieval path. `lane2` is the stricter
+retrieval policy.
+
+- `lane1` means "run the hybrid retrieval and return the ranked results."
+- `lane2` means "take that retrieval output and add confidence shaping, optional
+  reranking, and optional abstention when confidence is too low."
+
+Why `lane2` exists:
+- It is useful when a weak top hit is worse than returning nothing.
+- It gives benchmark and production-style profiles a way to be more conservative
+  about ambiguous queries.
+- It is the right surface if you want to test bounded retrieval policies such as
+  abstain-threshold and rerank behavior.
+
+Why `lane1` is still the practical default:
+- For normal interactive use, the main value is already there: hybrid retrieval
+  finds the candidate code, then `impact`, `context`, `slice`, `dfg`, or `cfg`
+  provide the deterministic follow-up.
+- The measured deltas between `lane1` and `lane2` were real but small, not a
+  dramatic product shift.
+- In practice, `lane2` is better treated as a stricter benchmark or gating
+  surface than as the everyday default path.
+
+On the Django daemon benchmarks, that trade-off was visible directly:
+- BGE `lane1` common hybrid row: `MRR 0.8684`, `R@5 0.9649`, `P@5 0.1930`
+- BGE `lane2` common hybrid row: `MRR 0.8741`, `R@5 0.8772`, `P@5 0.1754`
+- Jina `lane1` common hybrid row: `MRR 0.8686`, `R@5 0.9825`, `P@5 0.1965`
+- Jina `lane2` common hybrid row: `MRR 0.8417`, `R@5 0.9123`, `P@5 0.1825`
+
+That is why the operator guidance is:
+- Use `lane1` for normal retrieval.
+- Use `lane2` only when you explicitly want abstention/rerank behavior.
+- Do not treat a small `lane2` benchmark win as more important than the broader
+  workflow, which is usually `lane1 -> impact/context/slice/dfg/cfg`.
+
 ## Summary: Which Path Am I On?
 
 | Context | Execution Path | Model Load | Latency |
