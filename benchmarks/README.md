@@ -519,7 +519,7 @@ uv run python scripts/bench_llm_ab_run.py \
   --enforce-json-schema
 ```
 
-Using Claude Code CLI (uses your local Claude login/subscription):
+Using Claude Code CLI (uses your local Claude login/subscription; invoked as `claude -p --model <model> --effort medium ...`):
 
 ```bash
 uv run python scripts/bench_llm_ab_run.py \
@@ -533,6 +533,7 @@ uv run python scripts/bench_llm_ab_run.py \
 Notes:
 - `--provider claude_sdk` requires `claude-agent-sdk` and a working local `claude` (Claude Code) install. It uses your local Claude Code login/subscription (no API key) and spawns `claude`, so it has the same state-write/sandbox caveats as `--provider claude_cli`.
 - `--provider claude_cli` writes state under `~/.claude` / `~/.local/share/claude` (debug, todo/session metadata) even for `--print`. In workspace-restricted sandboxes, use `--claude-home "$HOME"` in a non-sandboxed environment, or expect to re-login if using the default isolated `benchmark/claude-home`.
+- `--provider claude_cli` currently pins Claude CLI reasoning to `--effort medium` for repeatable benchmark runs.
 - `--max-tokens` / `--temperature` only apply to the legacy `--provider anthropic` path.
 - Use `--limit 3` for a cheap smoke-run before doing the full task set.
 
@@ -555,7 +556,7 @@ uv run python scripts/bench_llm_ab_run.py \
   --prompts benchmark/llm/<timestamp>-llm-ab-django.jsonl \
   --provider codex \
   --model gpt-5.3-codex \
-  --judge-provider claude_sdk \
+  --judge-provider claude_cli \
   --judge-model sonnet \
   --judge-retries 1 \
   --enforce-json-schema

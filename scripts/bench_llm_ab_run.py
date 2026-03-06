@@ -525,6 +525,7 @@ def _claude_cli_call(
     timeout_s: float,
     json_schema: dict[str, Any] | None,
     env: dict[str, str] | None,
+    effort: str = "medium",
 ) -> tuple[str, dict[str, Any]]:
     # Disable tools so this behaves like a pure answer model over provided context.
     #
@@ -533,11 +534,14 @@ def _claude_cli_call(
     output_format = "json" if json_schema is not None else "text"
     cmd: list[str] = [
         "claude",
-        "--print",
+        "-p",
         "--output-format",
         output_format,
         "--model",
         str(model),
+        # Keep Claude runs on a stable reasoning preset for benchmark repeatability.
+        "--effort",
+        str(effort),
         "--tools",
         "",
         "--permission-mode",

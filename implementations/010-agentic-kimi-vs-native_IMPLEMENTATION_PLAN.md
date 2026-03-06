@@ -53,13 +53,18 @@ Preferred benchmark stack for the first real agentic run:
 
 - Answer model / "model user": Kimi CLI using the existing logged-in local session
 - Optional later fallback model: DeepSeek
-- Judge: Claude Sonnet medium via the existing Claude subscription or API
+- Judge: Claude Sonnet medium via the existing Claude Code CLI subscription
 
 Important implementation constraint:
 
 - today [scripts/bench_llm_ab_run.py](../scripts/bench_llm_ab_run.py) supports `codex`, `claude_sdk`, `claude_cli`, and `anthropic`
+- when Claude is needed for this benchmark, standardize on `claude_cli`, not `claude_sdk`
+- use the tested CLI shape `claude -p --model sonnet --effort medium <prompt>` as the base invocation
 - using Kimi in the harness requires adding a Kimi CLI provider adapter or wrapper path first
-- if the current Claude judge path does not expose an explicit medium setting, add or document the closest stable Sonnet-medium-equivalent setting and keep it fixed across runs
+
+Verification note:
+
+- tested locally on 2026-03-06: `claude -p --model sonnet --effort medium "Reply with exactly: OK"` returned `OK`
 
 Cost note:
 
@@ -168,8 +173,9 @@ Pinned judge configuration (create `benchmarks/agentic/judge_config.json`):
 
 ```json
 {
-  "judge_provider": "claude_sdk",
-  "judge_model": "claude-sonnet-4-20250514",
+  "judge_provider": "claude_cli",
+  "judge_model": "sonnet",
+  "judge_effort": "medium",
   "judge_temperature": 0.0,
   "judge_max_tokens": 800,
   "judge_retries": 1,
@@ -177,7 +183,7 @@ Pinned judge configuration (create `benchmarks/agentic/judge_config.json`):
 }
 ```
 
-All benchmark scripts must read judge configuration from this file. If the model changes, it changes in one place. Every run report must include a `judge_config_hash` (SHA-256 of the judge config JSON). The phase gate script must compare the judge config hash between runs; if they differ, the gate fails.
+All benchmark scripts must read judge configuration from this file. If the model changes, it changes in one place. Every run report must include a `judge_config_hash` (SHA-256 of the judge config JSON). The phase gate script must compare the judge config hash between runs; if they differ, the gate fails. The Claude runtime path should invoke `claude -p --model sonnet --effort medium` plus any required harness flags (`--output-format`, `--json-schema`, tool disabling, and permission settings).
 
 Metric collection notes:
 
@@ -211,7 +217,7 @@ Work:
 - run the same Kimi model in two conditions:
   - baseline context arm built from native-tool packets
   - augmented context arm built from `tldrf` packets
-- keep the judge fixed as Claude Sonnet medium
+- keep the judge fixed as Claude Sonnet medium via `claude_cli`
 
 Acceptance gate (`benchmarks/agentic/phase_a_gates.json`):
 
@@ -747,7 +753,7 @@ uv run python scripts/bench_agentic_orchestrate.py \
   - tune one canonical instruction document only
   - treat mirror docs as explanatory, not independent benchmark levers
 - 2026-03-06: Autonomy review — applied 33 fixes across 10 categories to make the plan hands-off:
-  - pinned judge config to exact model ID (`claude-sonnet-4-20250514`) with temperature, provider, and hash enforcement
+  - pinned judge config to exact Claude CLI settings (`claude_cli`, `sonnet`, `medium`) with temperature, provider, and hash enforcement
   - replaced all vague acceptance criteria with numeric phase gate thresholds in JSON files
   - replaced "manually review transcripts" with automated `bench_preflight_validate.py`
   - added machine-readable task schema with `expected_first_tool`, `workflow_class`, `forbidden_first_tool`
@@ -774,7 +780,7 @@ uv run python scripts/bench_agentic_orchestrate.py \
   - `rg` for exact lookup
   - `tldrf` for structure and concept search
 - Kimi CLI avoids forcing an OpenRouter dependency into the first benchmark pass, which keeps the initial harness closer to the real local workflow we actually want to evaluate.
-- Judge configuration should be pinned exactly once selected. "Claude Sonnet medium" should not drift between pilot and scale-out runs. Use `benchmarks/agentic/judge_config.json` with exact dated model ID.
+- Judge configuration should be pinned exactly once selected. "Claude Sonnet medium" should not drift between pilot and scale-out runs. Use `benchmarks/agentic/judge_config.json` with provider `claude_cli`, model `sonnet`, and effort `medium`, and invoke Claude via `claude -p`.
 - The existing `bench_llm_ab_run.py` is fundamentally single-turn (one prompt, one answer). It cannot collect turn count, tool-call count, or transcript data. `bench_agent_tasks.py` is a genuinely new multi-turn program, not a mode flag.
 - Token usage is inconsistent across providers: `codex` returns `{}`, `claude_cli` returns full usage. For Kimi, include a tiktoken fallback estimation path.
 - No existing statistical significance testing exists in the codebase. `scipy` must be added as a dev dependency. At pilot sizes (20-50 tasks), results are directional, not confirmatory.

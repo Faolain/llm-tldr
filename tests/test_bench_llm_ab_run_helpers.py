@@ -1,5 +1,6 @@
 import json
 import runpy
+import subprocess
 import sys
 from pathlib import Path
 
@@ -199,6 +200,61 @@ def test_claude_sdk_result_to_text_and_usage_error_raises():
     )
     with pytest.raises(RuntimeError):
         fn(msg)
+
+
+def test_claude_cli_call_uses_print_and_medium_effort(monkeypatch: pytest.MonkeyPatch):
+    mod = _load_mod()
+    fn = mod["_claude_cli_call"]
+
+    seen: dict[str, object] = {}
+
+    def fake_run(
+        cmd: list[str],
+        *,
+        text: bool,
+        capture_output: bool,
+        timeout: float,
+        check: bool,
+        env: dict[str, str] | None,
+    ) -> subprocess.CompletedProcess[str]:
+        seen["cmd"] = cmd
+        seen["timeout"] = timeout
+        seen["env"] = env
+        assert text is True
+        assert capture_output is True
+        assert check is False
+        return subprocess.CompletedProcess(cmd, 0, stdout="OK", stderr="")
+
+    monkeypatch.setattr(fn.__globals__["subprocess"], "run", fake_run)
+
+    text, usage = fn(
+        model="sonnet",
+        prompt="Reply with exactly: OK",
+        timeout_s=12.5,
+        json_schema=None,
+        env={"HOME": "/tmp/claude-home"},
+    )
+
+    assert text == "OK"
+    assert usage == {}
+    assert seen["timeout"] == 12.5
+    assert seen["env"] == {"HOME": "/tmp/claude-home"}
+    assert seen["cmd"] == [
+        "claude",
+        "-p",
+        "--output-format",
+        "text",
+        "--model",
+        "sonnet",
+        "--effort",
+        "medium",
+        "--tools",
+        "",
+        "--permission-mode",
+        "dontAsk",
+        "--no-session-persistence",
+        "Reply with exactly: OK",
+    ]
 
 
 def test_main_structured_report_serializes_bad_json_split(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
