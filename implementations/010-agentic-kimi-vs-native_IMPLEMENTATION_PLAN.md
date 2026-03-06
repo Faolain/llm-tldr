@@ -3,9 +3,14 @@
 - Status: Proposed
 - Last updated: 2026-03-06
 
+## Special Instructions
+- Do not stop proceeding with this plan until everything is done.
+- Append any immediate next steps where required in the doc as you go through it
+- Append any gotchas or learnings to the doc as you go through it.
+
 ## Goal
 
-Measure whether a smaller, cost-efficient answer model, starting with Kimi CLI, performs better on real repository work when equipped with `tldrf` than when limited to native lexical tools such as `rg`, `grep`, file reads, and tests.
+Measure whether a smaller, cost-efficient answer model, starting with Kimi CLI, performs better on real repository work when equipped with `tldrf` than when limited to native lexical tools such as `rg`, `grep`, file reads, and tests. 
 
 The benchmark must answer the stronger version of the README claim:
 
