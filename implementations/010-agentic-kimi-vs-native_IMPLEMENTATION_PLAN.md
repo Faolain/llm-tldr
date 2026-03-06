@@ -5,7 +5,7 @@
 
 ## Goal
 
-Measure whether a smaller, cost-efficient answer model, starting with Kimi on OpenRouter, performs better on real repository work when equipped with `tldrf` than when limited to native lexical tools such as `rg`, `grep`, file reads, and tests.
+Measure whether a smaller, cost-efficient answer model, starting with Kimi CLI, performs better on real repository work when equipped with `tldrf` than when limited to native lexical tools such as `rg`, `grep`, file reads, and tests.
 
 The benchmark must answer the stronger version of the README claim:
 
@@ -51,19 +51,20 @@ Current missing proof:
 
 Preferred benchmark stack for the first real agentic run:
 
-- Answer model / "model user": Kimi on OpenRouter
-- Fallback cheap answer model: DeepSeek on OpenRouter
-- Judge: Claude Sonnet via existing Claude subscription or API
+- Answer model / "model user": Kimi CLI using the existing logged-in local session
+- Optional later fallback model: DeepSeek
+- Judge: Claude Sonnet medium via the existing Claude subscription or API
 
 Important implementation constraint:
 
 - today [scripts/bench_llm_ab_run.py](../scripts/bench_llm_ab_run.py) supports `codex`, `claude_sdk`, `claude_cli`, and `anthropic`
-- using Kimi or DeepSeek in the harness requires adding an OpenAI-compatible / OpenRouter provider adapter first
+- using Kimi in the harness requires adding a Kimi CLI provider adapter or wrapper path first
+- if the current Claude judge path does not expose an explicit medium setting, add or document the closest stable Sonnet-medium-equivalent setting and keep it fixed across runs
 
 Cost note:
 
-- target budget is low double digits for pilot runs
-- exact spend must be verified against current provider pricing before full sweeps
+- target cost is primarily subscription-backed for the answer model because Kimi CLI is already logged in locally
+- incremental cost should mostly come from the Claude judge path and larger external benchmark sweeps
 
 Model-comparison note:
 
@@ -161,7 +162,7 @@ Secondary metrics:
 Judge policy:
 
 - use deterministic tests or scripted oracles wherever possible
-- use Claude Sonnet as judge only when deterministic scoring is not feasible
+- use Claude Sonnet medium as judge only when deterministic scoring is not feasible
 
 ## Phase Plan
 
@@ -179,7 +180,7 @@ Work:
 - run the same Kimi model in two conditions:
   - baseline context arm built from native-tool packets
   - augmented context arm built from `tldrf` packets
-- keep the judge fixed and stronger
+- keep the judge fixed as Claude Sonnet medium
 
 Acceptance:
 
@@ -324,8 +325,8 @@ Initial run:
 
 - 20-50 Django-heavy SWE-bench Verified tasks
 - baseline arm vs augmented arm
-- Kimi as the answer model
-- Claude Sonnet as the judge only where a secondary qualitative read is useful
+- Kimi CLI as the answer model
+- Claude Sonnet medium as the judge only where a secondary qualitative read is useful
 
 Record:
 
@@ -376,7 +377,7 @@ Acceptance:
 Likely files to change:
 
 - [scripts/bench_llm_ab_run.py](../scripts/bench_llm_ab_run.py)
-  - add OpenRouter / OpenAI-compatible provider adapter
+  - add a Kimi CLI provider adapter or wrapper path
   - extend full-run usage accounting
 - New: `scripts/bench_tool_choice.py`
   - add a preflight mode that emits transcript-level workflow-compliance reports
@@ -398,7 +399,7 @@ Canonical instruction surface to maintain:
 
 ## Immediate Next Steps
 
-1. Create the OpenRouter provider adapter so Kimi can run inside the existing answer-model harness.
+1. Create the Kimi CLI provider adapter so the logged-in local Kimi session can run inside the existing answer-model harness.
 2. Reuse the current Django `llm_ab` packets and run the smallest possible pilot:
    - Kimi baseline arm
    - Kimi plus `tldrf` arm
@@ -412,9 +413,9 @@ Canonical instruction surface to maintain:
 
 - 2026-03-06: Created this plan to combine the existing local benchmark stack with a new agentic evaluation goal focused on Kimi-with-`tldrf` vs Kimi-without-`tldrf`.
 - 2026-03-06: Locked the preferred initial model stack as:
-  - answer model: Kimi on OpenRouter
-  - fallback cheap answer model: DeepSeek on OpenRouter
-  - judge: Claude Sonnet
+  - answer model: Kimi CLI
+  - optional later fallback model: DeepSeek
+  - judge: Claude Sonnet medium
 - 2026-03-06: Narrowed the first benchmark pass to a same-model comparison only:
   - Kimi with native tools
   - Kimi with native tools plus `tldrf`
@@ -439,4 +440,5 @@ Canonical instruction surface to maintain:
 - The most realistic winning setup is expected to be policy-combined, not tool-exclusive:
   - `rg` for exact lookup
   - `tldrf` for structure and concept search
-- Cost claims must be treated as variable until provider pricing is rechecked at execution time.
+- Kimi CLI avoids forcing an OpenRouter dependency into the first benchmark pass, which keeps the initial harness closer to the real local workflow we actually want to evaluate.
+- Judge configuration should be pinned exactly once selected. "Claude Sonnet medium" should not drift between pilot and scale-out runs.
