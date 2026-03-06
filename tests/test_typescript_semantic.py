@@ -11,6 +11,7 @@ Run with:
 import pytest
 import json
 from pathlib import Path
+import numpy as np
 
 
 # Sample TypeScript code with clear control flow and data flow
@@ -134,9 +135,25 @@ function transform(data) {
 class TestSemanticIndexIntegration:
     """Test that semantic index includes CFG/DFG for TypeScript functions."""
 
-    def test_semantic_index_has_cfg_dfg(self, temp_ts_project):
+    def test_semantic_index_has_cfg_dfg(self, temp_ts_project, monkeypatch):
         """Semantic index metadata should include cfg_summary and dfg_summary."""
         from tldr.semantic import build_semantic_index
+
+        pytest.importorskip("faiss")
+
+        class DummyModel:
+            def encode(
+                self,
+                texts,
+                batch_size=None,
+                normalize_embeddings=True,
+                show_progress_bar=False,
+            ):
+                if isinstance(texts, str):
+                    texts = [texts]
+                return np.zeros((len(texts), 3), dtype=np.float32)
+
+        monkeypatch.setattr("tldr.semantic.get_model", lambda *_args, **_kwargs: DummyModel())
 
         # Build the semantic index
         build_semantic_index(temp_ts_project, lang="typescript", show_progress=False)
