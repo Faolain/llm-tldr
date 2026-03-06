@@ -119,6 +119,39 @@ tldrf semantic index . --model jina-code-0.5b --rebuild
 
 Switching between `bge-large-en-v1.5`, `jina-code-0.5b`, and `all-MiniLM-L6-v2` requires rebuilding semantic artifacts for that index id. `jina-code-0.5b` also carries a non-commercial license caveat unless you have a separate commercial license.
 
+### Why This Helps Smaller Models
+
+In theory and in practice, yes. A tool like `tldrf` should help smaller or less capable models more than it helps frontier models, because it shifts work from “infer the codebase from scattered text” to “reason over a smaller, structured evidence set.”
+
+Why that helps:
+- It reduces search-space. The model does not need to mentally reconstruct callers, callees, slices, or data flow from raw files.
+- It preserves context. You pass back compact, targeted outputs instead of whole files and repeated scans.
+- It reduces context pollution. A smaller model is much easier to derail with irrelevant files or nearby-but-wrong matches.
+- It adds determinism. `impact`, `slice`, `dfg`, `cfg`, and structural context are stronger than “the model probably found the right thing.”
+- It amortizes cost. Index once, query many times, instead of forcing the model to rediscover the repo on every turn.
+
+The key distinction is:
+- `rg` is better for exact lexical lookup.
+- `tldrf` is better for concept discovery plus structural follow-up.
+
+That means the best use is usually not “replace `rg`,” but:
+- use `rg` for exact names/strings/imports
+- use hybrid retrieval when you know intent but not the symbol
+- use `impact/context/slice/dfg/cfg` to give the model the exact connected evidence it should reason over
+
+That is especially valuable for smaller models, because they are worse at:
+- planning multi-step codebase exploration
+- keeping long dependency chains in working memory
+- recovering after being shown noisy or partially relevant context
+
+The caveat is important: `tldrf` does not replace reasoning. It improves retrieval and evidence quality. If the retrieval is poor, stale, or too broad, a smaller model can still fail. So the tool only pays off when:
+- indexes are fresh
+- language support is good for the repo
+- you use the right lane for the task
+- you still keep `rg` in the loop for exact checks
+
+So the short answer is: yes, this kind of tool is probably most valuable for smaller models and large codebases, because it turns expensive, lossy exploration into a more deterministic retrieval-and-analysis workflow while saving context for the actual reasoning/editing step.
+
 ### Where TLDR Stores Things
 
 TLDR stores two different kinds of artifacts:
