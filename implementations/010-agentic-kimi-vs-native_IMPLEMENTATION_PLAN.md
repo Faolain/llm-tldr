@@ -1,7 +1,6 @@
 # Agentic Benchmark Plan: Kimi With TLDRF vs Native Tools
 
 - Status: Proposed
-- Owner: TBD
 - Last updated: 2026-03-06
 
 ## Goal
@@ -74,6 +73,13 @@ Model-comparison note:
   - Kimi with native tools plus `tldrf`
 - once that baseline is stable, the same harness can be rerun later with additional models
 
+Instruction-surface note:
+
+- keep the harness / system prompt fixed across both benchmark arms
+- do **not** treat system-prompt editing as a tuning lever for this benchmark
+- tune exactly one canonical instruction document that is intended to graduate into normal everyday usage as well as eval usage
+- explanatory docs may mirror that policy, but they are not independent tuning surfaces
+
 ## Benchmark Source Strategy
 
 This plan intentionally uses two benchmark layers:
@@ -119,7 +125,14 @@ Every agentic benchmark phase should compare at least these two arms:
 - Augmented arm:
   - same native tools
   - plus `tldrf`
-  - plus the repo usage policy from [AGENTS.md](../AGENTS.md) and [docs/llm-tldr-reference-card.md](../docs/llm-tldr-reference-card.md)
+  - plus the single canonical instruction policy
+
+Canonical instruction policy:
+
+- one authoritative instruction document only
+- for now, treat [AGENTS.md](../AGENTS.md) as the canonical source unless and until it is intentionally replaced by a dedicated `skill.md`
+- [docs/llm-tldr-reference-card.md](../docs/llm-tldr-reference-card.md) remains explanatory and should mirror the policy, not diverge from it
+- evals and normal usage should both consume the same canonical instruction policy
 
 The augmented arm is not allowed to replace `rg` for exact lexical lookup.
 
@@ -181,8 +194,8 @@ Purpose:
 
 Gold policy source:
 
-- [AGENTS.md](../AGENTS.md)
-- [docs/llm-tldr-reference-card.md](../docs/llm-tldr-reference-card.md)
+- canonical instruction source: [AGENTS.md](../AGENTS.md)
+- explanatory mirror only: [docs/llm-tldr-reference-card.md](../docs/llm-tldr-reference-card.md)
 
 Required preflight gate before full runs:
 
@@ -222,10 +235,14 @@ Metrics:
 
 If the preflight gate fails, tune in this order:
 
-1. benchmark instructions / system prompt
-2. future `skill.md` or `AGENTS.md` guidance
-3. task examples / few-shot demonstrations
-4. tool wrappers or clearer tool descriptions if the model is still confused
+1. the single canonical instruction document
+2. task examples / few-shot demonstrations that are bundled under that same instruction policy
+3. tool wrappers or clearer tool descriptions if the model is still confused
+
+Do not tune:
+
+- the harness / system prompt as a benchmark-specific workaround
+- multiple competing instruction documents at the same time
 
 Failed preflight runs are invalidation signals, not product evidence:
 
@@ -373,14 +390,20 @@ Likely files to change:
 - [benchmarks/README.md](../benchmarks/README.md)
   - publish the new benchmark family and results
 
+Canonical instruction surface to maintain:
+
+- [AGENTS.md](../AGENTS.md) during the initial benchmark program
+- optional future replacement: a single dedicated `skill.md`
+- if that replacement happens, it must become the sole source of truth for both eval and normal usage
+
 ## Immediate Next Steps
 
 1. Create the OpenRouter provider adapter so Kimi can run inside the existing answer-model harness.
 2. Reuse the current Django `llm_ab` packets and run the smallest possible pilot:
    - Kimi baseline arm
    - Kimi plus `tldrf` arm
-3. Define the preflight tool-usage suite and transcript review gate from `AGENTS.md` and the reference card.
-4. Run the preflight gate and tune the instruction surface until workflow compliance is acceptable.
+3. Define the preflight tool-usage suite from the single canonical instruction source in [AGENTS.md](../AGENTS.md).
+4. Run the preflight gate and tune only that canonical instruction surface until workflow compliance is acceptable.
 5. Define the full tool-choice gold policy suite.
 6. Curate a first batch of local patch/test tasks on Django.
 7. Select the first 20-50 Django-heavy SWE-bench Verified tasks for the external pilot.
@@ -402,12 +425,17 @@ Likely files to change:
   - transcript review
   - workflow-compliance metrics
   - instruction tuning if the agent does not use `tldrf` appropriately
+- 2026-03-06: Locked the instruction-tuning policy:
+  - keep harness/system prompts fixed
+  - tune one canonical instruction document only
+  - treat mirror docs as explanatory, not independent benchmark levers
 
 ## Gotchas / Learnings
 
 - Existing `llm_ab` results are valuable, but they measure prebuilt context packets, not tool-using agents.
 - A strong external benchmark does not remove the need for a local benchmark. Local suites are still the fastest way to tune tool policy, packing, and harness behavior.
 - If the model does not know when to use `tldrf`, the benchmark mostly measures prompt quality, not tool utility. Full runs should be blocked until the preflight gate passes.
+- System-prompt changes would contaminate the comparison. The benchmark should vary tool availability and one canonical instruction policy, not hidden harness behavior.
 - The most realistic winning setup is expected to be policy-combined, not tool-exclusive:
   - `rg` for exact lookup
   - `tldrf` for structure and concept search
