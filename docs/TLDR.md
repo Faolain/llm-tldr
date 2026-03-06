@@ -59,7 +59,7 @@ Finds functions by behavior because **every function is embedded with:**
 - **L5:** Dependencies (imports, external modules)
 - **Plus:** First ~10 lines of code
 
-This gets encoded into **1024-dimensional embeddings** via `bge-large-en-v1.5`, so semantic search finds `verify_access_token()` even when you ask about JWT validation.
+By default this gets encoded into **1024-dimensional embeddings** via `bge-large-en-v1.5`, so semantic search finds `verify_access_token()` even when you ask about JWT validation. `jina-code-0.5b` is also available as an opt-in model for code-focused retrieval, but it requires a full semantic reindex because it produces 896-dimensional embeddings.
 
 #### Why Both Forward AND Backward Call Graphs?
 
@@ -436,8 +436,10 @@ Traditional search finds syntax. TLDR semantic search finds behavior.
        ...
    ```
 
-3. **Encode with bge-large-en-v1.5** → 1024-dimensional vector
+3. **Encode with the selected embedding model** → 1024-dimensional vector by default (`bge-large-en-v1.5`), 896-dimensional when opting into `jina-code-0.5b`
 4. **FAISS index** for fast similarity search
+
+> `jina-code-0.5b` is opt-in, requires rebuilding semantic artifacts for the target index, and carries a non-commercial license caveat unless separately licensed.
 
 ### Example Queries
 

@@ -342,6 +342,33 @@ Rows below are the required workflow board for overall product winner decisions:
 | `cfg` / complexity | `accuracy=0.600, mae=1.800, p50=151.115ms, tok=8` | unsupported (`N/A`) | unsupported (`N/A`) | complexity metrics in `benchmark/runs/h2h-llm-tldr-score-run1-fixed-stitched-allowlist-20260302T062602Z.json` |
 | Daemon/index operational metrics | `build_s=1.231, patch_s=0.815, rebuild_s=1.070`; `daemon-vs-cli p50 pending` | unsupported (`N/A`) | unsupported (`N/A`) | provisional TS perf metrics: `benchmark/runs/20260209-044240Z-ts-perf-ts-monorepo.json`; next artifact via `scripts/bench_perf_daemon_vs_cli.py` |
 
+### 009 Model-Variant Addendum (BGE Default vs Jina Opt-In)
+
+Use this addendum when the question is not just "how does llm-tldr compare to contextplus or rg-native?" but "where, if anywhere, is `jina-code-0.5b` actually better than the current BGE-backed default?"
+
+Protocol note:
+- These rows come from the daemon-mode Django migration evaluation in `implementations/009-migrate-bge-to-jina-code-0.5b_IMPLEMENTATION_PLAN.md`.
+- They complement the canonical 008 h2h matrix; they do not replace it. Several rows are deterministic retrieval or structured-scoring probes rather than full h2h segment exports.
+
+| Evaluation surface | BGE | Jina | Delta / winner | Comparator context | Evidence / decision note |
+| --- | --- | --- | --- | --- | --- |
+| Common lane `hybrid_rrf` retrieval quality | `mrr=0.8684`, `r@5=0.9649`, `r@10=1.0000`, `p@5=0.1930`, `fpr@5=1.0000` | `mrr=0.8686`, `r@5=0.9825`, `r@10=1.0000`, `p@5=0.1965`, `fpr@5=1.0000` | Jina slight quality edge, effectively a tie | Both remain well above `contextplus` retrieval quality in this program; `rg-native` still wins latency | `benchmark/runs/20260306-101803Z-retrieval-django-bge-daemon.json`; `benchmark/runs/20260306-103455Z-retrieval-django-jina05b-daemon.json` |
+| Common lane `hybrid_lane2` retrieval quality | `mrr=0.8741`, `r@5=0.8772`, `r@10=0.9649`, `p@5=0.1754`, `fpr@5=1.0000` | `mrr=0.8417`, `r@5=0.9123`, `r@10=1.0000`, `p@5=0.1825`, `fpr@5=1.0000` | BGE wins the gate row on MRR; Jina gains recall/precision but loses ranking quality | This is the closest model-variant analogue to the existing 008 "Retrieval (common lane)" board row | `benchmark/runs/20260306-101803Z-retrieval-django-bge-lane2-daemon.json`; `benchmark/runs/20260306-103542Z-retrieval-django-jina05b-lane2-daemon.json` |
+| Pure semantic concept-path retrieval | `mrr=0.6022`, `r@5=0.7719`, `r@10=0.7895`, `p@5=0.1544`, `fpr@5=1.0000` | `mrr=0.7023`, `r@5=0.8596`, `r@10=0.8772`, `p@5=0.1719`, `fpr@5=1.0000` | Jina clearly wins pure semantic retrieval | Both semantic models are materially stronger than the current `contextplus` concept-path row; `rg-native` is not the right comparator for this lane | `benchmark/runs/20260306-101803Z-retrieval-django-bge-daemon.json`; `benchmark/runs/20260306-103455Z-retrieval-django-jina05b-daemon.json` |
+| Token-efficiency retrieval @ `1000` | `semantic=0.6124`, `hybrid_rrf=0.8597` | `semantic=0.7048`, `hybrid_rrf=0.8647` | Jina wins semantic strongly; hybrid only slightly | Useful when the question is retrieval quality under budget pressure rather than common-lane ranking alone | `benchmark/runs/20260306-101949Z-token-efficiency-django-bge-daemon.json`; `benchmark/runs/20260306-103645Z-token-efficiency-django-jina05b-daemon.json` |
+| Compound semantic+impact | `tte_p50_ratio=1.0250`, `retrieval_overlap=1.0`, `impact_callers_jaccard=1.0` | `tte_p50_ratio=1.1361`, `retrieval_overlap=1.0`, `impact_callers_jaccard=1.0` | BGE wins efficiency; correctness is tied | `contextplus` / `rg-native` do not cover this lane, so this is an intra-tool product-path decision | `benchmark/runs/20260306-102247Z-compound-semantic-impact-django-bge-daemon.json`; `benchmark/runs/20260306-103725Z-compound-semantic-impact-django-jina05b-daemon.json` |
+| Structured exact-definition retrieval | `f1=0.1602`, `p50=142.1ms` | `f1=0.1520`, `p50=140.3ms` | BGE slight quality win; Jina only marginally faster | `rg-native=0.9841` dominates this exact lookup task, so neither semantic model should replace lexical search here | `benchmark/runs/20260306-182147Z-structured-retrieval-django.json` |
+| Structured behavior retrieval (semantic) | `f1=0.1458`, `p50=169.5ms` | `f1=0.1053`, `p50=185.9ms` | BGE wins | `rg-native=0.0217` on the same suite, so semantic retrieval is adding real value for concept-style target recovery | `benchmark/runs/20260306-185707Z-structured-retrieval-django.json` |
+| Structured behavior retrieval (hybrid) | `f1=0.1584`, `p50=422.9ms` | `f1=0.1188`, `p50=438.5ms` | BGE wins | Both hybrid variants beat `rg-native=0.0217`, but this harness includes deterministic file-to-symbol projection | `benchmark/runs/20260306-185707Z-structured-retrieval-django.json` |
+| Structured behavior retrieval (hybrid + `rg_empty`) | `f1=0.0000`, `p50=358.0ms` | `f1=0.0000`, `p50=358.3ms` | Tie; both unusable on this suite | The guard fixed the negative query but suppressed all positive hybrid queries because the lexical guard patterns were too weak | `benchmark/runs/20260306-190233Z-structured-retrieval-django.json` |
+| Steady-state daemon semantic latency | `p50=150.2ms`, `p95=250.2ms` | `p50=166.5ms`, `p95=286.4ms` | BGE faster by roughly `10-14%` | This is steady-state query latency, not the one-time build/rebuild cost | `benchmark/runs/20260306-adhoc-daemon-semantic-latency-bge-vs-jina.json` |
+| Semantic build / memory cost | comparable fresh rebuild still pending | `build_s=692.57`, `peak_rss=3360.1MB` | Jina operationally heavier | This is one of the reasons the current migration decision stays `KEEP_OPT_IN` | `benchmark/logs/20260306-101553Z-django-jina05b-semantic.log`; BGE rebuild parity still pending |
+
+Model-variant bottom line:
+- Jina is useful when the objective is pure semantic concept retrieval or budget-limited semantic retrieval.
+- BGE remains the stronger default for the full product because lane2, compound efficiency, structured exact/behavior retrieval, and operational cost still favor BGE.
+- `rg-native` remains the right first tool for exact identifier and definition lookup regardless of embedding model.
+
 ### Canonical Run1 Row IDs (Exported)
 
 Primary required rows (`budget_tokens=2000`):

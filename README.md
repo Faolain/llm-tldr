@@ -63,11 +63,11 @@ The daemon keeps indexes in memory for **100ms queries** instead of 30-second CL
 │  │   L1    │ │   L2    │ │   L3    │ │   L4    │ │   L5    │     │
 │  └─────────┘ └─────────┘ └─────────┘ └─────────┘ └─────────┘     │
 └───────────────────────────┬──────────────────────────────────────┘
-                            │ bge-large-en-v1.5
+                            │ bge-large-en-v1.5 / jina-code-0.5b
                             ▼
 ┌──────────────────────────────────────────────────────────────────┐
 │                    SEMANTIC INDEX                                │
-│  1024-dim embeddings in FAISS  →  "find JWT validation"          │
+│  Model-specific embeddings in FAISS  →  "find JWT validation"    │
 └───────────────────────────┬──────────────────────────────────────┘
                             │
                             ▼
@@ -89,7 +89,7 @@ Every function gets indexed with:
 - Dependencies (L5)
 - First ~10 lines of actual code
 
-This gets encoded into **1024-dimensional vectors** using `bge-large-en-v1.5`. The result: search by *what code does*, not just what it says.
+By default this gets encoded into **1024-dimensional vectors** using `bge-large-en-v1.5`. You can also opt into `jina-code-0.5b` for code-focused embeddings, but that requires a full semantic reindex because the embedding dimension changes to 896.
 
 ```bash
 # "validate JWT" finds verify_access_token() even without that exact text
@@ -109,6 +109,15 @@ tldrf semantic "database connection pooling" .
 ```
 
 Embedding dependencies (`sentence-transformers`, `faiss-cpu`) are included with `pip install llm-tldr`. The semantic index is cached under your `cache_root` in `.tldr/` (see below).
+
+Opt-in model selection:
+
+```bash
+# Keep BGE as the default unless you explicitly switch models
+tldrf semantic index . --model jina-code-0.5b --rebuild
+```
+
+Switching between `bge-large-en-v1.5`, `jina-code-0.5b`, and `all-MiniLM-L6-v2` requires rebuilding semantic artifacts for that index id. `jina-code-0.5b` also carries a non-commercial license caveat unless you have a separate commercial license.
 
 ### Where TLDR Stores Things
 
@@ -447,7 +456,8 @@ Create `.tldr/config.json` for daemon settings:
 {
   "semantic": {
     "enabled": true,
-    "auto_reindex_threshold": 20
+    "auto_reindex_threshold": 20,
+    "model": "bge-large-en-v1.5"
   }
 }
 ```
@@ -456,6 +466,7 @@ Create `.tldr/config.json` for daemon settings:
 |---------|---------|-------------|
 | `enabled` | `true` | Enable semantic search |
 | `auto_reindex_threshold` | `20` | Files changed before auto-rebuild |
+| `model` | `bge-large-en-v1.5` | Embedding model for daemon-triggered semantic indexing (`jina-code-0.5b` is opt-in and requires rebuild) |
 
 ### Monorepo Support
 
@@ -501,6 +512,8 @@ Open-ended judge-mode snapshot (Codex answers, Claude judge; `--trials 3`):
 ## Deep Dive
 
 For the full architecture explanation, benchmarks, and advanced workflows:
+
+**[One-Page Usage Guide](./docs/llm-tldr-reference-card.md)**
 
 **[Full Documentation](./docs/TLDR.md)**
 

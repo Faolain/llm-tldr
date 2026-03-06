@@ -1,5 +1,8 @@
 # Execution Modes: When the Daemon Is Used
 
+Task-based usage guidance lives in [`docs/llm-tldr-reference-card.md`](./llm-tldr-reference-card.md).
+This page is narrower: it explains CLI direct vs daemon vs MCP execution, latency behavior, and daemon-specific gaps.
+
 llm-tldr has three execution paths for queries. Understanding which one is active
 determines whether you pay model-load overhead on every query or amortize it once.
 
