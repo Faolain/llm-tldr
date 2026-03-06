@@ -19,6 +19,9 @@ from bench_util import (
     get_repo_root,
     make_report,
     now_utc_compact,
+    query_daemon_ok,
+    restart_benchmark_daemon,
+    stop_benchmark_daemon,
     write_report,
 )
 
@@ -521,6 +524,7 @@ def _semantic_rank_files(
     index_ctx: IndexContext,
     query: str,
     k: int,
+    use_daemon: bool = False,
 ) -> list[str] | None:
     paths = index_ctx.paths
     cfg = index_ctx.config
@@ -529,15 +533,28 @@ def _semantic_rank_files(
     if not (paths.semantic_faiss.exists() and paths.semantic_metadata.exists()):
         return None
 
-    from tldr.semantic import semantic_search
+    if use_daemon:
+        res = query_daemon_ok(
+            repo_root,
+            index_ctx=index_ctx,
+            command={
+                "cmd": "semantic",
+                "action": "search",
+                "query": query,
+                "k": int(k),
+            },
+        )
+        results = res.get("results") or res.get("result") or []
+    else:
+        from tldr.semantic import semantic_search
 
-    results = semantic_search(
-        str(repo_root),
-        query,
-        k=int(k),
-        index_paths=paths,
-        index_config=cfg,
-    )
+        results = semantic_search(
+            str(repo_root),
+            query,
+            k=int(k),
+            index_paths=paths,
+            index_config=cfg,
+        )
 
     ranked: list[str] = []
     for r in results or []:
@@ -856,6 +873,11 @@ def main() -> int:
             "'rg_empty' suppresses semantic/hybrid when rg finds no matches for the query's rg_pattern."
         ),
     )
+    ap.add_argument(
+        "--use-daemon",
+        action="store_true",
+        help="Route semantic queries through the daemon instead of in-process API calls.",
+    )
     ap.add_argument("--out", default=None, help="Write JSON report to this path (default under benchmark/runs/).")
     args = ap.parse_args()
 
@@ -885,6 +907,11 @@ def main() -> int:
     glob = str(args.rg_glob)
     glob_arg = glob if glob.strip() else None
     retrieval_no_result_guard = str(args.no_result_guard)
+    daemon_ready: dict[str, Any] | None = None
+    if args.use_daemon:
+        daemon_ready = restart_benchmark_daemon(repo_root, index_ctx=index_ctx)
+        if not daemon_ready.get("ok"):
+            raise SystemExit(f"error: daemon did not become ready: {daemon_ready}")
 
     results: dict[str, Any] = {}
 
@@ -2000,7 +2027,13 @@ def main() -> int:
                 if retrieval_no_result_guard == "rg_empty" and not rg_rank:
                     sem_rank = []
                 else:
-                    sem_rank = _semantic_rank_files(repo_root, index_ctx=index_ctx, query=q.query, k=max_files) or []
+                    sem_rank = _semantic_rank_files(
+                        repo_root,
+                        index_ctx=index_ctx,
+                        query=q.query,
+                        k=max_files,
+                        use_daemon=bool(args.use_daemon),
+                    ) or []
                     sem_rank = sem_rank[:max_files]
 
             hybrid_rank = _rrf_fuse([rg_rank, sem_rank])[:max_files] if sem_rank is not None else None
@@ -2114,6 +2147,8 @@ def main() -> int:
             "index_id": index_ctx.index_id,
             "rg_glob": glob_arg,
             "retrieval_no_result_guard": retrieval_no_result_guard if args.mode in ("retrieval", "both") else None,
+            "use_daemon": bool(args.use_daemon),
+            "daemon_ready": daemon_ready,
         },
         results=results,
     )
@@ -2125,6 +2160,8 @@ def main() -> int:
         out_path = bench_runs_root(tldr_repo_root) / f"{ts}-token-efficiency-{corpus_id}.json"
     write_report(out_path, report)
     print(out_path)
+    if args.use_daemon:
+        stop_benchmark_daemon(repo_root, index_ctx=index_ctx)
     return 0
 
 

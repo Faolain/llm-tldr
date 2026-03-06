@@ -1,0 +1,455 @@
+{
+  "schema_version": 1,
+  "repo": "django",
+  "pinned_ref": "5.1.13",
+  "updated": "2026-03-06",
+  "notes": [
+    "Definition-oriented structured retrieval benchmark for Django.",
+    "Targets are explicit structured code units so backends are scored on deterministic precision, recall, and F1 rather than file-only relevance.",
+    "The suite intentionally focuses on functions, classes, and methods that map cleanly to llm-tldr semantic units.",
+    "Assignment-like targets such as module-level aliases or signal declarations are excluded from this first pass because semantic units do not currently represent them directly.",
+    "The native rg baseline remains fair because each query ships with an anchored definition pattern that can hit the exact target line without AST heuristics."
+  ],
+  "queries": [
+    {
+      "id": "SR01",
+      "query": "Where is CsrfViewMiddleware implemented?",
+      "rg_pattern": "^class\\s+CsrfViewMiddleware\\b",
+      "targets": [
+        {
+          "file": "django/middleware/csrf.py",
+          "qualified_symbol": "django.middleware.csrf.py.CsrfViewMiddleware",
+          "symbol_kind": "class",
+          "start_line": 165,
+          "end_line": 165
+        }
+      ]
+    },
+    {
+      "id": "SR02",
+      "query": "Where is override_settings implemented?",
+      "rg_pattern": "^class\\s+override_settings\\b",
+      "targets": [
+        {
+          "file": "django/test/utils.py",
+          "qualified_symbol": "django.test.utils.py.override_settings",
+          "symbol_kind": "class",
+          "start_line": 458,
+          "end_line": 458
+        }
+      ]
+    },
+    {
+      "id": "SR03",
+      "query": "Where is mark_safe implemented?",
+      "rg_pattern": "^def\\s+mark_safe\\b",
+      "targets": [
+        {
+          "file": "django/utils/safestring.py",
+          "qualified_symbol": "django.utils.safestring.py.mark_safe",
+          "symbol_kind": "function",
+          "start_line": 59,
+          "end_line": 59
+        }
+      ]
+    },
+    {
+      "id": "SR04",
+      "query": "Where is URLResolver implemented?",
+      "rg_pattern": "^class\\s+URLResolver\\b",
+      "targets": [
+        {
+          "file": "django/urls/resolvers.py",
+          "qualified_symbol": "django.urls.resolvers.py.URLResolver",
+          "symbol_kind": "class",
+          "start_line": 493,
+          "end_line": 493
+        }
+      ]
+    },
+    {
+      "id": "SR05",
+      "query": "Where is ProjectState implemented?",
+      "rg_pattern": "^class\\s+ProjectState\\b",
+      "targets": [
+        {
+          "file": "django/db/migrations/state.py",
+          "qualified_symbol": "django.db.migrations.state.py.ProjectState",
+          "symbol_kind": "class",
+          "start_line": 93,
+          "end_line": 93
+        }
+      ]
+    },
+    {
+      "id": "SR06",
+      "query": "Where is AdminSite implemented?",
+      "rg_pattern": "^class\\s+AdminSite\\b",
+      "targets": [
+        {
+          "file": "django/contrib/admin/sites.py",
+          "qualified_symbol": "django.contrib.admin.sites.py.AdminSite",
+          "symbol_kind": "class",
+          "start_line": 30,
+          "end_line": 30
+        }
+      ]
+    },
+    {
+      "id": "SR07",
+      "query": "Where does LazySettings.configure live?",
+      "rg_pattern": "^\\s+def\\s+configure\\b",
+      "targets": [
+        {
+          "file": "django/conf/__init__.py",
+          "qualified_symbol": "django.conf.__init__.py.LazySettings.configure",
+          "symbol_kind": "method",
+          "start_line": 111,
+          "end_line": 111
+        }
+      ]
+    },
+    {
+      "id": "SR08",
+      "query": "Where is formset_factory implemented?",
+      "rg_pattern": "^def\\s+formset_factory\\b",
+      "targets": [
+        {
+          "file": "django/forms/formsets.py",
+          "qualified_symbol": "django.forms.formsets.py.formset_factory",
+          "symbol_kind": "function",
+          "start_line": 534,
+          "end_line": 534
+        }
+      ]
+    },
+    {
+      "id": "SR09",
+      "query": "Where is technical_500_response implemented?",
+      "rg_pattern": "^def\\s+technical_500_response\\b",
+      "targets": [
+        {
+          "file": "django/views/debug.py",
+          "qualified_symbol": "django.views.debug.py.technical_500_response",
+          "symbol_kind": "function",
+          "start_line": 62,
+          "end_line": 62
+        }
+      ]
+    },
+    {
+      "id": "SR10",
+      "query": "Where is WSGIRequest implemented?",
+      "rg_pattern": "^class\\s+WSGIRequest\\b",
+      "targets": [
+        {
+          "file": "django/core/handlers/wsgi.py",
+          "qualified_symbol": "django.core.handlers.wsgi.py.WSGIRequest",
+          "symbol_kind": "class",
+          "start_line": 56,
+          "end_line": 56
+        }
+      ]
+    },
+    {
+      "id": "SR11",
+      "query": "Where is rotate_token implemented?",
+      "rg_pattern": "^def\\s+rotate_token\\b",
+      "targets": [
+        {
+          "file": "django/middleware/csrf.py",
+          "qualified_symbol": "django.middleware.csrf.py.rotate_token",
+          "symbol_kind": "function",
+          "start_line": 117,
+          "end_line": 117
+        }
+      ]
+    },
+    {
+      "id": "SR12",
+      "query": "Negative query: symbol that should not exist",
+      "rg_pattern": "this_symbol_should_not_exist_abcdef1234",
+      "targets": []
+    },
+    {
+      "id": "SR13",
+      "query": "Where is Http404 implemented?",
+      "rg_pattern": "^class\\s+Http404\\b",
+      "targets": [
+        {
+          "file": "django/http/response.py",
+          "qualified_symbol": "django.http.response.py.Http404",
+          "symbol_kind": "class",
+          "start_line": 699,
+          "end_line": 699
+        }
+      ]
+    },
+    {
+      "id": "SR14",
+      "query": "Where is HttpResponse implemented?",
+      "rg_pattern": "^class\\s+HttpResponse\\b",
+      "targets": [
+        {
+          "file": "django/http/response.py",
+          "qualified_symbol": "django.http.response.py.HttpResponse",
+          "symbol_kind": "class",
+          "start_line": 364,
+          "end_line": 364
+        }
+      ]
+    },
+    {
+      "id": "SR15",
+      "query": "Where is JsonResponse implemented?",
+      "rg_pattern": "^class\\s+JsonResponse\\b",
+      "targets": [
+        {
+          "file": "django/http/response.py",
+          "qualified_symbol": "django.http.response.py.JsonResponse",
+          "symbol_kind": "class",
+          "start_line": 703,
+          "end_line": 703
+        }
+      ]
+    },
+    {
+      "id": "SR16",
+      "query": "Where is QuerySet implemented?",
+      "rg_pattern": "^class\\s+QuerySet\\b",
+      "targets": [
+        {
+          "file": "django/db/models/query.py",
+          "qualified_symbol": "django.db.models.query.py.QuerySet",
+          "symbol_kind": "class",
+          "start_line": 293,
+          "end_line": 293
+        }
+      ]
+    },
+    {
+      "id": "SR17",
+      "query": "Where is Q implemented?",
+      "rg_pattern": "^class\\s+Q\\b",
+      "targets": [
+        {
+          "file": "django/db/models/query_utils.py",
+          "qualified_symbol": "django.db.models.query_utils.py.Q",
+          "symbol_kind": "class",
+          "start_line": 38,
+          "end_line": 38
+        }
+      ]
+    },
+    {
+      "id": "SR18",
+      "query": "Where is Model implemented?",
+      "rg_pattern": "^class\\s+Model\\b",
+      "targets": [
+        {
+          "file": "django/db/models/base.py",
+          "qualified_symbol": "django.db.models.base.py.Model",
+          "symbol_kind": "class",
+          "start_line": 459,
+          "end_line": 459
+        }
+      ]
+    },
+    {
+      "id": "SR19",
+      "query": "Where is atomic implemented?",
+      "rg_pattern": "^def\\s+atomic\\b",
+      "targets": [
+        {
+          "file": "django/db/transaction.py",
+          "qualified_symbol": "django.db.transaction.py.atomic",
+          "symbol_kind": "function",
+          "start_line": 316,
+          "end_line": 316
+        }
+      ]
+    },
+    {
+      "id": "SR20",
+      "query": "Where is MiddlewareMixin implemented?",
+      "rg_pattern": "^class\\s+MiddlewareMixin\\b",
+      "targets": [
+        {
+          "file": "django/utils/deprecation.py",
+          "qualified_symbol": "django.utils.deprecation.py.MiddlewareMixin",
+          "symbol_kind": "class",
+          "start_line": 95,
+          "end_line": 95
+        }
+      ]
+    },
+    {
+      "id": "SR21",
+      "query": "Where is cached_property implemented?",
+      "rg_pattern": "^class\\s+cached_property\\b",
+      "targets": [
+        {
+          "file": "django/utils/functional.py",
+          "qualified_symbol": "django.utils.functional.py.cached_property",
+          "symbol_kind": "class",
+          "start_line": 7,
+          "end_line": 7
+        }
+      ]
+    },
+    {
+      "id": "SR22",
+      "query": "Where is LazyObject implemented?",
+      "rg_pattern": "^class\\s+LazyObject\\b",
+      "targets": [
+        {
+          "file": "django/utils/functional.py",
+          "qualified_symbol": "django.utils.functional.py.LazyObject",
+          "symbol_kind": "class",
+          "start_line": 259,
+          "end_line": 259
+        }
+      ]
+    },
+    {
+      "id": "SR23",
+      "query": "Where is AppConfig implemented?",
+      "rg_pattern": "^class\\s+AppConfig\\b",
+      "targets": [
+        {
+          "file": "django/apps/config.py",
+          "qualified_symbol": "django.apps.config.py.AppConfig",
+          "symbol_kind": "class",
+          "start_line": 13,
+          "end_line": 13
+        }
+      ]
+    },
+    {
+      "id": "SR24",
+      "query": "Where is Apps implemented?",
+      "rg_pattern": "^class\\s+Apps\\b",
+      "targets": [
+        {
+          "file": "django/apps/registry.py",
+          "qualified_symbol": "django.apps.registry.py.Apps",
+          "symbol_kind": "class",
+          "start_line": 13,
+          "end_line": 13
+        }
+      ]
+    },
+    {
+      "id": "SR25",
+      "query": "Where is BaseCommand implemented?",
+      "rg_pattern": "^class\\s+BaseCommand\\b",
+      "targets": [
+        {
+          "file": "django/core/management/base.py",
+          "qualified_symbol": "django.core.management.base.py.BaseCommand",
+          "symbol_kind": "class",
+          "start_line": 184,
+          "end_line": 184
+        }
+      ]
+    },
+    {
+      "id": "SR26",
+      "query": "Where is execute_from_command_line implemented?",
+      "rg_pattern": "^def\\s+execute_from_command_line\\b",
+      "targets": [
+        {
+          "file": "django/core/management/__init__.py",
+          "qualified_symbol": "django.core.management.__init__.py.execute_from_command_line",
+          "symbol_kind": "function",
+          "start_line": 439,
+          "end_line": 439
+        }
+      ]
+    },
+    {
+      "id": "SR27",
+      "query": "Where is render implemented?",
+      "rg_pattern": "^def\\s+render\\b",
+      "targets": [
+        {
+          "file": "django/shortcuts.py",
+          "qualified_symbol": "django.shortcuts.py.render",
+          "symbol_kind": "function",
+          "start_line": 18,
+          "end_line": 18
+        }
+      ]
+    },
+    {
+      "id": "SR28",
+      "query": "Where is redirect implemented?",
+      "rg_pattern": "^def\\s+redirect\\b",
+      "targets": [
+        {
+          "file": "django/shortcuts.py",
+          "qualified_symbol": "django.shortcuts.py.redirect",
+          "symbol_kind": "function",
+          "start_line": 29,
+          "end_line": 29
+        }
+      ]
+    },
+    {
+      "id": "SR29",
+      "query": "Where is reverse implemented?",
+      "rg_pattern": "^def\\s+reverse\\b",
+      "targets": [
+        {
+          "file": "django/urls/base.py",
+          "qualified_symbol": "django.urls.base.py.reverse",
+          "symbol_kind": "function",
+          "start_line": 27,
+          "end_line": 27
+        }
+      ]
+    },
+    {
+      "id": "SR30",
+      "query": "Where is include implemented?",
+      "rg_pattern": "^def\\s+include\\b",
+      "targets": [
+        {
+          "file": "django/urls/conf.py",
+          "qualified_symbol": "django.urls.conf.py.include",
+          "symbol_kind": "function",
+          "start_line": 17,
+          "end_line": 17
+        }
+      ]
+    },
+    {
+      "id": "SR31",
+      "query": "Where is csrf_exempt implemented?",
+      "rg_pattern": "^def\\s+csrf_exempt\\b",
+      "targets": [
+        {
+          "file": "django/views/decorators/csrf.py",
+          "qualified_symbol": "django.views.decorators.csrf.py.csrf_exempt",
+          "symbol_kind": "function",
+          "start_line": 51,
+          "end_line": 51
+        }
+      ]
+    },
+    {
+      "id": "SR32",
+      "query": "Where is login_required implemented?",
+      "rg_pattern": "^def\\s+login_required\\b",
+      "targets": [
+        {
+          "file": "django/contrib/auth/decorators.py",
+          "qualified_symbol": "django.contrib.auth.decorators.py.login_required",
+          "symbol_kind": "function",
+          "start_line": 72,
+          "end_line": 72
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,244 @@
+{
+  "schema_version": 1,
+  "repo": "django",
+  "pinned_ref": "5.1.13",
+  "updated": "2026-03-06",
+  "notes": [
+    "Behavior-oriented structured retrieval benchmark for Django.",
+    "Queries avoid exact target symbol names and use broader lexical patterns so semantic retrieval has a fairer chance to outperform native rg on concept lookup.",
+    "Targets still resolve to exact structured code units, so scoring remains deterministic.",
+    "Use this suite as a semantic-leaning cross-tool check; the exact-definition suite remains the stricter lexical sanity check."
+  ],
+  "queries": [
+    {
+      "id": "SB01",
+      "query": "Where does Django implement the middleware that protects against cross-site request forgery?",
+      "rg_pattern": "cross-site request forgery|csrf protection|csrf middleware",
+      "targets": [
+        {
+          "file": "django/middleware/csrf.py",
+          "qualified_symbol": "django.middleware.csrf.py.CsrfViewMiddleware",
+          "symbol_kind": "class",
+          "start_line": 165,
+          "end_line": 165
+        }
+      ]
+    },
+    {
+      "id": "SB02",
+      "query": "Where does Django rotate the CSRF token value for a request?",
+      "rg_pattern": "rotate token|csrf token|CSRF_COOKIE",
+      "targets": [
+        {
+          "file": "django/middleware/csrf.py",
+          "qualified_symbol": "django.middleware.csrf.py.rotate_token",
+          "symbol_kind": "function",
+          "start_line": 117,
+          "end_line": 117
+        }
+      ]
+    },
+    {
+      "id": "SB03",
+      "query": "Where does Django build the detailed debug page for unhandled server exceptions?",
+      "rg_pattern": "technical 500|ExceptionReporter|traceback",
+      "targets": [
+        {
+          "file": "django/views/debug.py",
+          "qualified_symbol": "django.views.debug.py.technical_500_response",
+          "symbol_kind": "function",
+          "start_line": 62,
+          "end_line": 62
+        }
+      ]
+    },
+    {
+      "id": "SB04",
+      "query": "Where does Django turn a form class into a reusable formset class?",
+      "rg_pattern": "form class|formset class|management form",
+      "targets": [
+        {
+          "file": "django/forms/formsets.py",
+          "qualified_symbol": "django.forms.formsets.py.formset_factory",
+          "symbol_kind": "function",
+          "start_line": 534,
+          "end_line": 534
+        }
+      ]
+    },
+    {
+      "id": "SB05",
+      "query": "Where does Django populate settings from defaults and explicit overrides at runtime?",
+      "rg_pattern": "default_settings|manually configured|configured settings",
+      "targets": [
+        {
+          "file": "django/conf/__init__.py",
+          "qualified_symbol": "django.conf.__init__.py.LazySettings.configure",
+          "symbol_kind": "method",
+          "start_line": 111,
+          "end_line": 111
+        }
+      ]
+    },
+    {
+      "id": "SB06",
+      "query": "Where does Django turn a view name into a concrete URL path?",
+      "rg_pattern": "viewname|current_app|URL reversing",
+      "targets": [
+        {
+          "file": "django/urls/base.py",
+          "qualified_symbol": "django.urls.base.py.reverse",
+          "symbol_kind": "function",
+          "start_line": 27,
+          "end_line": 27
+        }
+      ]
+    },
+    {
+      "id": "SB07",
+      "query": "Where does Django render a template directly into an HTTP response?",
+      "rg_pattern": "render_to_string|HttpResponse|content_type",
+      "targets": [
+        {
+          "file": "django/shortcuts.py",
+          "qualified_symbol": "django.shortcuts.py.render",
+          "symbol_kind": "function",
+          "start_line": 18,
+          "end_line": 18
+        }
+      ]
+    },
+    {
+      "id": "SB08",
+      "query": "Where does Django turn a target object or URL into an HTTP redirect response?",
+      "rg_pattern": "resolve_url|HttpResponseRedirect|permanent redirect",
+      "targets": [
+        {
+          "file": "django/shortcuts.py",
+          "qualified_symbol": "django.shortcuts.py.redirect",
+          "symbol_kind": "function",
+          "start_line": 29,
+          "end_line": 29
+        }
+      ]
+    },
+    {
+      "id": "SB09",
+      "query": "Where does Django open an atomic database transaction block?",
+      "rg_pattern": "savepoint|durable|transaction block",
+      "targets": [
+        {
+          "file": "django/db/transaction.py",
+          "qualified_symbol": "django.db.transaction.py.atomic",
+          "symbol_kind": "function",
+          "start_line": 316,
+          "end_line": 316
+        }
+      ]
+    },
+    {
+      "id": "SB10",
+      "query": "Where does Django define the compatibility mixin used by middleware classes?",
+      "rg_pattern": "sync_capable|async_capable|middleware classes",
+      "targets": [
+        {
+          "file": "django/utils/deprecation.py",
+          "qualified_symbol": "django.utils.deprecation.py.MiddlewareMixin",
+          "symbol_kind": "class",
+          "start_line": 95,
+          "end_line": 95
+        }
+      ]
+    },
+    {
+      "id": "SB11",
+      "query": "Where does Django define the base type used for management commands?",
+      "rg_pattern": "missing_args_message|add_arguments|management command",
+      "targets": [
+        {
+          "file": "django/core/management/base.py",
+          "qualified_symbol": "django.core.management.base.py.BaseCommand",
+          "symbol_kind": "class",
+          "start_line": 184,
+          "end_line": 184
+        }
+      ]
+    },
+    {
+      "id": "SB12",
+      "query": "Where does Django dispatch management commands from argv?",
+      "rg_pattern": "ManagementUtility|argv|command line",
+      "targets": [
+        {
+          "file": "django/core/management/__init__.py",
+          "qualified_symbol": "django.core.management.__init__.py.execute_from_command_line",
+          "symbol_kind": "function",
+          "start_line": 439,
+          "end_line": 439
+        }
+      ]
+    },
+    {
+      "id": "SB13",
+      "query": "Where does Django wrap a view so anonymous users are redirected to login?",
+      "rg_pattern": "redirect_to_login|user_passes_test|anonymous users",
+      "targets": [
+        {
+          "file": "django/contrib/auth/decorators.py",
+          "qualified_symbol": "django.contrib.auth.decorators.py.login_required",
+          "symbol_kind": "function",
+          "start_line": 72,
+          "end_line": 72
+        }
+      ]
+    },
+    {
+      "id": "SB14",
+      "query": "Where does Django mark a view so CSRF processing is skipped?",
+      "rg_pattern": "csrf_processing_done|skip csrf|csrf checks",
+      "targets": [
+        {
+          "file": "django/views/decorators/csrf.py",
+          "qualified_symbol": "django.views.decorators.csrf.py.csrf_exempt",
+          "symbol_kind": "function",
+          "start_line": 51,
+          "end_line": 51
+        }
+      ]
+    },
+    {
+      "id": "SB15",
+      "query": "Where does Django mark a string as safe for HTML output?",
+      "rg_pattern": "SafeString|safe html|safe string",
+      "targets": [
+        {
+          "file": "django/utils/safestring.py",
+          "qualified_symbol": "django.utils.safestring.py.mark_safe",
+          "symbol_kind": "function",
+          "start_line": 59,
+          "end_line": 59
+        }
+      ]
+    },
+    {
+      "id": "SB16",
+      "query": "Where does Django implement the chainable ORM query API?",
+      "rg_pattern": "query api|filter\\(|exclude\\(|queryset",
+      "targets": [
+        {
+          "file": "django/db/models/query.py",
+          "qualified_symbol": "django.db.models.query.py.QuerySet",
+          "symbol_kind": "class",
+          "start_line": 293,
+          "end_line": 293
+        }
+      ]
+    },
+    {
+      "id": "SB17",
+      "query": "Negative query: a middleware feature that should not exist in Django",
+      "rg_pattern": "this_nonexistent_behavioral_middleware_abcdef1234",
+      "targets": []
+    }
+  ]
+}
