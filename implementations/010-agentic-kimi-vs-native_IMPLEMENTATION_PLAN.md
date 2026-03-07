@@ -67,6 +67,17 @@ Important implementation constraint:
 - use the tested CLI shape `claude -p --model sonnet --effort medium <prompt>` as the base invocation
 - using Kimi in the harness requires adding a Kimi CLI provider adapter or wrapper path first
 
+Hard sandboxing requirement:
+
+- Kimi must never run directly on the host for this benchmark, including answer-model calls and any Kimi-based judge calls.
+- The judge LLM must never run directly on the host for this benchmark either; Claude judge invocations must run inside their own sandboxed runtime state.
+- The folder-scoped `--work-dir` / repo-local `KIMI_SHARE_DIR` setup is not a hard sandbox and is insufficient as the final design.
+- The benchmark scripts are trusted coordinators. They may prepare repo-local benchmark state on the host, but all untrusted model, tool, edit, and test execution must happen inside child sandbox containers.
+- Agentic harnesses must not execute tool loops, edit loops, or test loops directly on the host.
+- The benchmark container image must provide the local `tldrf` code plus the normal harness tools: `rg`, `grep`, `git`, `python`, and `uv`.
+- The container runtime must mount only the task workspace copy and the minimal writable runtime state needed for auth/session files.
+- Child sandboxes must mount the source repo read-only and must expose only copied task workspaces plus repo-local runtime directories under `benchmark/` as writable.
+
 Verification note:
 
 - tested locally on 2026-03-06: `claude -p --model sonnet --effort medium "Reply with exactly: OK"` returned `OK`
@@ -530,14 +541,29 @@ Acceptance:
 
 ### Existing files to modify
 
+- [scripts/bench_agentic_common.py](../scripts/bench_agentic_common.py)
+  - replace the current host `kimi` subprocess path with a mandatory Docker launcher for `kimi_cli`
+  - add sandbox configuration helpers for container image, mounted workspace, mounted Kimi share dir, mounted Claude seed dir, and per-invocation runtime directories
+  - add a shared container runner for agentic harness commands so tool/test/edit loops can execute inside child sandboxes instead of on the host
+  - keep Docker-backed child sandboxes as the only execution path for untrusted model, tool, edit, and test work; do not add direct-host fallback paths
 - [scripts/bench_llm_ab_run.py](../scripts/bench_llm_ab_run.py)
-  - add `_kimi_cli_call()` following `_claude_cli_call()` pattern (line ~521)
-  - add `'kimi_cli'` to `--provider` choices (line ~668) and `--judge-provider` choices (line ~676)
-  - add answer dispatcher branch (line ~939) and judge dispatcher branch (line ~1034)
-  - add `--answer-retries N` parameter (default 1) for empty/malformed responses, analogous to `--judge-retries`
-  - add `total_input_tokens` and `total_output_tokens` to report summary
+  - route all `kimi_cli` answer and judge invocations through the Docker sandbox runtime in `bench_agentic_common.py`
+  - route all `claude_cli` judge invocations through the same sandbox runtime with a separate repo-local Claude seed home
+  - add CLI flags for Docker sandbox configuration and fail fast if `kimi_cli` is selected without Docker enabled
+  - create per-invocation sandbox roots for answer-model calls and judge calls before any model subprocess runs
+  - keep `total_input_tokens` and `total_output_tokens` in the report summary
+- [scripts/bench_tool_choice.py](../scripts/bench_tool_choice.py)
+  - stop executing benchmark tool commands directly on the host
+  - run the task tool loop inside a sandbox container that mounts the isolated workspace copy and has local `tldrf` plus `rg`/`grep`/`git`/`python`/`uv`
+- [scripts/bench_agent_tasks.py](../scripts/bench_agent_tasks.py)
+  - stop executing edit/test commands directly on the host
+  - run each task in its own sandbox container with the copied workspace mounted read-write inside the container only
+- [scripts/bench_agentic_orchestrate.py](../scripts/bench_agentic_orchestrate.py)
+  - propagate Docker sandbox settings to every phase runner
+  - keep the orchestrator itself as a trusted coordinator that launches sandboxed child runs rather than executing untrusted model/tool/test work locally
+  - refuse to launch phases if the required sandbox image/runtime configuration is missing
 - [benchmarks/README.md](../benchmarks/README.md)
-  - publish the new benchmark family and results
+  - publish the sandbox policy as a hard requirement, not an operator note
 
 ### New scripts to create
 
@@ -575,6 +601,16 @@ Acceptance:
   - validates each task has a runnable test command
   - writes `benchmarks/agentic/swebench_subset.json`
   - arguments: `--source <swebench-path>`, `--count 30`, `--out`
+
+### New container assets to create
+
+- `docker/agentic-kimi/Dockerfile`
+  - install `kimi-cli`
+  - install this local repo so `tldrf` is available inside the sandbox
+  - include `rg`, `grep`, `git`, `python`, and `uv`
+- `docker/agentic-kimi/entrypoint.sh` or equivalent wrapper
+  - bootstrap runtime directories inside the container
+  - run either `kimi` or the harness command against the mounted task workspace
 
 ### New data files to create
 
@@ -641,9 +677,14 @@ Session health: before each batch of N tasks, run a lightweight Kimi CLI no-op t
 
 ## Immediate Next Steps
 
-### Step 1: Implement Kimi CLI provider adapter
+### Step 1: Implement the Docker sandbox runtime first
 
-Add `_kimi_cli_call()` to `scripts/bench_llm_ab_run.py` following the `_claude_cli_call()` pattern at line ~521. Add `'kimi_cli'` to `--provider` choices at line ~668.
+Add the mandatory Docker runtime layer before any more benchmark execution work:
+
+- build the benchmark container image with local `tldrf`, `rg`, `grep`, `git`, `python`, and `uv`
+- add `bench_agentic_common.py` helpers that run Kimi and harness commands inside that container
+- refuse to run `kimi_cli` on the host
+- refuse to run the agentic tool/test/edit loops on the host
 
 Verify:
 ```bash
@@ -652,6 +693,8 @@ uv run python scripts/bench_llm_ab_run.py \
   --prompts benchmark/llm/<test-packet>.jsonl \
   --limit 1 --dry-run
 ```
+
+The smoke check is valid only if the resulting `kimi` process runs inside Docker, not on the host.
 
 ### Step 2: Run smallest possible Phase A pilot
 
@@ -757,6 +800,12 @@ uv run python scripts/bench_agentic_orchestrate.py \
   - keep harness/system prompts fixed
   - tune one canonical instruction document only
   - treat mirror docs as explanatory, not independent benchmark levers
+- 2026-03-06: Raised sandboxing to a hard requirement:
+  - Kimi answer-model calls and Kimi-based judge calls must run inside Docker
+  - Claude judge calls must run inside Docker-backed sandbox state as well
+  - the benchmark tool/edit/test loops must not run on the host
+  - the benchmark scripts are trusted coordinators only; they must launch child sandboxes for each task/model runtime instead of executing untrusted work on the host
+  - the sandbox image must include local `tldrf` plus `rg`, `grep`, `git`, `python`, and `uv`
 - 2026-03-06: Autonomy review — applied 33 fixes across 10 categories to make the plan hands-off:
   - pinned judge config to exact Claude CLI settings (`claude_cli`, `sonnet`, `medium`) with temperature, provider, and hash enforcement
   - replaced all vague acceptance criteria with numeric phase gate thresholds in JSON files

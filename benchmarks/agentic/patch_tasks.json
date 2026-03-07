@@ -1,0 +1,175 @@
+{
+  "notes": [
+    "Starter Phase D local patch/test suite.",
+    "These tasks are tracked benchmark inputs only; the runner phase owns workspace cloning, task setup, and score calculation.",
+    "Tasks point at fetched corpora paths and deterministic test commands so the patch runner can execute them in per-task temporary copies."
+  ],
+  "schema_version": 1,
+  "tasks": [
+    {
+      "category": "debugging_fix",
+      "difficulty": "medium",
+      "expected_changed_files": [
+        "django/middleware/csrf.py"
+      ],
+      "expected_test_result": {
+        "exit_code": 0
+      },
+      "hidden_test_command": "python -m pytest tests/csrf_tests/tests.py -k rotate_token",
+      "id": "PT01",
+      "issue_description": "Fix a regression where CSRF token rotation does not leave request state consistent for later middleware processing.",
+      "max_turns": 20,
+      "repo": "benchmark/corpora/django",
+      "timeout_s": 900
+    },
+    {
+      "category": "debugging_fix",
+      "difficulty": "medium",
+      "expected_changed_files": [
+        "django/conf/__init__.py"
+      ],
+      "expected_test_result": {
+        "exit_code": 0
+      },
+      "hidden_test_command": "python -m pytest tests/settings_tests/tests.py -k configure",
+      "id": "PT02",
+      "issue_description": "Fix a bug in settings configuration where explicit overrides are not preserved across a lazy settings re-entry path.",
+      "max_turns": 20,
+      "repo": "benchmark/corpora/django",
+      "timeout_s": 900
+    },
+    {
+      "category": "multi_file_change_impact",
+      "difficulty": "hard",
+      "expected_changed_files": [
+        "django/core/management/__init__.py",
+        "django/core/management/base.py"
+      ],
+      "expected_test_result": {
+        "exit_code": 0
+      },
+      "hidden_test_command": "python -m pytest tests/admin_scripts/tests.py -k command_line",
+      "id": "PT03",
+      "issue_description": "Refactor management command dispatch so argv normalization is shared without regressing BaseCommand behavior.",
+      "max_turns": 25,
+      "repo": "benchmark/corpora/django",
+      "timeout_s": 1200
+    },
+    {
+      "category": "tests_update",
+      "difficulty": "medium",
+      "expected_changed_files": [
+        "django/forms/formsets.py",
+        "tests/forms_tests/tests/test_formsets.py"
+      ],
+      "expected_test_result": {
+        "exit_code": 0
+      },
+      "hidden_test_command": "python -m pytest tests/forms_tests/tests/test_formsets.py -k formset_factory",
+      "id": "PT04",
+      "issue_description": "Adjust formset factory behavior and update the focused tests to match the intended constructor contract.",
+      "max_turns": 20,
+      "repo": "benchmark/corpora/django",
+      "timeout_s": 900
+    },
+    {
+      "category": "small_refactor",
+      "difficulty": "medium",
+      "expected_changed_files": [
+        "django/shortcuts.py"
+      ],
+      "expected_test_result": {
+        "exit_code": 0
+      },
+      "hidden_test_command": "python -m pytest tests/urlpatterns_reverse/tests.py -k reverse",
+      "id": "PT05",
+      "issue_description": "Simplify shortcut helper branching without changing the behavior of render and redirect responses.",
+      "max_turns": 18,
+      "repo": "benchmark/corpora/django",
+      "timeout_s": 900
+    },
+    {
+      "category": "test_selection",
+      "difficulty": "medium",
+      "expected_changed_files": [
+        "requests/sessions.py"
+      ],
+      "expected_test_result": {
+        "exit_code": 0
+      },
+      "hidden_test_command": "python -m pytest tests/test_requests.py -k session_redirect",
+      "id": "PT06",
+      "issue_description": "Fix a redirect-handling bug in Session while selecting the narrowest deterministic test slice that proves the change.",
+      "max_turns": 18,
+      "repo": "benchmark/corpora/requests",
+      "timeout_s": 600
+    },
+    {
+      "category": "debugging_fix",
+      "difficulty": "medium",
+      "expected_changed_files": [
+        "requests/models.py"
+      ],
+      "expected_test_result": {
+        "exit_code": 0
+      },
+      "hidden_test_command": "python -m pytest tests/test_lowlevel.py -k prepared_request",
+      "id": "PT07",
+      "issue_description": "Fix a PreparedRequest edge case that incorrectly drops caller-provided request metadata during setup.",
+      "max_turns": 18,
+      "repo": "benchmark/corpora/requests",
+      "timeout_s": 600
+    },
+    {
+      "category": "multi_file_change_impact",
+      "difficulty": "hard",
+      "expected_changed_files": [
+        "src/urllib3/connectionpool.py",
+        "test/test_connectionpool.py"
+      ],
+      "expected_test_result": {
+        "exit_code": 0
+      },
+      "hidden_test_command": "python -m pytest test/test_connectionpool.py -k retry",
+      "id": "PT08",
+      "issue_description": "Refine retry bookkeeping in connection pools and update the narrowest affected regression tests.",
+      "max_turns": 25,
+      "repo": "benchmark/corpora/urllib3",
+      "timeout_s": 900
+    },
+    {
+      "category": "small_refactor",
+      "difficulty": "medium",
+      "expected_changed_files": [
+        "src/urllib3/util/retry.py"
+      ],
+      "expected_test_result": {
+        "exit_code": 0
+      },
+      "hidden_test_command": "python -m pytest test/test_retry.py -k backoff",
+      "id": "PT09",
+      "issue_description": "Refactor retry backoff calculations to remove duplication while preserving public behavior.",
+      "max_turns": 20,
+      "repo": "benchmark/corpora/urllib3",
+      "timeout_s": 900
+    },
+    {
+      "category": "tests_update",
+      "difficulty": "medium",
+      "expected_changed_files": [
+        "django/utils/text.py",
+        "tests/utils_tests/test_text.py"
+      ],
+      "expected_test_result": {
+        "exit_code": 0
+      },
+      "hidden_test_command": "python -m pytest tests/utils_tests/test_text.py -k compress_string",
+      "id": "PT10",
+      "issue_description": "Fix a utility edge case in string compression and update the targeted regression test in the same patch.",
+      "max_turns": 20,
+      "repo": "benchmark/corpora/django",
+      "timeout_s": 900
+    }
+  ],
+  "updated": "2026-03-06"
+}

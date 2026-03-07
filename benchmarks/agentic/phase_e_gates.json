@@ -1,0 +1,9 @@
+{
+  "min_tasks_completed": 20,
+  "phase": "E",
+  "pilot_significance_only": true,
+  "schema_version": 1,
+  "solve_rate_delta_min": 0.05,
+  "solve_rate_floor_delta": -0.02,
+  "token_reduction_min_pct": 20
+}

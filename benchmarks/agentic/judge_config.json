@@ -1,0 +1,10 @@
+{
+  "enforce_json_schema": true,
+  "judge_effort": "medium",
+  "judge_max_tokens": 800,
+  "judge_model": "sonnet",
+  "judge_provider": "claude_cli",
+  "judge_retries": 1,
+  "judge_temperature": 0.0,
+  "schema_version": 1
+}

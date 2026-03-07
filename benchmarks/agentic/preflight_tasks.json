@@ -1,0 +1,177 @@
+{
+  "notes": [
+    "Phase B preflight suite for agent-chosen tool usage.",
+    "Each task records the preferred first tool, allowed tool family, and the dead-end tolerance needed by bench_preflight_validate.py.",
+    "These tasks are deliberately small and representative; they should be run before publishing any Phase C or later outcome numbers."
+  ],
+  "pinned_ref": "5.1.13",
+  "repo": "django",
+  "schema_version": 1,
+  "tasks": [
+    {
+      "expected_first_tool": "rg",
+      "expected_tool_set": [
+        "rg",
+        "read_file"
+      ],
+      "forbidden_first_tool": [
+        "tldrf_semantic_search",
+        "tldrf_hybrid_search"
+      ],
+      "id": "PF01",
+      "max_allowed_dead_end_turns": 1,
+      "question": "Where is HttpResponse implemented in Django?",
+      "source_query_file": "benchmarks/retrieval/django_queries.json",
+      "source_query_id": "R14",
+      "target_repo": "django",
+      "workflow_class": "exact_symbol_definition"
+    },
+    {
+      "expected_first_tool": "rg",
+      "expected_tool_set": [
+        "rg",
+        "read_file"
+      ],
+      "forbidden_first_tool": [
+        "tldrf_semantic_search",
+        "tldrf_hybrid_search"
+      ],
+      "id": "PF02",
+      "max_allowed_dead_end_turns": 1,
+      "question": "Where is the csrf_exempt decorator implemented?",
+      "source_query_file": "benchmarks/retrieval/django_queries.json",
+      "source_query_id": "R33",
+      "target_repo": "django",
+      "workflow_class": "exact_symbol_definition"
+    },
+    {
+      "expected_first_tool": "tldrf_semantic_search",
+      "expected_tool_set": [
+        "tldrf_semantic_search",
+        "tldrf_context"
+      ],
+      "forbidden_first_tool": [
+        "rg"
+      ],
+      "id": "PF03",
+      "max_allowed_dead_end_turns": 1,
+      "question": "Where does Django implement the middleware that protects against cross-site request forgery?",
+      "source_query_file": "benchmarks/retrieval/django_structured_behavior_queries.json",
+      "source_query_id": "SB01",
+      "target_repo": "django",
+      "workflow_class": "concept_lookup"
+    },
+    {
+      "expected_first_tool": "tldrf_semantic_search",
+      "expected_tool_set": [
+        "tldrf_semantic_search",
+        "tldrf_context"
+      ],
+      "forbidden_first_tool": [
+        "rg"
+      ],
+      "id": "PF04",
+      "max_allowed_dead_end_turns": 1,
+      "question": "Where does Django implement the chainable ORM query API?",
+      "source_query_file": "benchmarks/retrieval/django_structured_behavior_queries.json",
+      "source_query_id": "SB16",
+      "target_repo": "django",
+      "workflow_class": "concept_lookup"
+    },
+    {
+      "expected_first_tool": "tldrf_impact",
+      "expected_tool_set": [
+        "tldrf_impact",
+        "tldrf_context",
+        "rg"
+      ],
+      "forbidden_first_tool": [],
+      "id": "PF05",
+      "max_allowed_dead_end_turns": 1,
+      "question": "If _coerce_field_name changes, which direct callers need review?",
+      "source_query_file": "benchmarks/python/django_structural_queries.json",
+      "source_query_id": "A07",
+      "target_repo": "django",
+      "workflow_class": "refactor_blast_radius"
+    },
+    {
+      "expected_first_tool": "tldrf_impact",
+      "expected_tool_set": [
+        "tldrf_impact",
+        "tldrf_context",
+        "rg"
+      ],
+      "forbidden_first_tool": [],
+      "id": "PF06",
+      "max_allowed_dead_end_turns": 1,
+      "question": "If _add_new_csrf_cookie changes, which direct callers and nearby tests should be revisited first?",
+      "source_query_file": "benchmarks/python/django_structural_queries.json",
+      "source_query_id": "A12",
+      "target_repo": "django",
+      "workflow_class": "refactor_blast_radius"
+    },
+    {
+      "expected_first_tool": "tldrf_slice",
+      "expected_tool_set": [
+        "tldrf_slice",
+        "tldrf_dfg",
+        "read_file"
+      ],
+      "forbidden_first_tool": [],
+      "id": "PF07",
+      "max_allowed_dead_end_turns": 1,
+      "question": "Which lines influence get_token at target_line=114 in django/middleware/csrf.py?",
+      "source_query_file": "benchmarks/python/django_structural_queries.json",
+      "source_query_id": "B03",
+      "target_repo": "django",
+      "workflow_class": "line_level_debugging"
+    },
+    {
+      "expected_first_tool": "tldrf_slice",
+      "expected_tool_set": [
+        "tldrf_slice",
+        "tldrf_dfg",
+        "read_file"
+      ],
+      "forbidden_first_tool": [],
+      "id": "PF08",
+      "max_allowed_dead_end_turns": 1,
+      "question": "Which lines influence _boolean_icon at target_line=185 in django/contrib/admin/templatetags/admin_list.py?",
+      "source_query_file": "benchmarks/python/django_structural_queries.json",
+      "source_query_id": "B01",
+      "target_repo": "django",
+      "workflow_class": "line_level_debugging"
+    },
+    {
+      "expected_first_tool": "tldrf_semantic_search",
+      "expected_tool_set": [
+        "tldrf_semantic_search",
+        "tldrf_context"
+      ],
+      "forbidden_first_tool": [],
+      "id": "PF09",
+      "max_allowed_dead_end_turns": 1,
+      "question": "Find the Django ORM query API, then gather focused context around the implementation for two follow-up questions.",
+      "source_query_file": "benchmarks/retrieval/django_structured_behavior_queries.json",
+      "source_query_id": "SB16",
+      "target_repo": "django",
+      "workflow_class": "repeated_queries"
+    },
+    {
+      "expected_first_tool": "tldrf_semantic_search",
+      "expected_tool_set": [
+        "tldrf_semantic_search",
+        "tldrf_context"
+      ],
+      "forbidden_first_tool": [],
+      "id": "PF10",
+      "max_allowed_dead_end_turns": 1,
+      "question": "Find the management command entry path, then answer two follow-up questions without re-scanning the whole repo.",
+      "source_query_file": "benchmarks/retrieval/django_structured_behavior_queries.json",
+      "source_query_id": "SB12",
+      "target_repo": "django",
+      "workflow_class": "repeated_queries"
+    }
+  ],
+  "updated": "2026-03-06"
+}

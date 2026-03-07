@@ -1,0 +1,10 @@
+{
+  "correct_first_tool_min": 0.8,
+  "median_dead_end_turns_max": 1,
+  "phase": "B",
+  "rg_first_on_exact_min": 0.9,
+  "schema_version": 1,
+  "systematic_failure_detected_must_be": false,
+  "tldrf_usage_on_required_min": 0.9,
+  "workflow_compliance_min": 0.8
+}

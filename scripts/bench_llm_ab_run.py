@@ -15,6 +15,18 @@ from pathlib import Path
 from typing import Any
 import shutil
 
+from bench_agentic_common import (
+    DEFAULT_DOCKER_BINARY,
+    DEFAULT_SANDBOX_IMAGE,
+    ProviderRuntime,
+    aggregate_usage_totals,
+    claude_cli_call as _common_claude_cli_call,
+    claude_health_check,
+    kimi_cli_call as _common_kimi_cli_call,
+    kimi_health_check,
+    prepare_claude_runtime,
+    prepare_kimi_runtime,
+)
 from bench_util import (
     bench_root,
     bench_runs_root,
@@ -520,82 +532,25 @@ def _claude_sdk_result_to_text_and_usage(msg: Any) -> tuple[str, dict[str, Any]]
 
 def _claude_cli_call(
     *,
+    runtime: ProviderRuntime,
     model: str,
     prompt: str,
     timeout_s: float,
     json_schema: dict[str, Any] | None,
     env: dict[str, str] | None,
+    work_dir: Path,
     effort: str = "medium",
 ) -> tuple[str, dict[str, Any]]:
-    # Disable tools so this behaves like a pure answer model over provided context.
-    #
-    # Note: Claude Code's --json-schema + --output-format=text produces an empty stdout
-    # in practice; use --output-format=json and pull structured_output.
-    output_format = "json" if json_schema is not None else "text"
-    cmd: list[str] = [
-        "claude",
-        "-p",
-        "--output-format",
-        output_format,
-        "--model",
-        str(model),
-        # Keep Claude runs on a stable reasoning preset for benchmark repeatability.
-        "--effort",
-        str(effort),
-        "--tools",
-        "",
-        "--permission-mode",
-        "dontAsk",
-        "--no-session-persistence",
-    ]
-    if json_schema is not None:
-        cmd.extend(["--json-schema", json.dumps(json_schema, sort_keys=True)])
-
-    # Pass as argv to avoid any stdin semantics ambiguity.
-    cmd.append(str(prompt))
-
-    proc = subprocess.run(
-        cmd,
-        text=True,
-        capture_output=True,
-        timeout=float(timeout_s),
-        check=False,
+    return _common_claude_cli_call(
+        runtime=runtime,
+        model=model,
+        prompt=prompt,
+        timeout_s=timeout_s,
+        json_schema=json_schema,
         env=env,
+        work_dir=work_dir,
+        effort=effort,
     )
-    if proc.returncode != 0:
-        stderr = (proc.stderr or "").strip()
-        stdout = (proc.stdout or "").strip()
-        msg = stderr or stdout or f"claude failed with exit code {proc.returncode}"
-        raise RuntimeError(msg)
-
-    stdout = proc.stdout or ""
-    if output_format != "json":
-        return stdout, {}
-
-    # output_format=json: stdout is a JSON envelope with usage + structured_output.
-    try:
-        obj = json.loads(stdout)
-    except Exception:
-        return stdout, {}
-
-    structured = obj.get("structured_output")
-    if structured is not None:
-        try:
-            text_out = json.dumps(structured, sort_keys=True)
-        except Exception:
-            text_out = str(structured)
-    else:
-        text_out = str(obj.get("result", "") or "")
-
-    usage_obj = obj.get("usage") if isinstance(obj, dict) else None
-    usage: dict[str, Any] = {}
-    if isinstance(usage_obj, dict):
-        usage = {
-            "input_tokens": usage_obj.get("input_tokens"),
-            "output_tokens": usage_obj.get("output_tokens"),
-            "total_cost_usd": obj.get("total_cost_usd"),
-        }
-    return text_out, usage
 
 
 async def _claude_agent_sdk_call_async(
@@ -658,6 +613,27 @@ def _claude_agent_sdk_call(
     )
 
 
+def _kimi_cli_call(
+    *,
+    runtime: ProviderRuntime,
+    model: str,
+    prompt: str,
+    timeout_s: float,
+    json_schema: dict[str, Any] | None,
+    work_dir: Path,
+) -> tuple[str, dict[str, Any]]:
+    return _common_kimi_cli_call(
+        runtime=runtime,
+        model=model,
+        prompt=prompt,
+        timeout_s=timeout_s,
+        json_schema=json_schema,
+        work_dir=work_dir,
+        final_message_only=True,
+        stream_json=True,
+    )
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description="Phase 7: run A/B prompt packets and score structured answers or judge open-ended tasks."
@@ -669,7 +645,11 @@ def main() -> int:
         default="structured",
         help='Scoring mode: "structured" (deterministic PRF vs expected) or "judge" (open-ended tasks).',
     )
-    ap.add_argument("--provider", choices=["codex", "claude_sdk", "claude_cli", "anthropic"], default="codex")
+    ap.add_argument(
+        "--provider",
+        choices=["codex", "claude_sdk", "claude_cli", "anthropic", "kimi_cli"],
+        default="codex",
+    )
     ap.add_argument("--model", required=True, help="Answer model name (e.g., claude-3-5-sonnet-20241022).")
     ap.add_argument("--max-tokens", type=int, default=800)
     ap.add_argument("--temperature", type=float, default=0.0)
@@ -677,7 +657,7 @@ def main() -> int:
     ap.add_argument("--timeout-s", type=float, default=180.0, help="Per-call timeout in seconds (default: 180).")
     ap.add_argument(
         "--judge-provider",
-        choices=["codex", "claude_sdk", "claude_cli", "anthropic"],
+        choices=["codex", "claude_sdk", "claude_cli", "anthropic", "kimi_cli"],
         default=None,
         help='Judge provider (required for --mode judge). If omitted, judge mode errors out.',
     )
@@ -690,6 +670,12 @@ def main() -> int:
     )
     ap.add_argument("--judge-max-tokens", type=int, default=800)
     ap.add_argument("--judge-temperature", type=float, default=0.0)
+    ap.add_argument(
+        "--answer-retries",
+        type=int,
+        default=1,
+        help="Retry answer call on empty or malformed outputs when the task format allows it (default: 1).",
+    )
     ap.add_argument(
         "--judge-retries",
         type=int,
@@ -733,9 +719,28 @@ def main() -> int:
         default=None,
         help=(
             "Home directory for Claude Code / Agent SDK state (isolates ~/.claude). "
-            "Default: benchmark/claude-home (isolated; may require re-login). "
-            'To reuse your existing Claude Code login, pass --claude-home "$HOME".'
+            "Default: benchmark/claude-home. The runtime path must stay under benchmark/ "
+            "so sandboxed judge runs never mount host home directories directly."
         ),
+    )
+    ap.add_argument(
+        "--kimi-share-dir",
+        default=None,
+        help=(
+            "Directory used as KIMI_SHARE_DIR. Default: benchmark/kimi-share with auth bootstrapped "
+            "from ~/.kimi. The runtime path must stay under benchmark/ so sandboxed Kimi runs "
+            "never mount host home directories directly."
+        ),
+    )
+    ap.add_argument(
+        "--sandbox-image",
+        default=DEFAULT_SANDBOX_IMAGE,
+        help="Docker image used for Kimi benchmark sandboxes and agentic tool sandboxes.",
+    )
+    ap.add_argument(
+        "--docker-binary",
+        default=DEFAULT_DOCKER_BINARY,
+        help="Docker-compatible binary used to launch benchmark sandboxes.",
     )
     ap.add_argument("--limit", type=int, default=None, help="Only run the first N tasks (smoke testing).")
     ap.add_argument("--dry-run", action="store_true", help="Validate inputs and exit without calling the model.")
@@ -768,24 +773,40 @@ def main() -> int:
 
     claude_home: Path | None = None
     claude_env: dict[str, str] | None = None
+    claude_runtime: ProviderRuntime | None = None
     needs_claude = args.provider in ("claude_cli", "claude_sdk") or args.judge_provider in ("claude_cli", "claude_sdk")
     if needs_claude:
-        claude_home = (
-            Path(args.claude_home).resolve()
-            if args.claude_home
-            else (bench_root(tldr_repo_root) / "claude-home").resolve()
+        claude_home, claude_env = prepare_claude_runtime(
+            repo_root=tldr_repo_root,
+            claude_home=args.claude_home,
         )
-        claude_home.mkdir(parents=True, exist_ok=True)
-        # Claude Code writes to ~/.claude and ~/.local/share/claude by default. In restricted
-        # environments, redirect HOME/XDG_* into the repo to avoid EPERM.
-        claude_env = os.environ.copy()
-        claude_env.update(
-            {
-                "HOME": str(claude_home),
-                "XDG_CONFIG_HOME": str(claude_home / ".config"),
-                "XDG_DATA_HOME": str(claude_home / ".local" / "share"),
-                "XDG_CACHE_HOME": str(claude_home / ".cache"),
-            }
+        claude_runtime = ProviderRuntime(
+            repo_root=tldr_repo_root.resolve(),
+            claude_home=claude_home,
+            claude_env=claude_env,
+            docker_binary=str(args.docker_binary or DEFAULT_DOCKER_BINARY),
+            sandbox_image=str(args.sandbox_image or DEFAULT_SANDBOX_IMAGE),
+        )
+
+    kimi_share_dir: Path | None = None
+    kimi_env: dict[str, str] | None = None
+    kimi_runtime: ProviderRuntime | None = None
+    needs_kimi = args.provider == "kimi_cli" or args.judge_provider == "kimi_cli"
+    sandbox_root: Path | None = None
+    if needs_claude or needs_kimi:
+        sandbox_root = bench_root(tldr_repo_root) / "model-sandboxes" / "llm-ab"
+        sandbox_root.mkdir(parents=True, exist_ok=True)
+    if needs_kimi:
+        kimi_share_dir, kimi_env = prepare_kimi_runtime(
+            repo_root=tldr_repo_root,
+            kimi_share_dir=args.kimi_share_dir,
+        )
+        kimi_runtime = ProviderRuntime(
+            repo_root=tldr_repo_root.resolve(),
+            kimi_share_dir=kimi_share_dir,
+            kimi_env=kimi_env,
+            docker_binary=str(args.docker_binary or DEFAULT_DOCKER_BINARY),
+            sandbox_image=str(args.sandbox_image or DEFAULT_SANDBOX_IMAGE),
         )
 
     prompts_path = Path(args.prompts).resolve()
@@ -842,6 +863,7 @@ def main() -> int:
                 "judge_timeout_s": float(args.judge_timeout_s) if args.judge_timeout_s is not None else None,
                 "judge_max_tokens": int(args.judge_max_tokens),
                 "judge_temperature": float(args.judge_temperature),
+                "answer_retries": int(args.answer_retries),
                 "judge_retries": int(args.judge_retries),
                 "enforce_json_schema": bool(args.enforce_json_schema),
                 "dry_run": True,
@@ -854,6 +876,9 @@ def main() -> int:
                 else None,
                 "codex_home": str(codex_home) if codex_home is not None else None,
                 "claude_home": str(claude_home) if claude_home is not None else None,
+                "kimi_share_dir": str(kimi_share_dir) if kimi_share_dir is not None else None,
+                "sandbox_image": str(args.sandbox_image or DEFAULT_SANDBOX_IMAGE),
+                "docker_binary": str(args.docker_binary or DEFAULT_DOCKER_BINARY),
                 "answers_path": str(answers_path),
             },
             results={
@@ -876,6 +901,40 @@ def main() -> int:
         judge_provider = str(args.judge_provider)
         judge_model = str(args.judge_model)
         judge_timeout_s = float(args.judge_timeout_s) if args.judge_timeout_s is not None else float(args.timeout_s)
+        if args.provider == "kimi_cli":
+            assert kimi_runtime is not None
+            kimi_health_check(
+                runtime=kimi_runtime,
+                model=str(args.model),
+                timeout_s=float(args.timeout_s),
+                work_dir=(sandbox_root / "answer-model").resolve() if sandbox_root is not None else Path.cwd(),
+            )
+        if args.provider == "claude_cli":
+            assert claude_runtime is not None
+            claude_health_check(
+                runtime=claude_runtime,
+                model=str(args.model),
+                timeout_s=min(float(args.timeout_s), 30.0),
+                work_dir=(sandbox_root / "answer-model").resolve() if sandbox_root is not None else Path.cwd(),
+                env=claude_env,
+            )
+        if judge_provider == "kimi_cli":
+            assert kimi_runtime is not None
+            kimi_health_check(
+                runtime=kimi_runtime,
+                model=judge_model,
+                timeout_s=judge_timeout_s,
+                work_dir=(sandbox_root / "judge-model").resolve() if sandbox_root is not None else Path.cwd(),
+            )
+        if judge_provider == "claude_cli":
+            assert claude_runtime is not None
+            claude_health_check(
+                runtime=claude_runtime,
+                model=judge_model,
+                timeout_s=min(judge_timeout_s, 30.0),
+                work_dir=(sandbox_root / "judge-model").resolve() if sandbox_root is not None else Path.cwd(),
+                env=claude_env,
+            )
 
         per_task: list[dict[str, Any]] = []
         wins: list[float] = []
@@ -887,6 +946,7 @@ def main() -> int:
         judge_errors_total = 0
         judge_empty_verdict_total = 0
         judge_malformed_verdict_total = 0
+        usage_records: list[dict[str, Any]] = []
 
         score_by_source: dict[str, dict[str, list[float]]] = {"rg": {}, "tldr": {}}
 
@@ -937,52 +997,83 @@ def main() -> int:
                     for label, v in [("A", v_a), ("B", v_b)]:
                         source = str(v["source"])
                         prompt = str(v["prompt"])
-                        t0 = time.monotonic()
+                        answer_retries = max(0, int(args.answer_retries))
+                        usage_attempts: list[dict[str, Any]] = []
                         error: str | None = None
-                        try:
-                            if args.provider == "codex":
-                                text, usage = _codex_cli_call(
-                                    model=str(args.model),
-                                    prompt=prompt,
-                                    timeout_s=float(args.timeout_s),
-                                    output_schema=None,
-                                    profile=str(args.codex_profile) if args.codex_profile else None,
-                                    reasoning_effort=str(args.codex_reasoning_effort) if args.codex_reasoning_effort else None,
-                                    codex_home=codex_home,
-                                )
-                            elif args.provider == "claude_sdk":
-                                text, usage = _claude_agent_sdk_call(
-                                    model=str(args.model),
-                                    prompt=prompt,
-                                    timeout_s=float(args.timeout_s),
-                                    json_schema=None,
-                                    env=claude_env,
-                                )
-                            elif args.provider == "claude_cli":
-                                text, usage = _claude_cli_call(
-                                    model=str(args.model),
-                                    prompt=prompt,
-                                    timeout_s=float(args.timeout_s),
-                                    json_schema=None,
-                                    env=claude_env,
-                                )
-                            elif args.provider == "anthropic":
-                                text, usage = _anthropic_call(
-                                    model=str(args.model),
-                                    prompt=prompt,
-                                    max_tokens=int(args.max_tokens),
-                                    temperature=float(args.temperature),
-                                )
-                            else:  # pragma: no cover
-                                raise RuntimeError(f"Unsupported provider: {args.provider}")
-                        except Exception as exc:
-                            error = f"{type(exc).__name__}: {exc}"
-                            text = ""
-                            usage = {"error": error}
-                            answer_errors_total += 1
-                            answer_errors_by_source[source] = int(answer_errors_by_source.get(source, 0)) + 1
-                        dt = time.monotonic() - t0
+                        text = ""
+                        usage: dict[str, Any] = {}
+                        dt = 0.0
+                        for attempt in range(answer_retries + 1):
+                            t0 = time.monotonic()
+                            error = None
+                            try:
+                                if args.provider == "codex":
+                                    text, usage = _codex_cli_call(
+                                        model=str(args.model),
+                                        prompt=prompt,
+                                        timeout_s=float(args.timeout_s),
+                                        output_schema=None,
+                                        profile=str(args.codex_profile) if args.codex_profile else None,
+                                        reasoning_effort=str(args.codex_reasoning_effort)
+                                        if args.codex_reasoning_effort
+                                        else None,
+                                        codex_home=codex_home,
+                                    )
+                                elif args.provider == "claude_sdk":
+                                    text, usage = _claude_agent_sdk_call(
+                                        model=str(args.model),
+                                        prompt=prompt,
+                                        timeout_s=float(args.timeout_s),
+                                        json_schema=None,
+                                        env=claude_env,
+                                    )
+                                elif args.provider == "claude_cli":
+                                    assert claude_runtime is not None
+                                    claude_work_dir = (sandbox_root / f"answer-{task_id}-{label}-{trial}").resolve()
+                                    claude_work_dir.mkdir(parents=True, exist_ok=True)
+                                    text, usage = _claude_cli_call(
+                                        runtime=claude_runtime,
+                                        model=str(args.model),
+                                        prompt=prompt,
+                                        timeout_s=float(args.timeout_s),
+                                        json_schema=None,
+                                        env=claude_env,
+                                        work_dir=claude_work_dir,
+                                    )
+                                elif args.provider == "anthropic":
+                                    text, usage = _anthropic_call(
+                                        model=str(args.model),
+                                        prompt=prompt,
+                                        max_tokens=int(args.max_tokens),
+                                        temperature=float(args.temperature),
+                                    )
+                                elif args.provider == "kimi_cli":
+                                    assert kimi_runtime is not None
+                                    kimi_work_dir = (sandbox_root / f"answer-{task_id}-{label}-{trial}").resolve()
+                                    kimi_work_dir.mkdir(parents=True, exist_ok=True)
+                                    text, usage = _kimi_cli_call(
+                                        runtime=kimi_runtime,
+                                        model=str(args.model),
+                                        prompt=prompt,
+                                        timeout_s=float(args.timeout_s),
+                                        json_schema=None,
+                                        work_dir=kimi_work_dir,
+                                    )
+                                else:  # pragma: no cover
+                                    raise RuntimeError(f"Unsupported provider: {args.provider}")
+                            except Exception as exc:
+                                error = f"{type(exc).__name__}: {exc}"
+                                text = ""
+                                usage = {"error": error}
+                            dt += time.monotonic() - t0
+                            usage_attempts.append(dict(usage or {}))
+                            if error is None and str(text or "").strip():
+                                break
+                            if attempt == answer_retries:
+                                answer_errors_total += 1
+                                answer_errors_by_source[source] = int(answer_errors_by_source.get(source, 0)) + 1
                         time_s_by_source.setdefault(source, []).append(float(dt))
+                        usage_records.append(dict(usage or {}))
 
                         row = {
                             "kind": "answer",
@@ -994,7 +1085,9 @@ def main() -> int:
                             "provider": str(args.provider),
                             "model": str(args.model),
                             "time_s": round(float(dt), 6),
+                            "attempts": len(usage_attempts),
                             "usage": usage,
+                            "usage_attempts": usage_attempts,
                             "error": error,
                             "raw_text": text,
                         }
@@ -1056,12 +1149,29 @@ def main() -> int:
                                     env=claude_env,
                                 )
                             elif judge_provider == "claude_cli":
+                                assert claude_runtime is not None
+                                claude_work_dir = (sandbox_root / f"judge-{task_id}-{trial}-{attempt}").resolve()
+                                claude_work_dir.mkdir(parents=True, exist_ok=True)
                                 judge_text, judge_usage = _claude_cli_call(
+                                    runtime=claude_runtime,
                                     model=judge_model,
                                     prompt=prompt2,
                                     timeout_s=judge_timeout_s,
                                     json_schema=judge_schema,
                                     env=claude_env,
+                                    work_dir=claude_work_dir,
+                                )
+                            elif judge_provider == "kimi_cli":
+                                assert kimi_runtime is not None
+                                kimi_work_dir = (sandbox_root / f"judge-{task_id}-{trial}-{attempt}").resolve()
+                                kimi_work_dir.mkdir(parents=True, exist_ok=True)
+                                judge_text, judge_usage = _kimi_cli_call(
+                                    runtime=kimi_runtime,
+                                    model=judge_model,
+                                    prompt=prompt2,
+                                    timeout_s=judge_timeout_s,
+                                    json_schema=judge_schema,
+                                    work_dir=kimi_work_dir,
                                 )
                             elif judge_provider == "anthropic":
                                 judge_text, judge_usage = _anthropic_call(
@@ -1106,6 +1216,7 @@ def main() -> int:
                         winner = "tie"
 
                     judge_time_s.append(float(judge_dt_total))
+                    usage_records.append(dict(judge_usage or {}))
 
                     # Convert judge verdict into a TLDR-vs-rg win score.
                     if winner == "tie":
@@ -1195,6 +1306,7 @@ def main() -> int:
                 "judge_timeout_s": judge_timeout_s,
                 "judge_max_tokens": int(args.judge_max_tokens),
                 "judge_temperature": float(args.judge_temperature),
+                "answer_retries": int(args.answer_retries),
                 "judge_retries": int(args.judge_retries),
                 "enforce_json_schema": bool(args.enforce_json_schema),
                 "limit": int(args.limit) if args.limit is not None else None,
@@ -1206,6 +1318,9 @@ def main() -> int:
                 else None,
                 "codex_home": str(codex_home) if codex_home is not None else None,
                 "claude_home": str(claude_home) if claude_home is not None else None,
+                "kimi_share_dir": str(kimi_share_dir) if kimi_share_dir is not None else None,
+                "sandbox_image": str(args.sandbox_image or DEFAULT_SANDBOX_IMAGE),
+                "docker_binary": str(args.docker_binary or DEFAULT_DOCKER_BINARY),
                 "answers_path": str(answers_path),
             },
             results={
@@ -1223,6 +1338,7 @@ def main() -> int:
                     src: {k: (statistics.mean(v) if v else None) for k, v in dims.items()}
                     for src, dims in score_by_source.items()
                 },
+                **aggregate_usage_totals(usage_records),
                 "per_task": per_task,
             },
         )
@@ -1248,6 +1364,24 @@ def main() -> int:
     malformed_output_by_source: dict[str, int] = {"rg": 0, "tldr": 0}
     errors_total = 0
     errors_by_source: dict[str, int] = {"rg": 0, "tldr": 0}
+    usage_records: list[dict[str, Any]] = []
+    if args.provider == "kimi_cli":
+        assert kimi_runtime is not None
+        kimi_health_check(
+            runtime=kimi_runtime,
+            model=str(args.model),
+            timeout_s=float(args.timeout_s),
+            work_dir=(sandbox_root / "structured-answer-model").resolve() if sandbox_root is not None else Path.cwd(),
+        )
+    if args.provider == "claude_cli":
+        assert claude_runtime is not None
+        claude_health_check(
+            runtime=claude_runtime,
+            model=str(args.model),
+            timeout_s=min(float(args.timeout_s), 30.0),
+            work_dir=(sandbox_root / "structured-answer-model").resolve() if sandbox_root is not None else Path.cwd(),
+            env=claude_env,
+        )
 
     with answers_path.open("w", encoding="utf-8") as out_f:
         for rec in records:
@@ -1276,57 +1410,87 @@ def main() -> int:
                 trial_scores: list[float] = []
                 trial_rows: list[dict[str, Any]] = []
                 for trial in range(trials):
-                    t0 = time.monotonic()
+                    answer_retries = max(0, int(args.answer_retries))
+                    usage_attempts: list[dict[str, Any]] = []
                     error: str | None = None
-                    try:
-                        if args.provider == "codex":
-                            text, usage = _codex_cli_call(
-                                model=str(args.model),
-                                prompt=prompt,
-                                timeout_s=float(args.timeout_s),
-                                output_schema=json_schema,
-                                profile=str(args.codex_profile) if args.codex_profile else None,
-                                reasoning_effort=str(args.codex_reasoning_effort)
-                                if args.codex_reasoning_effort
-                                else None,
-                                codex_home=codex_home,
-                            )
-                        elif args.provider == "claude_sdk":
-                            text, usage = _claude_agent_sdk_call(
-                                model=str(args.model),
-                                prompt=prompt,
-                                timeout_s=float(args.timeout_s),
-                                json_schema=json_schema,
-                                env=claude_env,
-                            )
-                        elif args.provider == "claude_cli":
-                            text, usage = _claude_cli_call(
-                                model=str(args.model),
-                                prompt=prompt,
-                                timeout_s=float(args.timeout_s),
-                                json_schema=json_schema,
-                                env=claude_env,
-                            )
-                        elif args.provider == "anthropic":
-                            text, usage = _anthropic_call(
-                                model=str(args.model),
-                                prompt=prompt,
-                                max_tokens=int(args.max_tokens),
-                                temperature=float(args.temperature),
-                            )
-                        else:  # pragma: no cover
-                            raise RuntimeError(f"Unsupported provider: {args.provider}")
-                    except Exception as exc:
-                        # Keep the run going and score this trial as a miss.
-                        error = f"{type(exc).__name__}: {exc}"
-                        text = ""
-                        usage = {"error": error}
-                        errors_total += 1
-                        errors_by_source[source] = int(errors_by_source.get(source, 0)) + 1
-                    dt = time.monotonic() - t0
+                    text = ""
+                    usage: dict[str, Any] = {}
+                    dt = 0.0
+                    output_status = "empty"
+                    got: set[Any] | None = None
+                    for attempt in range(answer_retries + 1):
+                        t0 = time.monotonic()
+                        error = None
+                        try:
+                            if args.provider == "codex":
+                                text, usage = _codex_cli_call(
+                                    model=str(args.model),
+                                    prompt=prompt,
+                                    timeout_s=float(args.timeout_s),
+                                    output_schema=json_schema,
+                                    profile=str(args.codex_profile) if args.codex_profile else None,
+                                    reasoning_effort=str(args.codex_reasoning_effort)
+                                    if args.codex_reasoning_effort
+                                    else None,
+                                    codex_home=codex_home,
+                                )
+                            elif args.provider == "claude_sdk":
+                                text, usage = _claude_agent_sdk_call(
+                                    model=str(args.model),
+                                    prompt=prompt,
+                                    timeout_s=float(args.timeout_s),
+                                    json_schema=json_schema,
+                                    env=claude_env,
+                                )
+                            elif args.provider == "claude_cli":
+                                assert claude_runtime is not None
+                                claude_work_dir = (sandbox_root / f"structured-{task_id}-{label}-{trial}").resolve()
+                                claude_work_dir.mkdir(parents=True, exist_ok=True)
+                                text, usage = _claude_cli_call(
+                                    runtime=claude_runtime,
+                                    model=str(args.model),
+                                    prompt=prompt,
+                                    timeout_s=float(args.timeout_s),
+                                    json_schema=json_schema,
+                                    env=claude_env,
+                                    work_dir=claude_work_dir,
+                                )
+                            elif args.provider == "anthropic":
+                                text, usage = _anthropic_call(
+                                    model=str(args.model),
+                                    prompt=prompt,
+                                    max_tokens=int(args.max_tokens),
+                                    temperature=float(args.temperature),
+                                )
+                            elif args.provider == "kimi_cli":
+                                assert kimi_runtime is not None
+                                kimi_work_dir = (sandbox_root / f"structured-{task_id}-{label}-{trial}").resolve()
+                                kimi_work_dir.mkdir(parents=True, exist_ok=True)
+                                text, usage = _kimi_cli_call(
+                                    runtime=kimi_runtime,
+                                    model=str(args.model),
+                                    prompt=prompt,
+                                    timeout_s=float(args.timeout_s),
+                                    json_schema=json_schema,
+                                    work_dir=kimi_work_dir,
+                                )
+                            else:  # pragma: no cover
+                                raise RuntimeError(f"Unsupported provider: {args.provider}")
+                        except Exception as exc:
+                            error = f"{type(exc).__name__}: {exc}"
+                            text = ""
+                            usage = {"error": error}
+                        dt += time.monotonic() - t0
+                        usage_attempts.append(dict(usage or {}))
+                        output_status, got = _classify_structured_output(category, text)
+                        if error is None and output_status == "ok":
+                            break
+                        if attempt == answer_retries:
+                            errors_total += 1
+                            errors_by_source[source] = int(errors_by_source.get(source, 0)) + 1
                     time_s_by_source.setdefault(source, []).append(float(dt))
+                    usage_records.append(dict(usage or {}))
 
-                    output_status, got = _classify_structured_output(category, text)
                     if output_status == "empty":
                         empty_output_total += 1
                         empty_output_by_source[source] = int(empty_output_by_source.get(source, 0)) + 1
@@ -1347,7 +1511,9 @@ def main() -> int:
                         "provider": str(args.provider),
                         "model": str(args.model),
                         "time_s": round(float(dt), 6),
+                        "attempts": len(usage_attempts),
                         "usage": usage,
+                        "usage_attempts": usage_attempts,
                         "error": error,
                         "f1": round(sc.f1, 6),
                         "precision": round(sc.precision, 6),
@@ -1408,6 +1574,7 @@ def main() -> int:
             "temperature": float(args.temperature),
             "trials": trials,
             "timeout_s": float(args.timeout_s),
+            "answer_retries": int(args.answer_retries),
             "enforce_json_schema": bool(args.enforce_json_schema),
             "dry_run": bool(args.dry_run),
             "limit": int(args.limit) if args.limit is not None else None,
@@ -1415,6 +1582,9 @@ def main() -> int:
             "codex_reasoning_effort": str(args.codex_reasoning_effort) if args.codex_reasoning_effort else None,
             "codex_home": str(codex_home) if codex_home is not None else None,
             "claude_home": str(claude_home) if claude_home is not None else None,
+            "kimi_share_dir": str(kimi_share_dir) if kimi_share_dir is not None else None,
+            "sandbox_image": str(args.sandbox_image or DEFAULT_SANDBOX_IMAGE),
+            "docker_binary": str(args.docker_binary or DEFAULT_DOCKER_BINARY),
             "answers_path": str(answers_path),
         },
         results={
@@ -1435,6 +1605,7 @@ def main() -> int:
             "f1_mean": {k: (statistics.mean(v) if v else None) for k, v in f1_by_source.items()},
             "f1_percentiles": {k: percentiles(v) for k, v in f1_by_source.items() if v},
             "time_s_percentiles": {k: percentiles(v) for k, v in time_s_by_source.items() if v},
+            **aggregate_usage_totals(usage_records),
             "per_task": per_task,
         },
     )

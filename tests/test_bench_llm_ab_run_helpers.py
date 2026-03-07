@@ -1,6 +1,5 @@
 import json
 import runpy
-import subprocess
 import sys
 from pathlib import Path
 
@@ -205,56 +204,138 @@ def test_claude_sdk_result_to_text_and_usage_error_raises():
 def test_claude_cli_call_uses_print_and_medium_effort(monkeypatch: pytest.MonkeyPatch):
     mod = _load_mod()
     fn = mod["_claude_cli_call"]
+    ProviderRuntime = mod["ProviderRuntime"]
 
     seen: dict[str, object] = {}
 
-    def fake_run(
-        cmd: list[str],
+    def fake_common_call(
         *,
-        text: bool,
-        capture_output: bool,
-        timeout: float,
-        check: bool,
+        runtime,
+        model: str,
+        prompt: str,
+        timeout_s: float,
+        json_schema: dict[str, object] | None,
         env: dict[str, str] | None,
-    ) -> subprocess.CompletedProcess[str]:
-        seen["cmd"] = cmd
-        seen["timeout"] = timeout
+        work_dir: Path,
+        effort: str,
+    ) -> tuple[str, dict[str, object]]:
+        seen["runtime"] = runtime
+        seen["model"] = model
+        seen["prompt"] = prompt
+        seen["timeout"] = timeout_s
+        seen["json_schema"] = json_schema
         seen["env"] = env
-        assert text is True
-        assert capture_output is True
-        assert check is False
-        return subprocess.CompletedProcess(cmd, 0, stdout="OK", stderr="")
+        seen["work_dir"] = work_dir
+        seen["effort"] = effort
+        return "OK", {}
 
-    monkeypatch.setattr(fn.__globals__["subprocess"], "run", fake_run)
+    monkeypatch.setitem(fn.__globals__, "_common_claude_cli_call", fake_common_call)
+    runtime = ProviderRuntime(repo_root=Path("/tmp/repo"), claude_home=Path("/tmp/claude-home"))
 
     text, usage = fn(
+        runtime=runtime,
         model="sonnet",
         prompt="Reply with exactly: OK",
         timeout_s=12.5,
         json_schema=None,
         env={"HOME": "/tmp/claude-home"},
+        work_dir=Path("/tmp/workspace"),
     )
 
     assert text == "OK"
     assert usage == {}
     assert seen["timeout"] == 12.5
     assert seen["env"] == {"HOME": "/tmp/claude-home"}
-    assert seen["cmd"] == [
-        "claude",
-        "-p",
-        "--output-format",
-        "text",
-        "--model",
-        "sonnet",
-        "--effort",
-        "medium",
-        "--tools",
-        "",
-        "--permission-mode",
-        "dontAsk",
-        "--no-session-persistence",
-        "Reply with exactly: OK",
-    ]
+    assert seen["runtime"] == runtime
+    assert seen["work_dir"] == Path("/tmp/workspace")
+    assert seen["effort"] == "medium"
+
+
+def test_main_structured_kimi_provider_retries_and_usage_totals(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    mod = _load_mod()
+    globals_dict = mod["main"].__globals__
+
+    prompts_path = tmp_path / "prompts-kimi.jsonl"
+    _write_jsonl(
+        prompts_path,
+        [
+            {
+                "task_id": "slice-1",
+                "category": "slice",
+                "expected": {"lines": [1, 2]},
+                "variants": [
+                    {"label": "A", "source": "rg", "prompt": "PROMPT_RG"},
+                    {"label": "B", "source": "tldr", "prompt": "PROMPT_TLDR"},
+                ],
+            }
+        ],
+    )
+    out_path = tmp_path / "report-kimi.json"
+    answers_out = tmp_path / "answers-kimi.jsonl"
+
+    calls: dict[str, int] = {"PROMPT_RG": 0, "PROMPT_TLDR": 0}
+
+    def fake_kimi_call(
+        *,
+        runtime,
+        model: str,
+        prompt: str,
+        timeout_s: float,
+        json_schema: dict[str, object] | None,
+        work_dir: Path,
+    ):
+        del model, timeout_s, json_schema
+        assert runtime is not None
+        assert work_dir.is_absolute()
+        calls[prompt] += 1
+        if prompt == "PROMPT_RG" and calls[prompt] == 1:
+            return "   ", {"input_tokens": 10, "output_tokens": 0}
+        if prompt == "PROMPT_TLDR" and calls[prompt] == 1:
+            return '{"oops": [1]}', {"input_tokens": 11, "output_tokens": 1}
+        return '{"lines": [1, 2]}', {"input_tokens": 12, "output_tokens": 2}
+
+    monkeypatch.setitem(globals_dict, "_kimi_cli_call", fake_kimi_call)
+    monkeypatch.setitem(globals_dict, "kimi_health_check", lambda **_: None)
+    monkeypatch.setitem(
+        globals_dict,
+        "prepare_kimi_runtime",
+        lambda **_: (tmp_path / "kimi-share", {"KIMI_SHARE_DIR": str(tmp_path / "kimi-share")}),
+    )
+    monkeypatch.setitem(globals_dict, "get_repo_root", lambda: tmp_path)
+    monkeypatch.setitem(globals_dict, "gather_meta", lambda **_: {"test_meta": True})
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "bench_llm_ab_run.py",
+            "--prompts",
+            str(prompts_path),
+            "--provider",
+            "kimi_cli",
+            "--model",
+            "kimi-code/kimi-for-coding",
+            "--answer-retries",
+            "1",
+            "--out",
+            str(out_path),
+            "--answers-out",
+            str(answers_out),
+        ],
+    )
+
+    assert mod["main"]() == 0
+
+    report = json.loads(out_path.read_text(encoding="utf-8"))
+    results = report["results"]
+    assert results["total_input_tokens"] == 24
+    assert results["total_output_tokens"] == 4
+
+    rows = [json.loads(line) for line in answers_out.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert len(rows) == 2
+    assert rows[0]["attempts"] == 2
+    assert rows[1]["attempts"] == 2
 
 
 def test_main_structured_report_serializes_bad_json_split(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):

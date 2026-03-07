@@ -1,0 +1,22 @@
+{
+  "category_expectations": {
+    "mixed": {
+      "expected_winner": "augmented",
+      "min_tasks": 5,
+      "win_rate_min": 0.7
+    },
+    "rg_wins": {
+      "expected_winner": "baseline",
+      "min_tasks": 5,
+      "win_rate_min": 0.7
+    },
+    "tldrf_wins": {
+      "expected_winner": "augmented",
+      "min_tasks": 5,
+      "win_rate_min": 0.7
+    }
+  },
+  "max_error_rate": 0.1,
+  "phase": "C",
+  "schema_version": 1
+}

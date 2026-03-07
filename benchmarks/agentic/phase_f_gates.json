@@ -1,0 +1,9 @@
+{
+  "min_pass_runs": 2,
+  "min_tasks_completed": 200,
+  "phase": "F",
+  "required_runs": 3,
+  "require_significance": true,
+  "schema_version": 1,
+  "significance_p_max": 0.05
+}

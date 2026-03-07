@@ -1,0 +1,24 @@
+{
+  "notes": [
+    "Schema placeholder for a curated SWE-bench Verified subset.",
+    "Replace this file with bench_curate_swebench.py output before running Phase E or Phase F.",
+    "The placeholder keeps the tracked format stable for tests and downstream tooling."
+  ],
+  "repo": "django/django",
+  "schema_version": 1,
+  "source": "placeholder",
+  "tasks": [
+    {
+      "base_commit": "0000000000000000000000000000000000000000",
+      "instance_id": "django__placeholder_0001",
+      "patch": "",
+      "placeholder": true,
+      "problem_statement": "Placeholder schema example. Replace with a real curated SWE-bench Verified task set before execution.",
+      "repo": "django/django",
+      "resolved": true,
+      "test_cmd": "python -m pytest tests/example_placeholder.py",
+      "timeout_s": 1800
+    }
+  ],
+  "updated": "2026-03-06"
+}

@@ -32,6 +32,141 @@ If you only run one combined test, you cannot tell whether a change came from:
 2. Better packing.
 3. LLM/judge variance.
 
+## Agentic Benchmark Family (010)
+
+The `benchmarks/agentic/` inputs track the first same-model agentic benchmark program:
+
+- baseline arm: native lexical/file/test tools only
+- augmented arm: the same native tools plus `tldrf`
+- answer model: Kimi CLI
+- judge: Claude CLI with a pinned config in `benchmarks/agentic/judge_config.json`
+
+Tracked files:
+
+- `benchmarks/agentic/preflight_tasks.json`
+- `benchmarks/agentic/tool_choice_tasks.json`
+- `benchmarks/agentic/patch_tasks.json`
+- `benchmarks/agentic/swebench_subset.json`
+- `benchmarks/agentic/phase_a_gates.json`
+- `benchmarks/agentic/preflight_gates.json`
+- `benchmarks/agentic/phase_c_gates.json`
+- `benchmarks/agentic/phase_d_gates.json`
+- `benchmarks/agentic/phase_e_gates.json`
+- `benchmarks/agentic/phase_f_gates.json`
+
+Sandboxing policy for agentic runs:
+
+- Kimi answer-model calls and any Kimi-based judge calls must run inside Docker sandboxes, never directly on the host.
+- Claude judge calls must run inside sandboxed runtime state as well; do not invoke the judge LLM directly on the host.
+- The old folder-scoped `--work-dir` / `KIMI_SHARE_DIR` setup is only a convenience wrapper, not a security boundary, and is not sufficient on its own.
+- The benchmark scripts are trusted coordinators. They may run on the host, but they must only prepare repo-local benchmark state and launch child Docker sandboxes for model, tool, edit, and test execution.
+- Do not run the tool loop, patch loop, test loop, Kimi process, or Claude judge process directly on the host machine.
+- Child sandboxes should mount the source repo read-only and mount only copied task workspaces plus repo-local runtime directories under `benchmark/` as writable.
+- Each sandbox may mount only the task workspace copy plus its own writable runtime state (for example a task-local `KIMI_SHARE_DIR` bootstrap).
+- The benchmark Docker image must include local `tldrf` plus normal shell tools the harness expects, including `rg`, `grep`, `git`, `python`, and `uv`.
+- Inside the container, still set `kimi --work-dir` to the task workspace and do not pass `--add-dir` entries outside that mounted workspace.
+
+Build the sandbox image before running the agentic phases:
+
+```bash
+docker build -t llm-tldr-agentic-kimi:latest -f docker/agentic-kimi/Dockerfile .
+```
+
+Phase A smoke / dry-run:
+
+Use the orchestrator for normal phase execution. It should stay a trusted coordinator that launches sandboxed child runs; the direct script examples below are development entry points for individual harnesses.
+
+```bash
+uv run python scripts/bench_llm_ab_run.py \
+  --prompts benchmark/llm/<ts>-llm-ab-django.jsonl \
+  --provider kimi_cli \
+  --model kimi-code/kimi-for-coding \
+  --kimi-share-dir benchmark/kimi-share \
+  --limit 1 \
+  --dry-run
+
+uv run python scripts/bench_phase_gate.py \
+  --report benchmark/runs/<ts>-llm-ab-run-structured.json \
+  --gates benchmarks/agentic/phase_a_gates.json
+```
+
+Phase B preflight:
+
+```bash
+uv run python scripts/bench_tool_choice.py \
+  --tasks benchmarks/agentic/preflight_tasks.json \
+  --provider kimi_cli \
+  --model kimi-code/kimi-for-coding \
+  --instruction-source AGENTS.md \
+  --arm augmented \
+  --max-turns 20 \
+  --timeout-s 300 \
+  --trials 1 \
+  --out benchmark/runs/<ts>-preflight.json
+
+uv run python scripts/bench_preflight_validate.py \
+  --report benchmark/runs/<ts>-preflight.json \
+  --gates benchmarks/agentic/preflight_gates.json
+```
+
+Phase C deterministic tool-choice comparison:
+
+```bash
+uv run python scripts/bench_tool_choice.py \
+  --tasks benchmarks/agentic/tool_choice_tasks.json \
+  --provider kimi_cli \
+  --model kimi-code/kimi-for-coding \
+  --instruction-source AGENTS.md \
+  --arm baseline \
+  --max-turns 20 \
+  --timeout-s 300 \
+  --out benchmark/runs/<ts>-phase-c-baseline.json
+
+uv run python scripts/bench_tool_choice.py \
+  --tasks benchmarks/agentic/tool_choice_tasks.json \
+  --provider kimi_cli \
+  --model kimi-code/kimi-for-coding \
+  --instruction-source AGENTS.md \
+  --arm augmented \
+  --max-turns 20 \
+  --timeout-s 300 \
+  --out benchmark/runs/<ts>-phase-c-augmented.json
+```
+
+Phase D local patch/test tasks:
+
+```bash
+uv run python scripts/bench_agent_tasks.py \
+  --tasks benchmarks/agentic/patch_tasks.json \
+  --provider kimi_cli \
+  --model kimi-code/kimi-for-coding \
+  --arm augmented \
+  --max-turns 30 \
+  --timeout-s 900 \
+  --max-consecutive-errors 5 \
+  --max-error-rate-abort 0.30 \
+  --out benchmark/runs/<ts>-phase-d-augmented.json
+```
+
+Phase E/F SWE-bench subset preparation:
+
+```bash
+uv run python scripts/bench_curate_swebench.py \
+  --source <path-to-swebench-verified> \
+  --repo django/django \
+  --count 30 \
+  --out benchmarks/agentic/swebench_subset.json
+```
+
+Hands-off orchestration:
+
+```bash
+uv run python scripts/bench_agentic_orchestrate.py \
+  --kimi-model kimi-code/kimi-for-coding \
+  --start-from-phase A \
+  --end-at-phase F
+```
+
 ## Results Snapshot (Pinned Runs)
 
 Numbers below are copied from the JSON reports under `benchmark/runs/` (so they are reproducible and diffable).
@@ -519,20 +654,20 @@ uv run python scripts/bench_llm_ab_run.py \
   --enforce-json-schema
 ```
 
-Using Claude Code CLI (uses your local Claude login/subscription; invoked as `claude -p --model <model> --effort medium ...`):
+Using Claude Code CLI inside the benchmark sandbox (invoked as `claude -p --model <model> --effort medium ...`):
 
 ```bash
 uv run python scripts/bench_llm_ab_run.py \
   --prompts benchmark/llm/<timestamp>-llm-ab-django.jsonl \
   --provider claude_cli \
   --model sonnet \
-  --claude-home "$HOME" \
+  --claude-home benchmark/claude-home \
   --enforce-json-schema
 ```
 
 Notes:
 - `--provider claude_sdk` requires `claude-agent-sdk` and a working local `claude` (Claude Code) install. It uses your local Claude Code login/subscription (no API key) and spawns `claude`, so it has the same state-write/sandbox caveats as `--provider claude_cli`.
-- `--provider claude_cli` writes state under `~/.claude` / `~/.local/share/claude` (debug, todo/session metadata) even for `--print`. In workspace-restricted sandboxes, use `--claude-home "$HOME"` in a non-sandboxed environment, or expect to re-login if using the default isolated `benchmark/claude-home`.
+- `--provider claude_cli` is expected to run inside the benchmark sandbox. Seed a repo-local `benchmark/claude-home` from your host Claude config, and provide API/OAuth env vars when containerized auth cannot rely on a host keychain.
 - `--provider claude_cli` currently pins Claude CLI reasoning to `--effort medium` for repeatable benchmark runs.
 - `--max-tokens` / `--temperature` only apply to the legacy `--provider anthropic` path.
 - Use `--limit 3` for a cheap smoke-run before doing the full task set.

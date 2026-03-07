@@ -1,0 +1,10 @@
+{
+  "min_tasks_completed": 10,
+  "phase": "D",
+  "schema_version": 1,
+  "solve_rate_delta_min": 0.0,
+  "tie_margin_for_efficiency_fallback": 0.05,
+  "time_reduction_min_pct": 15,
+  "token_reduction_min_pct": 15,
+  "turn_reduction_min_pct": 20
+}

@@ -1,0 +1,8 @@
+{
+  "f1_mean_tldr_min_delta": 0.05,
+  "max_error_rate": 0.05,
+  "min_tasks_completed": 20,
+  "phase": "A",
+  "schema_version": 1,
+  "win_rate_tldr_over_rg_min": 0.55
+}
